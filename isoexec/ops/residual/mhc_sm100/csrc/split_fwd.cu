@@ -28,6 +28,7 @@
 #include <type_traits>
 
 #include "common.cuh"
+#include "norm_segments.cuh"
 #include "tail.cuh"
 
 
@@ -386,14 +387,14 @@ __global__ void __launch_bounds__(256) collapse_kernel(const __nv_bfloat16 *__re
 
 
 // ---- GLM decode/prefill fusion: tail + own collapse + the block's RMSNorm, one CTA (128 threads) per row ----------------
-// Replaces tail_kernel + collapse_kernel + norms_sm100's round-then-scale RMSNorm (rms_fwd_v2 at N = 4096) of the collapsed
+// Replaces tail_kernel + collapse_kernel + norms_sm100's round-then-scale RMSNorm (rms_fwd at N = 4096) of the collapsed
 // row. Every value is computed by the same operations in the same order as those three kernels:
 //  * warp 0: tail_kernel's row program (fixed slice tree, rstd, tail_forward == tail_forward_pair's per-row bits) and its
 //    pre / post / comb stores;
 //  * the collapse of column h: collapse_kernel's ((p0*x0 + p1*x1) + p2*x2) + p3*x3, one rounding to bf16;
-//  * the norm, norms_sm100 recipe v2 at N = 4096 (L = 128 lanes, K = 4 chunks of 8; lane l owns columns k*1024 + 8l + j):
-//    per-lane chain acc = add.rn(acc, mul.rn(v, v)) k-major j-minor, the staged butterfly (four warp leaves folded
-//    (v0+v2),(v1+v3) then +, then the in-warp xor butterfly 16..1), rstd = frsqrt_rn(add.rn(div.rn(acc, N), eps)),
+//  * the norm, norms_sm100's schedule at N = 4096 (norm_segments.cuh: segments of S consecutive columns, chains from
+//    +0, adjacent tree; S from schedule_policy through norms_sm100/schedule.py), realised with L = 128 lanes and K = 4
+//    loads of 8 per lane (lane l loads columns k*1024 + 8l + j), rstd = frsqrt_rn(add.rn(div.rn(acc, N), eps)),
 //    y = rn_bf16(mul.rn(rn_bf16(mul.rn(v, rstd)), w)).
 // The battery holds the fused outputs to split_forward + rms_norm_round_scale bit for bit.
 namespace fusednorm {
@@ -416,7 +417,7 @@ __global__ void __launch_bounds__(160) tail_collapse_norm_kernel(const TailParam
   using namespace fusednorm;
   const int row = blockIdx.x, tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
   __shared__ float s_pre[4];
-  __shared__ float s_fold[L];
+  __shared__ float s_fold[K * L];   // one partial per segment of the collapsed row
   uint4 xq[K][4];
   if (warp < 4) {
 #pragma unroll
@@ -478,20 +479,10 @@ __global__ void __launch_bounds__(160) tail_collapse_norm_kernel(const TailParam
 #pragma unroll
     for (int j = 0; j < 8; ++j) v[8 * k + j] = bf16r(v[8 * k + j]);   // the collapsed bf16 row
   }
-  float acc = 0.f;
 #pragma unroll
-  for (int c = 0; c < 8 * K; ++c) acc = __fadd_rn(acc, __fmul_rn(v[c], v[c]));
-  s_fold[tid] = acc;
+  for (int k = 0; k < K; ++k) s_fold[k * L + tid] = norm_segments::segment_sq(v + 8 * k);   // segment k L + tid
   asm volatile("bar.sync 1, 128;" ::: "memory");   // the four norm warps only
-  float f[L / 32];
-#pragma unroll
-  for (int q = 0; q < L / 32; ++q) f[q] = s_fold[q * 32 + lane];
-#pragma unroll
-  for (int st = (L / 32) >> 1; st > 0; st >>= 1)
-#pragma unroll
-    for (int q = 0; q < st; ++q) f[q] = __fadd_rn(f[q], f[q + st]);
-  float root = f[0];
-  for (int st = 16; st > 0; st >>= 1) root = __fadd_rn(root, __shfl_xor_sync(FULL, root, st));
+  const float root = norm_segments::segment_tree_warp<K * L>(s_fold);
   const float rs = __frsqrt_rn(__fadd_rn(__fdiv_rn(root, float(N)), norm_eps));
   __nv_bfloat16 *orow = out + (size_t)row * N;
 #pragma unroll

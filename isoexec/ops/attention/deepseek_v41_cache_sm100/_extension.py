@@ -18,4 +18,8 @@ SOURCES = ("rows.cu", "rows_bwd.cu", "paged.cu")
 
 @lru_cache(None)
 def extension():
-    return build_sm100_extension("deepseek_v41_rows", __file__, SOURCES, include_csrc=True)
+    # rms_quant_5120 fuses norms_sm100's RMSNorm: its segment length comes from there (csrc/norm_segments.cuh)
+    from isoexec.ops.norms.norms_sm100.schedule import cuda_defines
+
+    return build_sm100_extension("deepseek_v41_rows", __file__, SOURCES, include_csrc=True,
+                                 extra_cuda_flags=cuda_defines())
