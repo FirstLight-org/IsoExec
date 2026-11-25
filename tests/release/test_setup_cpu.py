@@ -89,6 +89,13 @@ def test_source_stand_in_runs_the_checkout_installer(tmp_path, monkeypatch, caps
     assert 'receipt.json is missing' in capsys.readouterr().err
 
 
+def test_receipt_packages_leave_out_skyrls_own_distributions():
+    freeze = ['skyrl==0.4.0', 'skyrl_gym @ file:///src/SkyRL/skyrl-gym', 'SkyCap==0.1.0', 'torch==2.14.0',
+              'skyrl-agent==0.1.0', 'transformers @ https://example.invalid/transformers-5.22.0.whl']
+    assert setup_env.third_party(freeze) == [
+        'torch==2.14.0', 'skyrl-agent==0.1.0', 'transformers @ https://example.invalid/transformers-5.22.0.whl']
+
+
 def test_only_conflicts_listed_in_the_manifest_pass(manifest):
     def dist(name, version, *requires):
         return SimpleNamespace(metadata={'Name': name}, version=version, requires=list(requires))

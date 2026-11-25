@@ -14,17 +14,17 @@ execution. It eliminates training-inference mismatch by introducing:
 
 ## Quickstart
 
-Install `isoexec` and its dependencies (Python 3.12, Linux x86_64):
+Install `isoexec`, then build its managed runtime (Python 3.12, Linux x86_64, CUDA 13):
 
 ```sh
 pip install isoexec
 isoexec-setup
 ```
 
-`isoexec-setup` builds the managed runtime in `~/.isoexec` (or `--root`): SkyRL's pinned lock, the CUTLASS
-headers and the `[overrides]` in `environments/default.toml`, installed with `--no-deps` because they deliberately
-violate other packages' metadata (see `[[metadata_conflicts]]`). `pip install isoexec` alone installs the package,
-not this runtime. From a checkout, `make setup` does the same:
+`isoexec-setup` builds the managed runtime in `~/.isoexec` (or `--root`): the third-party packages of the SkyRL
+lock pinned in `environments/default.toml`, the CUTLASS headers and the `[overrides]`, installed with `--no-deps`
+because they deliberately violate other packages' metadata (see `[[metadata_conflicts]]`). `pip install isoexec`
+alone installs the package, not this runtime. From a checkout, `make setup` does the same:
 
 ```sh
 git clone https://github.com/FirstLight-org/IsoExec.git
@@ -32,7 +32,16 @@ cd IsoExec
 make setup
 ```
 
-Next, train Qwen3.5-0.8B for one GRPO step on GSM8K using one GPU:
+Neither installs SkyRL itself. Install SkyRL into the same environment from a checkout that has SkyRL's
+`isoexec` config field (until it lands upstream, the `feat/skyrl-isoexec` branch of `JiangJiaWei1103/SkyRL`).
+`--no-deps` keeps the packages setup installed:
+
+```sh
+git clone -b feat/skyrl-isoexec https://github.com/JiangJiaWei1103/SkyRL.git ../SkyRL
+uv pip install --python ~/.isoexec/venv/bin/python --no-deps -e ../SkyRL -e ../SkyRL/skyrl-gym
+```
+
+Next, from the IsoExec checkout, train Qwen3.5-0.8B for one GRPO step on GSM8K using one GPU:
 
 ```sh
 make run-tiny
@@ -64,9 +73,9 @@ make run-tiny
 
 ## SkyRL
 
-IsoExec runs inside [SkyRL](https://github.com/skyrl-project/SkyRL) (the commit pinned in
-`environments/default.toml`) through SkyRL's `isoexec` config field. Add one argument to a SkyRL
-Megatron/vLLM recipe:
+IsoExec runs inside [SkyRL](https://github.com/skyrl-project/SkyRL), installed as in the
+Quickstart, through SkyRL's `isoexec` config field. Add one argument to a SkyRL Megatron/vLLM
+recipe:
 
 ```sh
 python -m skyrl.train.entrypoints.main_base \

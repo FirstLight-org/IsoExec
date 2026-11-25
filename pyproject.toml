@@ -38,7 +38,8 @@ dependencies = [
 Repository = "https://github.com/FirstLight-org/IsoExec"
 
 [project.scripts]
-# Builds the managed runtime: pinned SkyRL lock, CUTLASS headers and the --no-deps [overrides].
+# Builds the managed runtime: the pinned SkyRL lock's third-party packages, CUTLASS headers and the
+# --no-deps [overrides].
 isoexec-setup = "isoexec._runtime.setup_env:main"
 
 [project.optional-dependencies]
