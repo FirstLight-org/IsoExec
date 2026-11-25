@@ -1,0 +1,5 @@
+include Makefile
+recursive-include scripts *.py
+recursive-include tests/release *.py
+recursive-include docs *.md
+recursive-include environments *.toml

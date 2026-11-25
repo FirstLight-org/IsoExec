@@ -1,0 +1,1129 @@
+{
+ "schema_version": 1,
+ "sources": {
+  "flash_attention": {
+   "url": "https://github.com/Dao-AILab/flash-attention",
+   "revision": "0bbb25a3a5ad3c58c029b3d287d6c9af56a5cad5",
+   "license": "BSD-3-Clause",
+   "root": "flash_attn/cute"
+  },
+  "quack": {
+   "url": "https://github.com/Dao-AILab/quack",
+   "revision": "25b4b879b66cbab75ca127c5f5b1c3d84c84aadb",
+   "tag": "v0.5.0",
+   "license": "Apache-2.0",
+   "root": "quack"
+  }
+ },
+ "files": [
+  {
+   "path": "ampere_helpers.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/ampere_helpers.py",
+   "upstream_sha256": "cadac170a7da379e27c36d044360480d710cfa88d082dad2b9decd58e4847111",
+   "sha256": "cadac170a7da379e27c36d044360480d710cfa88d082dad2b9decd58e4847111",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "barrier.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/barrier.py",
+   "upstream_sha256": "767af807aa7521b8d15ee6c9534f4745a7ad2224b0da2b816cc49ccb9ea6c119",
+   "sha256": "767af807aa7521b8d15ee6c9534f4745a7ad2224b0da2b816cc49ccb9ea6c119",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "blackwell_helpers.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/blackwell_helpers.py",
+   "upstream_sha256": "16eb08f592e33208546743e0d25c940afb899d770f35af52caac2fbcb73d7fee",
+   "sha256": "6105f7d1c4c1d1e9daa91d0e290721fb44730994c488909381ecb68640ce5f9f",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (1 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "import flash_attn.cute.mma_sm100_desc as sm100_desc",
+     "from . import mma_sm100_desc as sm100_desc"
+    ]
+   ]
+  },
+  {
+   "path": "block_info.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/block_info.py",
+   "upstream_sha256": "9f140eaa9e528dc1c35e25da1de2cc43dbc20747d5187f8c1fc2c60c8644fba8",
+   "sha256": "4058334335beeb3fec0a5c1043886865bfc86648d667ffb96b2e41d1da90dac0",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (1 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK, SeqlenInfoQKNewK",
+     "from .seqlen_info import SeqlenInfoQK, SeqlenInfoQKNewK"
+    ]
+   ]
+  },
+  {
+   "path": "block_sparse_utils.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/block_sparse_utils.py",
+   "upstream_sha256": "27718205ec642ea6c2cef7fafab0ce21bc7f2ecf5ed554a965d5f803539f80d2",
+   "sha256": "f95ffd2a19f716ed6309d5662c62b930dd907f754123013180087326d2e082f0",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (4 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed these deprecated aliases): cute.core.ThrMma -> cute.ThrMma and cute.make_fragment -> cute.make_rmem_tensor, the same line edits as upstream FlashAttention eaf806d78fa9e18d9aadc323a77fbabe2c539331 ('replace deprecated apis', #2602); 1 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import copy_utils",
+     "from .quack import copy_utils"
+    ],
+    [
+     "from flash_attn.cute.block_sparsity import BlockSparseTensors",
+     "from .block_sparsity import BlockSparseTensors"
+    ],
+    [
+     "from flash_attn.cute.named_barrier import NamedBarrierBwd",
+     "from .named_barrier import NamedBarrierBwd"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK",
+     "from .seqlen_info import SeqlenInfoQK"
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     758,
+     "    thr_mma_pv: cute.core.ThrMma,",
+     "    thr_mma_pv: cute.ThrMma,"
+    ]
+   ]
+  },
+  {
+   "path": "block_sparsity.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/block_sparsity.py",
+   "upstream_sha256": "bdbdae10f4b6eb4958907244b2a37664536e2c6da5ad1b562f82388e458ed906",
+   "sha256": "792a4638f31ffbaa08195e5f6f62f2c0b78b144af0de2d95f1c6d3fc0f3fcfb7",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (1 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from flash_attn.cute.cute_dsl_utils import get_broadcast_dims, to_cute_tensor",
+     "from .cute_dsl_utils import get_broadcast_dims, to_cute_tensor"
+    ]
+   ]
+  },
+  {
+   "path": "copy_utils.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/copy_utils.py",
+   "upstream_sha256": "0f563eeeb6654602d1541f7202b7b88386c4dbdbd24ad6b0825834d65e508c09",
+   "sha256": "0f563eeeb6654602d1541f7202b7b88386c4dbdbd24ad6b0825834d65e508c09",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "cute_dsl_utils.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/cute_dsl_utils.py",
+   "upstream_sha256": "e8248aa0edc593bdb2e90397281a91b0547bb333ba3c672c45e3ce42ed46b07a",
+   "sha256": "e8248aa0edc593bdb2e90397281a91b0547bb333ba3c672c45e3ce42ed46b07a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "fast_math.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/fast_math.py",
+   "upstream_sha256": "7e5f822bf4d0ba36967558f3ae9a1408b410cb726c31222cd61703569d1be738",
+   "sha256": "7e5f822bf4d0ba36967558f3ae9a1408b410cb726c31222cd61703569d1be738",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "flash_bwd_postprocess.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/flash_bwd_postprocess.py",
+   "upstream_sha256": "5ee54addf393b512ad7c263982e2b43b8dcb8594790481f7923d10b465a0d826",
+   "sha256": "69e9810b991ee4b9bd6b7fdae66473c205a729e3dc4623a042a6d0db2d1463c4",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (9 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed these deprecated aliases): cute.core.ThrMma -> cute.ThrMma and cute.make_fragment -> cute.make_rmem_tensor, the same line edits as upstream FlashAttention eaf806d78fa9e18d9aadc323a77fbabe2c539331 ('replace deprecated apis', #2602); 4 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import copy_utils",
+     "from .quack import copy_utils"
+    ],
+    [
+     "from quack import layout_utils",
+     "from .quack import layout_utils"
+    ],
+    [
+     "from quack import sm90_utils",
+     "from .quack import sm90_utils"
+    ],
+    [
+     "from flash_attn.cute import utils",
+     "from . import utils"
+    ],
+    [
+     "from flash_attn.cute.cute_dsl_utils import assume_tensor_aligned",
+     "from .cute_dsl_utils import assume_tensor_aligned"
+    ],
+    [
+     "from flash_attn.cute import ampere_helpers as sm80_utils",
+     "from . import ampere_helpers as sm80_utils"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK",
+     "from .seqlen_info import SeqlenInfoQK"
+    ],
+    [
+     "from quack.cute_dsl_utils import ParamsBase",
+     "from .quack.cute_dsl_utils import ParamsBase"
+    ],
+    [
+     "from flash_attn.cute.tile_scheduler import (",
+     "from .tile_scheduler import ("
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     400,
+     "                tdQrdQ_fp32 = cute.make_fragment(tdQrdQ.shape, cutlass.Float32)",
+     "                tdQrdQ_fp32 = cute.make_rmem_tensor(tdQrdQ.shape, cutlass.Float32)"
+    ],
+    [
+     412,
+     "                tdQrdQ_r2s = cute.make_fragment(tdQsdQ_r2s.shape, self.dtype)",
+     "                tdQrdQ_r2s = cute.make_rmem_tensor(tdQsdQ_r2s.shape, self.dtype)"
+    ],
+    [
+     512,
+     "                    acc = cute.make_fragment(acc_shape, cutlass.Float32)",
+     "                    acc = cute.make_rmem_tensor(acc_shape, cutlass.Float32)"
+    ],
+    [
+     528,
+     "                    acc = cute.make_fragment(tdQrdQ_t2r_shape, Float32)",
+     "                    acc = cute.make_rmem_tensor(tdQrdQ_t2r_shape, Float32)"
+    ]
+   ]
+  },
+  {
+   "path": "flash_bwd_preprocess.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/flash_bwd_preprocess.py",
+   "upstream_sha256": "d1a1bc7df2f3b8a553fc494e9ee9a920eac77c621ad3a5fc24ce00e22160cc8b",
+   "sha256": "8868b1aaf0eb4c7c638abf53dfcad56560f8c0051dff076c10a85843be221c23",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (5 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import copy_utils, layout_utils",
+     "from .quack import copy_utils, layout_utils"
+    ],
+    [
+     "from flash_attn.cute import utils",
+     "from . import utils"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfo",
+     "from .seqlen_info import SeqlenInfo"
+    ],
+    [
+     "from quack.cute_dsl_utils import ParamsBase",
+     "from .quack.cute_dsl_utils import ParamsBase"
+    ],
+    [
+     "from flash_attn.cute.tile_scheduler import (",
+     "from .tile_scheduler import ("
+    ]
+   ]
+  },
+  {
+   "path": "flash_bwd_sm100.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/flash_bwd_sm100.py",
+   "upstream_sha256": "bcf3df051769e1d5cd7b8d22466702587c6b3a32fc18606666e06017cf57f616",
+   "sha256": "97b59468c80e4267d1cbfe394ae157afd83871891e10973a6cf5b61f107988a7",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (17 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed these deprecated aliases): cute.core.ThrMma -> cute.ThrMma and cute.make_fragment -> cute.make_rmem_tensor, the same line edits as upstream FlashAttention eaf806d78fa9e18d9aadc323a77fbabe2c539331 ('replace deprecated apis', #2602); 24 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "import quack.activation",
+     "from . import quack\nfrom .quack import activation as _quack_activation  # noqa: F401"
+    ],
+    [
+     "from quack import layout_utils",
+     "from .quack import layout_utils"
+    ],
+    [
+     "from flash_attn.cute import utils",
+     "from . import utils"
+    ],
+    [
+     "from flash_attn.cute.cute_dsl_utils import assume_tensor_aligned",
+     "from .cute_dsl_utils import assume_tensor_aligned"
+    ],
+    [
+     "from flash_attn.cute import copy_utils",
+     "from . import copy_utils"
+    ],
+    [
+     "from flash_attn.cute import pipeline",
+     "from . import pipeline"
+    ],
+    [
+     "from flash_attn.cute.blackwell_helpers import gemm_w_idx, gemm_ptx_w_idx  # noqa",
+     "from .blackwell_helpers import gemm_w_idx, gemm_ptx_w_idx  # noqa"
+    ],
+    [
+     "from flash_attn.cute.mask import AttentionMask",
+     "from .mask import AttentionMask"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK",
+     "from .seqlen_info import SeqlenInfoQK"
+    ],
+    [
+     "from flash_attn.cute.block_info import BlockInfo",
+     "from .block_info import BlockInfo"
+    ],
+    [
+     "from quack.cute_dsl_utils import ParamsBase",
+     "from .quack.cute_dsl_utils import ParamsBase"
+    ],
+    [
+     "from flash_attn.cute.tile_scheduler import (",
+     "from .tile_scheduler import ("
+    ],
+    [
+     "from flash_attn.cute import barrier",
+     "from . import barrier"
+    ],
+    [
+     "from flash_attn.cute.named_barrier import NamedBarrierBwdSm100",
+     "from .named_barrier import NamedBarrierBwdSm100"
+    ],
+    [
+     "from flash_attn.cute.softmax import apply_score_mod_inner, apply_score_mod_bwd_inner",
+     "from .softmax import apply_score_mod_inner, apply_score_mod_bwd_inner"
+    ],
+    [
+     "from flash_attn.cute.block_sparsity import BlockSparseTensors",
+     "from .block_sparsity import BlockSparseTensors"
+    ],
+    [
+     "from flash_attn.cute.block_sparse_utils import (",
+     "from .block_sparse_utils import ("
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     1677,
+     "        thr_mma_S: cute.core.ThrMma,",
+     "        thr_mma_S: cute.ThrMma,"
+    ],
+    [
+     1678,
+     "        thr_mma_dP: cute.core.ThrMma,",
+     "        thr_mma_dP: cute.ThrMma,"
+    ],
+    [
+     1679,
+     "        thr_mma_dV: cute.core.ThrMma,",
+     "        thr_mma_dV: cute.ThrMma,"
+    ],
+    [
+     1680,
+     "        thr_mma_dK: cute.core.ThrMma,",
+     "        thr_mma_dK: cute.ThrMma,"
+    ],
+    [
+     1681,
+     "        thr_mma_dQ: cute.core.ThrMma,",
+     "        thr_mma_dQ: cute.ThrMma,"
+    ],
+    [
+     2824,
+     "        thr_mma_S: cute.core.ThrMma,",
+     "        thr_mma_S: cute.ThrMma,"
+    ],
+    [
+     2825,
+     "        thr_mma_dP: cute.core.ThrMma,",
+     "        thr_mma_dP: cute.ThrMma,"
+    ],
+    [
+     2826,
+     "        thr_mma_dV: cute.core.ThrMma,",
+     "        thr_mma_dV: cute.ThrMma,"
+    ],
+    [
+     2827,
+     "        thr_mma_dK: cute.core.ThrMma,",
+     "        thr_mma_dK: cute.ThrMma,"
+    ],
+    [
+     3050,
+     "                tSrLSE_s2r = cute.make_fragment(tScS_t2r[None, 0, 0, 0].shape, Float32)",
+     "                tSrLSE_s2r = cute.make_rmem_tensor(tScS_t2r[None, 0, 0, 0].shape, Float32)"
+    ],
+    [
+     3057,
+     "                tSrS_t2r = cute.make_fragment(tScS_t2r.shape, Float32)",
+     "                tSrS_t2r = cute.make_rmem_tensor(tScS_t2r.shape, Float32)"
+    ],
+    [
+     3108,
+     "                tSrP_r2t_f32 = cute.make_fragment(tScP_r2t.shape, Float32)  # 64",
+     "                tSrP_r2t_f32 = cute.make_rmem_tensor(tScP_r2t.shape, Float32)  # 64"
+    ],
+    [
+     3170,
+     "                    tdPrdP_t2r = cute.make_fragment(tScS_t2r[None, 0, None, None].shape, Float32)",
+     "                    tdPrdP_t2r = cute.make_rmem_tensor(tScS_t2r[None, 0, None, None].shape, Float32)"
+    ],
+    [
+     3462,
+     "        thr_mma_dQ: cute.core.ThrMma,",
+     "        thr_mma_dQ: cute.ThrMma,"
+    ],
+    [
+     3593,
+     "                tdQrdQ_t2r = cute.make_fragment(tdQrdQ_t2r_shape, Float32)",
+     "                tdQrdQ_t2r = cute.make_rmem_tensor(tdQrdQ_t2r_shape, Float32)"
+    ],
+    [
+     3724,
+     "        thr_mma_dV: cute.core.ThrMma,",
+     "        thr_mma_dV: cute.ThrMma,"
+    ],
+    [
+     3725,
+     "        thr_mma_dK: cute.core.ThrMma,",
+     "        thr_mma_dK: cute.ThrMma,"
+    ],
+    [
+     3761,
+     "        tdVrdV_t2r = cute.make_fragment(tdVcdV_t2r.shape, Float32)",
+     "        tdVrdV_t2r = cute.make_rmem_tensor(tdVcdV_t2r.shape, Float32)"
+    ],
+    [
+     3778,
+     "        tdVrdV_r2s = cute.make_fragment(tdVrdV_t2r.shape, self.dv_dtype)",
+     "        tdVrdV_r2s = cute.make_rmem_tensor(tdVrdV_t2r.shape, self.dv_dtype)"
+    ],
+    [
+     3813,
+     "        tdKrdK_t2r = cute.make_fragment(tdKcdK_t2r.shape, Float32)",
+     "        tdKrdK_t2r = cute.make_rmem_tensor(tdKcdK_t2r.shape, Float32)"
+    ],
+    [
+     3831,
+     "        tdKrdK_r2s = cute.make_fragment(tdKrdK_t2r.shape, self.dk_dtype)",
+     "        tdKrdK_r2s = cute.make_rmem_tensor(tdKrdK_t2r.shape, self.dk_dtype)"
+    ],
+    [
+     3860,
+     "        thr_mma: cute.core.ThrMma,",
+     "        thr_mma: cute.ThrMma,"
+    ],
+    [
+     3979,
+     "            tdKVrdKV_t2r = cute.make_fragment(tdKVcdKV_t2r.shape, Float32)",
+     "            tdKVrdKV_t2r = cute.make_rmem_tensor(tdKVcdKV_t2r.shape, Float32)"
+    ],
+    [
+     3995,
+     "            tdKVrdKV = cute.make_fragment(tdKVrdKV_t2r.shape, dtype)  # (32 columns)",
+     "            tdKVrdKV = cute.make_rmem_tensor(tdKVrdKV_t2r.shape, dtype)  # (32 columns)"
+    ]
+   ]
+  },
+  {
+   "path": "interface_bwd_sm100.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/interface.py",
+   "upstream_sha256": "0026aeed0bf010f5895b43f181b95fde742098279ce6ff7354c1c18344ce244f",
+   "sha256": "c722ffc71cc702150ae32aea2cf47f8ee120173e00df944777ea3fdf2e9fca46",
+   "modified": true,
+   "modifications": [
+    "the SM100 varlen path of _flash_attn_bwd, _bwd_preprocess and _bwd_postprocess_convert, extracted: other architectures, the forward, score_mod/mask_mod, block sparsity, softcap, dlse, seqused and the on-disk JIT cache removed; process-local compile caches; the 2-CTA choice is the disable_2cta argument instead of the FA_DISABLE_2CTA environment variable. Kernel selection, tile sizes, buffer layouts and launch sequence unchanged",
+    "IsoExec CP edits (listed in isoexec_edits): optional `stats` (precomputed padded lse_log2/dpsum, preprocess skipped) and `q_tile_mask`/`kv_tile_mask` (head dim 256 only) on flash_attn_varlen_bwd_sm100, and backward_stats_sm100 (the preprocess alone); a masked launch computes its kept tiles exactly as an unmasked one"
+   ],
+   "isoexec_edits": [
+    [
+     216,
+     "    disable_2cta: bool = False,",
+     "    disable_2cta: bool = False,\n    stats: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,\n    q_tile_mask: Optional[torch.Tensor] = None,\n    kv_tile_mask: Optional[torch.Tensor] = None,"
+    ],
+    [
+     221,
+     "    \"\"\"``_flash_attn_bwd`` on SM100 for packed varlen Q/K/V, ``lse`` [num_head, total_q] (natural log).\"\"\"",
+     "    \"\"\"``_flash_attn_bwd`` on SM100 for packed varlen Q/K/V, ``lse`` [num_head, total_q] (natural log).\n\n    IsoExec additions, head dim 256 only. ``stats`` is ``(lse_log2, dpsum)`` already in the preprocess's\n    padded layout for ``cu_seqlens_q``; the preprocess is then skipped and ``out``/``lse`` are unused.\n    ``q_tile_mask`` int32 ``[batch, ceil(max_seqlen_q / 256)]`` and ``kv_tile_mask`` int32\n    ``[batch, ceil(max_seqlen_k / 128)]`` select the dQ and dK/dV tiles to compute (nonzero = compute);\n    a computed tile runs exactly as without a mask, a dropped dQ tile stores zeros and a dropped dK/dV\n    tile stores nothing.\n    \"\"\""
+    ],
+    [
+     247,
+     "    use_2cta_instrs = use_2cta_instrs or use_dedicated_hd256_kernel",
+     "    use_2cta_instrs = use_2cta_instrs or use_dedicated_hd256_kernel\n    if (stats is not None or q_tile_mask is not None or kv_tile_mask is not None) and not use_dedicated_hd256_kernel:\n        raise ValueError(\"stats and tile masks are served by the head-dim-256 backward only\")\n    for mask in (q_tile_mask, kv_tile_mask):\n        if mask is not None and (mask.dtype != torch.int32 or mask.dim() != 2 or mask.stride(1) != 1\n                                 or mask.stride(0) % 4 or mask.shape[0] != cu_seqlens_q.shape[0] - 1):\n            raise ValueError(\"a tile mask is int32 [batch, tiles] with unit inner stride and rows of 16-byte multiples\")"
+    ],
+    [
+     282,
+     "    )\n    assert out.shape == (total_q, num_head, head_dim_v)",
+     "    )"
+    ],
+    [
+     284,
+     "    assert lse.shape == (num_head, total_q), \"lse must have shape (num_head, total_q)\"",
+     "    if stats is None:\n        assert out.shape == (total_q, num_head, head_dim_v)\n        assert lse.shape == (num_head, total_q), \"lse must have shape (num_head, total_q)\""
+    ],
+    [
+     289,
+     "    assert q.dtype == k.dtype == v.dtype == out.dtype == dout.dtype, (",
+     "    assert q.dtype == k.dtype == v.dtype == dout.dtype, ("
+    ],
+    [
+     294,
+     "    assert lse.dtype == torch.float32, \"lse must be float32\"",
+     "    if stats is None:\n        assert out.dtype == q.dtype, \"inputs must have the same dtype\"\n        assert lse.dtype == torch.float32, \"lse must be float32\""
+    ],
+    [
+     339,
+     "    dpsum = torch.empty(num_head, total_q_rounded_padded, dtype=torch.float32, device=device)\n    lse_log2 = torch.empty(num_head, total_q_rounded_padded, dtype=torch.float32, device=device)",
+     "    if stats is None:\n        dpsum = torch.empty(num_head, total_q_rounded_padded, dtype=torch.float32, device=device)\n        lse_log2 = torch.empty(num_head, total_q_rounded_padded, dtype=torch.float32, device=device)\n    else:\n        lse_log2, dpsum = stats\n        assert lse_log2.shape == dpsum.shape == (num_head, total_q_rounded_padded), \"stats must be padded [H, rows]\""
+    ],
+    [
+     386,
+     "    _bwd_preprocess(\n        out, dout, dpsum, lse, lse_log2, dq_accum,\n        cu_seqlens_q, None, None,\n        dtype, head_dim, head_dim_v, m_block_size,\n        use_padded_offsets=use_dedicated_hd256_kernel,\n    )",
+     "    if stats is None:\n        _bwd_preprocess(\n            out, dout, dpsum, lse, lse_log2, dq_accum,\n            cu_seqlens_q, None, None,\n            dtype, head_dim, head_dim_v, m_block_size,\n            use_padded_offsets=use_dedicated_hd256_kernel,\n        )"
+    ],
+    [
+     420,
+     "        (seqlen_k_rounded // n_block_size == 1),",
+     "        (seqlen_k_rounded // n_block_size == 1),\n        q_tile_mask is not None,\n        kv_tile_mask is not None,"
+    ],
+    [
+     429,
+     "        lse_log2_tensor, dpsum_tensor = [to_cute_tensor(t) for t in (lse_log2, dpsum)]",
+     "        lse_log2_tensor, dpsum_tensor = [to_cute_tensor(t) for t in (lse_log2, dpsum)]\n        q_tile_mask_tensor, kv_tile_mask_tensor = [\n            None if t is None else to_cute_tensor(t, assumed_align=4) for t in (q_tile_mask, kv_tile_mask)\n        ]"
+    ],
+    [
+     503,
+     "            None,",
+     "            None,\n            *((q_tile_mask_tensor, kv_tile_mask_tensor) if use_dedicated_hd256_kernel else ()),"
+    ],
+    [
+     530,
+     "        None,",
+     "        None,\n        *((q_tile_mask, kv_tile_mask) if use_dedicated_hd256_kernel else ()),"
+    ],
+    [
+     569,
+     "",
+     "\n\ndef backward_stats_sm100(\n    out: torch.Tensor, dout: torch.Tensor, lse: torch.Tensor, cu_seqlens_q: torch.Tensor,\n) -> Tuple[torch.Tensor, torch.Tensor]:\n    \"\"\"IsoExec addition: the head-dim-256 backward's preprocess alone -> ``(lse_log2, dpsum)`` fp32\n    ``[num_head, total_q_rounded_padded]`` in the padded per-request layout its kernels read, exactly the\n    statistics ``flash_attn_varlen_bwd_sm100`` computes before its launch.\"\"\"\n    out, dout, lse, cu_seqlens_q = [maybe_contiguous(t) for t in (out, dout, lse, cu_seqlens_q)]\n    total_q, num_head, head_dim_v = out.shape\n    assert head_dim_v == 256 and dout.shape == out.shape and lse.shape == (num_head, total_q)\n    assert cu_seqlens_q.dtype == torch.int32 and lse.dtype == torch.float32\n    m_block_size = 128\n    rows = (total_q + cu_seqlens_q.shape[0] * m_block_size - 1) // m_block_size * m_block_size\n    dpsum = torch.empty(num_head, rows, dtype=torch.float32, device=out.device)\n    lse_log2 = torch.empty(num_head, rows, dtype=torch.float32, device=out.device)\n    _bwd_preprocess(\n        out, dout, dpsum, lse, lse_log2, None,\n        cu_seqlens_q, None, None,\n        torch2cute_dtype_map[out.dtype], head_dim_v, head_dim_v, m_block_size,\n        use_padded_offsets=True,\n    )\n    return lse_log2, dpsum\n"
+    ]
+   ]
+  },
+  {
+   "path": "licenses/flash_attention.txt",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/LICENSE",
+   "upstream_sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73",
+   "sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "licenses/flash_attention_AUTHORS.txt",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/AUTHORS",
+   "upstream_sha256": "4627841c206c9bf990d37cc2ecbfa778a632d85731aafb4ccb59238334d2821d",
+   "sha256": "4627841c206c9bf990d37cc2ecbfa778a632d85731aafb4ccb59238334d2821d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "licenses/quack.txt",
+   "source": "quack",
+   "upstream_path": "LICENSE",
+   "upstream_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+   "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "mask.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/mask.py",
+   "upstream_sha256": "56cbd8f50ba5bbc71d12334574899df20d92616a22f7be3c0d528b9252866187",
+   "sha256": "bdcf97e103490c39b8c3075857f937ae8b867a1a360908a0821ca39963b5a3d5",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (4 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import layout_utils",
+     "from .quack import layout_utils"
+    ],
+    [
+     "import flash_attn.cute.utils as utils",
+     "from . import utils as utils"
+    ],
+    [
+     "from flash_attn.cute.block_info import BlockInfo",
+     "from .block_info import BlockInfo"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK",
+     "from .seqlen_info import SeqlenInfoQK"
+    ]
+   ]
+  },
+  {
+   "path": "mma_sm100_desc.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/mma_sm100_desc.py",
+   "upstream_sha256": "ac6ec28b2f1a4b797c391a7807b88f83b430452d418262c3dfa7b0f3516e39f9",
+   "sha256": "ac6ec28b2f1a4b797c391a7807b88f83b430452d418262c3dfa7b0f3516e39f9",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "named_barrier.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/named_barrier.py",
+   "upstream_sha256": "e9e2680224af6ba8260e36aae4bb2fdcf589b75bd0d07050df7c4c59e1c716dd",
+   "sha256": "e9e2680224af6ba8260e36aae4bb2fdcf589b75bd0d07050df7c4c59e1c716dd",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "pipeline.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/pipeline.py",
+   "upstream_sha256": "849bce91c72be0a5c7458979e10c8290f45e05253a83600e30fb9540c61ed56a",
+   "sha256": "849bce91c72be0a5c7458979e10c8290f45e05253a83600e30fb9540c61ed56a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "quack/activation.py",
+   "source": "quack",
+   "upstream_path": "quack/activation.py",
+   "upstream_sha256": "cd7006f53e721567867a58c967249ff36b73964374e0fda385a4e7368db32758",
+   "sha256": "cd7006f53e721567867a58c967249ff36b73964374e0fda385a4e7368db32758",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "quack/compile_utils.py",
+   "source": "quack",
+   "upstream_path": "quack/compile_utils.py",
+   "upstream_sha256": "a89de84ec0e56c089d76b247b443bb2cf615aa7fecfa778d7e2c3efcabdf5d95",
+   "sha256": "a89de84ec0e56c089d76b247b443bb2cf615aa7fecfa778d7e2c3efcabdf5d95",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "quack/copy_utils.py",
+   "source": "quack",
+   "upstream_path": "quack/copy_utils.py",
+   "upstream_sha256": "80947161e20f1bad6c8671164f628faa0c8d2818ad7dc9824da908e197c6325a",
+   "sha256": "38314ab3fb9d59598fa3bdd7de4f6f67611e3eba37d6b9272d1c3bea1f3f0a53",
+   "modified": true,
+   "modifications": [
+    "imports of quack.* rewritten to relative imports of this vendored subpackage (3 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed this deprecated alias): cute.core.ThrCopy -> cute.ThrCopy, the same line edits as upstream QuACK 3bc56bf228f9585051810b84a83e40afdfcb23ea ('replace deprecated apis', #147); 2 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import layout_utils",
+     "from . import layout_utils"
+    ],
+    [
+     "from quack.utils import make_vector",
+     "from .utils import make_vector"
+    ],
+    [
+     "    from quack.rounding import convert_f32_to_bf16_sr",
+     "    from .rounding import convert_f32_to_bf16_sr"
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     334,
+     "    thr_copy: cute.core.ThrCopy, tensor: cute.Tensor",
+     "    thr_copy: cute.ThrCopy, tensor: cute.Tensor"
+    ],
+    [
+     343,
+     "    thr_copy: cute.core.ThrCopy, tensor: cute.Tensor",
+     "    thr_copy: cute.ThrCopy, tensor: cute.Tensor"
+    ]
+   ]
+  },
+  {
+   "path": "quack/cute_dsl_utils.py",
+   "source": "quack",
+   "upstream_path": "quack/cute_dsl_utils.py",
+   "upstream_sha256": "e23042dfbc2baa0254ff66371c555b8b8eab40191a75edfeca63dc1c8c406109",
+   "sha256": "e23042dfbc2baa0254ff66371c555b8b8eab40191a75edfeca63dc1c8c406109",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "quack/layout_utils.py",
+   "source": "quack",
+   "upstream_path": "quack/layout_utils.py",
+   "upstream_sha256": "0772f590e47c0cb00341a4df7fe111a9b4558d3ce3eb4010db9c07389fce95b5",
+   "sha256": "f91265f087c44889b1bbda2fa1377b1b58178e6b255c73009b754c8aee0954e0",
+   "modified": true,
+   "modifications": [
+    "IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed this deprecated alias): cute.core.ThrCopy -> cute.ThrCopy, the same line edits as upstream QuACK 3bc56bf228f9585051810b84a83e40afdfcb23ea ('replace deprecated apis', #147); 4 lines, listed in cute_dsl_rewrites"
+   ],
+   "cute_dsl_rewrites": [
+    [
+     282,
+     "    sVec: cute.Tensor, thr_mma: cute.core.ThrMma, expand_shape: int, is_colvec: bool",
+     "    sVec: cute.Tensor, thr_mma: cute.ThrMma, expand_shape: int, is_colvec: bool"
+    ],
+    [
+     299,
+     "    sVec: cute.Tensor, thr_mma: cute.core.ThrMma, expand_shape: int, is_colvec: bool",
+     "    sVec: cute.Tensor, thr_mma: cute.ThrMma, expand_shape: int, is_colvec: bool"
+    ],
+    [
+     316,
+     "    sVec: cute.Tensor, thr_copy: cute.core.ThrCopy, expand_shape: int, is_colvec: bool",
+     "    sVec: cute.Tensor, thr_copy: cute.ThrCopy, expand_shape: int, is_colvec: bool"
+    ],
+    [
+     333,
+     "    sVec: cute.Tensor, thr_copy: cute.core.ThrCopy, expand_shape: int, is_colvec: bool",
+     "    sVec: cute.Tensor, thr_copy: cute.ThrCopy, expand_shape: int, is_colvec: bool"
+    ]
+   ]
+  },
+  {
+   "path": "quack/rounding.py",
+   "source": "quack",
+   "upstream_path": "quack/rounding.py",
+   "upstream_sha256": "13cd745007e2ec2e0023bd8e3099c0fbaa51a278b00adcb4d519a958a78de841",
+   "sha256": "351ff699e7153ca2e85c1aede40f9bfff05b88a90b4e654fe5879826885d40ae",
+   "modified": true,
+   "modifications": [
+    "IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (the MLIR vector dialect bundled with nvidia-cutlass-dsl 4.8.0 has no extractelement/insertelement; the SM100 backward does not trace these functions): vector.extractelement/insertelement with a constant position -> vector.extract/insert with static_position, the same call-site edits as upstream QuACK f7a9d860931f0806b1c364857bb5a05b99d8abf0 ('Fix compatibility issues with CuTe DSL 4.6.0+', #151); now-unused arith import kept; 3 call sites, listed in cute_dsl_rewrites"
+   ],
+   "cute_dsl_rewrites": [
+    [
+     207,
+     "        src_lo = vector.extractelement(\n            src_vec,\n            position=arith.constant(Int32.mlir_type, lo_idx, loc=loc, ip=ip),",
+     "        src_lo = vector.extract(\n            src_vec,\n            dynamic_position=[],\n            static_position=[lo_idx],"
+    ],
+    [
+     214,
+     "        src_hi = vector.extractelement(\n            src_vec,\n            position=arith.constant(Int32.mlir_type, hi_idx, loc=loc, ip=ip),",
+     "        src_hi = vector.extract(\n            src_vec,\n            dynamic_position=[],\n            static_position=[hi_idx],"
+    ],
+    [
+     232,
+     "        i32_vec = vector.insertelement(\n            packed_i32_val,\n            i32_vec,\n            position=arith.constant(Int32.mlir_type, pair_idx, loc=loc, ip=ip),",
+     "        i32_vec = vector.insert(\n            packed_i32_val,\n            i32_vec,\n            dynamic_position=[],\n            static_position=[pair_idx],"
+    ]
+   ]
+  },
+  {
+   "path": "quack/sm90_utils.py",
+   "source": "quack",
+   "upstream_path": "quack/sm90_utils.py",
+   "upstream_sha256": "41a2d9dcc2e5a7d74a383f95c1d8719aa12cb4f76af0254668dc1f7dbc2ca4dc",
+   "sha256": "41a2d9dcc2e5a7d74a383f95c1d8719aa12cb4f76af0254668dc1f7dbc2ca4dc",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "quack/utils.py",
+   "source": "quack",
+   "upstream_path": "quack/utils.py",
+   "upstream_sha256": "358f02e07e6b0725ea560979bdd50336a656218338ce04de004bef9adae94f9b",
+   "sha256": "b45ca28f09caf4242e4fd9eb60ed813a40f75fefa6931a2113a09e99e879e65f",
+   "modified": true,
+   "modifications": [
+    "IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (the MLIR vector dialect bundled with nvidia-cutlass-dsl 4.8.0 has no extractelement/insertelement; the SM100 backward does not trace these functions): vector.extractelement/insertelement with a constant position -> vector.extract/insert with static_position, the same call-site edits as upstream QuACK f7a9d860931f0806b1c364857bb5a05b99d8abf0 ('Fix compatibility issues with CuTe DSL 4.6.0+', #151); now-unused arith import kept; 1 call sites, listed in cute_dsl_rewrites"
+   ],
+   "cute_dsl_rewrites": [
+    [
+     213,
+     "        vec = vector.insertelement(\n            elem_type(v).ir_value(loc=loc, ip=ip),\n            vec,\n            position=_arith.constant(T.i32(), i, loc=loc, ip=ip),",
+     "        vec = vector.insert(\n            elem_type(v).ir_value(loc=loc, ip=ip),\n            vec,\n            dynamic_position=[],\n            static_position=[i],"
+    ]
+   ]
+  },
+  {
+   "path": "seqlen_info.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/seqlen_info.py",
+   "upstream_sha256": "74df5465bfbb8ea1bd0eb0633c2f25601f356e1fa822f9d382a89132f8dcabeb",
+   "sha256": "5c44aa7f7ae31128a67741e46f1ac1cba9fb252bada8f4b0835d6240a9a8fe13",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (1 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import copy_utils",
+     "from .quack import copy_utils"
+    ]
+   ]
+  },
+  {
+   "path": "sm100_hd256_2cta_fmha_backward.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/sm100_hd256_2cta_fmha_backward.py",
+   "upstream_sha256": "b4ee82174ebf9286aee2d9acbc2bdbf2909f845eb43338dec27d61c03c55cfa1",
+   "sha256": "a57ca3c66331cf972d1c315320d9c34c5ad6fe0549dc123f660806cb34f805dc",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (3 statements); IsoExec header comment added after the upstream copyright lines",
+    "IsoExec CP edits (listed in isoexec_edits): q_tile_mask / kv_tile_mask parameters threaded to the dQ and dK/dV kernels"
+   ],
+   "import_rewrites": [
+    [
+     "from flash_attn.cute.sm100_hd256_2cta_fmha_backward_dqkernel import (",
+     "from .sm100_hd256_2cta_fmha_backward_dqkernel import ("
+    ],
+    [
+     "from flash_attn.cute.sm100_hd256_2cta_fmha_backward_dkdvkernel import (",
+     "from .sm100_hd256_2cta_fmha_backward_dkdvkernel import ("
+    ],
+    [
+     "from flash_attn.cute.cute_dsl_utils import assume_tensor_aligned",
+     "from .cute_dsl_utils import assume_tensor_aligned"
+    ]
+   ],
+   "isoexec_edits": [
+    [
+     210,
+     "        block_sparse_tensors: cute.Tensor | None = None,",
+     "        block_sparse_tensors: cute.Tensor | None = None,\n        q_tile_mask: cute.Tensor | None = None,\n        kv_tile_mask: cute.Tensor | None = None,"
+    ],
+    [
+     282,
+     "            stream,",
+     "            stream,\n            q_tile_mask,"
+    ],
+    [
+     297,
+     "            stream,",
+     "            stream,\n            kv_tile_mask,"
+    ]
+   ]
+  },
+  {
+   "path": "sm100_hd256_2cta_fmha_backward_dkdvkernel.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/sm100_hd256_2cta_fmha_backward_dkdvkernel.py",
+   "upstream_sha256": "862a96525f2ece255b0d43b140b1c914110fe317edc31824a43498bd0f8206db",
+   "sha256": "22663deb0e4a3d251d4c909c5388edf362a7ca9a3967de7b64853fb7ea96c07e",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (2 statements); IsoExec header comment added after the upstream copyright lines",
+    "IsoExec CP edits (listed in isoexec_edits): optional kv_tile_mask [batch, 128-key CTA-pair tiles] in the static path; a masked-off tile has no work and stores nothing"
+   ],
+   "import_rewrites": [
+    [
+     "from flash_attn.cute.tile_scheduler import (",
+     "from .tile_scheduler import ("
+    ],
+    [
+     "import flash_attn.cute.copy_utils as fa_copy_utils",
+     "from . import copy_utils as fa_copy_utils"
+    ]
+   ],
+   "isoexec_edits": [
+    [
+     18,
+     "import cutlass.cute as cute",
+     "import cutlass.cute as cute\nfrom cutlass.cutlass_dsl import min as dsl_min"
+    ],
+    [
+     221,
+     "        stream: cuda.CUstream,",
+     "        stream: cuda.CUstream,\n        kv_tile_mask: cute.Tensor | None = None,"
+    ],
+    [
+     770,
+     "            cumulative_s_k,",
+     "            cumulative_s_k,\n            kv_tile_mask,"
+    ],
+    [
+     828,
+     "        cumulative_s_k: cute.Tensor | None,",
+     "        cumulative_s_k: cute.Tensor | None,\n        kv_tile_mask: cute.Tensor | None,"
+    ],
+    [
+     1543,
+     "            )",
+     "            )\n            # IsoExec: a CTA pair whose 128-key tile the mask drops does no work and stores nothing. Tiles past the\n            # mask's width lie past every sequence (the grid spans the packed total) and do no work either.\n            clear_bound = seqlen_k_cur_batch\n            if cutlass.const_expr(kv_tile_mask is not None):\n                keep = kv_tile_mask[bidz, dsl_min(bidx // 2, kv_tile_mask.shape[1] - 1)]\n                iter_count = iter_count * keep\n                clear_bound = clear_bound * keep"
+    ],
+    [
+     1552,
+     "                if bidx * self.tile_shape_K < seqlen_k_cur_batch:",
+     "                if bidx * self.tile_shape_K < clear_bound:"
+    ]
+   ]
+  },
+  {
+   "path": "sm100_hd256_2cta_fmha_backward_dqkernel.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/sm100_hd256_2cta_fmha_backward_dqkernel.py",
+   "upstream_sha256": "8aa6075bfaeae69a319ba8b9c5fc1785dce9b155dd83074db1756eb4181afbb4",
+   "sha256": "4e285cacba539291d10d242e6d2f4b70e68e72d378e190ddbceef36277de94b0",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (4 statements); IsoExec header comment added after the upstream copyright lines",
+    "IsoExec CP edits (listed in isoexec_edits): optional q_tile_mask [batch, 256-row tiles]; a masked-off dQ tile has no work (all four warp roles agree), stores zeros, and the index is clamped for grid tiles past every sequence"
+   ],
+   "import_rewrites": [
+    [
+     "from flash_attn.cute.tile_scheduler import (",
+     "from .tile_scheduler import ("
+    ],
+    [
+     "from flash_attn.cute.mask import (",
+     "from .mask import ("
+    ],
+    [
+     "from flash_attn.cute.tile_scheduler import SM100_TMEM_CAPACITY_COLUMNS",
+     "from .tile_scheduler import SM100_TMEM_CAPACITY_COLUMNS"
+    ],
+    [
+     "import flash_attn.cute.copy_utils as fa_copy_utils",
+     "from . import copy_utils as fa_copy_utils"
+    ]
+   ],
+   "isoexec_edits": [
+    [
+     10,
+     "import cutlass.cute as cute",
+     "import cutlass.cute as cute\nfrom cutlass.cutlass_dsl import min as dsl_min"
+    ],
+    [
+     170,
+     "        stream: cuda.CUstream,",
+     "        stream: cuda.CUstream,\n        q_tile_mask: Optional[cute.Tensor] = None,"
+    ],
+    [
+     557,
+     "            cum_seqlen_k,",
+     "            cum_seqlen_k,\n            q_tile_mask,"
+    ],
+    [
+     604,
+     "        cum_seqlen_k: Optional[cute.Tensor],",
+     "        cum_seqlen_k: Optional[cute.Tensor],\n        q_tile_mask: Optional[cute.Tensor],"
+    ],
+    [
+     963,
+     "                has_work = is_valid_q and is_valid_k",
+     "                has_work = is_valid_q and is_valid_k\n                if cutlass.const_expr(q_tile_mask is not None):\n                    has_work = has_work and q_tile_mask[batch_coord, dsl_min(mma_block_coord[0], q_tile_mask.shape[1] - 1)] > 0"
+    ],
+    [
+     1243,
+     "                has_work = is_valid_q and is_valid_k",
+     "                has_work = is_valid_q and is_valid_k\n                if cutlass.const_expr(q_tile_mask is not None):\n                    has_work = has_work and q_tile_mask[batch_coord, dsl_min(mma_block_coord[0], q_tile_mask.shape[1] - 1)] > 0"
+    ],
+    [
+     1871,
+     "                has_work = is_valid_q and is_valid_k",
+     "                has_work = is_valid_q and is_valid_k\n                if cutlass.const_expr(q_tile_mask is not None):\n                    has_work = has_work and q_tile_mask[batch_coord, dsl_min(mma_block_coord[0], q_tile_mask.shape[1] - 1)] > 0"
+    ],
+    [
+     1992,
+     "                has_work = is_valid_q and is_valid_k",
+     "                has_work = is_valid_q and is_valid_k\n                if cutlass.const_expr(q_tile_mask is not None):\n                    has_work = has_work and q_tile_mask[batch_coord, dsl_min(mma_block_coord[0], q_tile_mask.shape[1] - 1)] > 0"
+    ]
+   ]
+  },
+  {
+   "path": "softmax.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/softmax.py",
+   "upstream_sha256": "d7f0899759e5fc8f05b5d71b254b4f846c201ed83fa3ba120fd68e02359ec55f",
+   "sha256": "83219e16809b9b02738bba5fe0772c2ca2a2428febdc48c19fcd3bc28bb851ba",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (4 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed these deprecated aliases): cute.core.ThrMma -> cute.ThrMma and cute.make_fragment -> cute.make_rmem_tensor, the same line edits as upstream FlashAttention eaf806d78fa9e18d9aadc323a77fbabe2c539331 ('replace deprecated apis', #2602); 5 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "from quack import layout_utils",
+     "from .quack import layout_utils"
+    ],
+    [
+     "import flash_attn.cute.utils as utils",
+     "from . import utils as utils"
+    ],
+    [
+     "from quack.cute_dsl_utils import ParamsBase",
+     "from .quack.cute_dsl_utils import ParamsBase"
+    ],
+    [
+     "from flash_attn.cute.seqlen_info import SeqlenInfoQK",
+     "from .seqlen_info import SeqlenInfoQK"
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     557,
+     "    grad_vec = cute.make_fragment(vec_size, qk_acc_dtype)",
+     "    grad_vec = cute.make_rmem_tensor(vec_size, qk_acc_dtype)"
+    ],
+    [
+     558,
+     "    score_vec = cute.make_fragment(vec_size, qk_acc_dtype)",
+     "    score_vec = cute.make_rmem_tensor(vec_size, qk_acc_dtype)"
+    ],
+    [
+     559,
+     "    kv_idx_vec = cute.make_fragment(vec_size, cutlass.Int32)",
+     "    kv_idx_vec = cute.make_rmem_tensor(vec_size, cutlass.Int32)"
+    ],
+    [
+     561,
+     "    q_idx_vec = cute.make_fragment(vec_size, cutlass.Int32)",
+     "    q_idx_vec = cute.make_rmem_tensor(vec_size, cutlass.Int32)"
+    ],
+    [
+     565,
+     "        head_idx_vec = cute.make_fragment(vec_size, cutlass.Int32)",
+     "        head_idx_vec = cute.make_rmem_tensor(vec_size, cutlass.Int32)"
+    ]
+   ]
+  },
+  {
+   "path": "tile_scheduler.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/tile_scheduler.py",
+   "upstream_sha256": "a2f36e052733e7aa67a0f78fe1f9e4c414dcd0ddb554a22d471cafb5562ef489",
+   "sha256": "689f95324825e75b1e6499beed3c2acb3d361ba114fc651e695c8fee75f7bd4c",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (3 statements); IsoExec header comment added after the upstream copyright lines"
+   ],
+   "import_rewrites": [
+    [
+     "from quack.cute_dsl_utils import ParamsBase",
+     "from .quack.cute_dsl_utils import ParamsBase"
+    ],
+    [
+     "import flash_attn.cute.utils as utils",
+     "from . import utils as utils"
+    ],
+    [
+     "from flash_attn.cute.fast_math import clz",
+     "from .fast_math import clz"
+    ]
+   ]
+  },
+  {
+   "path": "utils.py",
+   "source": "flash_attention",
+   "upstream_path": "flash_attn/cute/utils.py",
+   "upstream_sha256": "0adb633cddf07a50c9a5b89280a2acd344cd4b709357e44ede0055b00d67e3d2",
+   "sha256": "6b9c2d7dbb1fbfcac05f9f1cd7ea83779b3df6589892f71147e78b94514a01a8",
+   "modified": true,
+   "modifications": [
+    "imports of flash_attn.cute.* and quack.* rewritten to relative imports of this vendored package (1 statements); IsoExec header comment added after the upstream copyright lines",
+    "CuTe DSL 4.8 compatibility (nvidia-cutlass-dsl 4.8.0 removed these deprecated aliases): cute.core.ThrMma -> cute.ThrMma and cute.make_fragment -> cute.make_rmem_tensor, the same line edits as upstream FlashAttention eaf806d78fa9e18d9aadc323a77fbabe2c539331 ('replace deprecated apis', #2602); 10 lines, listed in cute_dsl_rewrites"
+   ],
+   "import_rewrites": [
+    [
+     "import quack.activation",
+     "from . import quack\nfrom .quack import activation as _quack_activation  # noqa: F401"
+    ]
+   ],
+   "cute_dsl_rewrites": [
+    [
+     281,
+     "    smem: cute.Tensor, thr_mma: cute.core.ThrMma, swapAB: cutlass.Constexpr[bool] = False",
+     "    smem: cute.Tensor, thr_mma: cute.ThrMma, swapAB: cutlass.Constexpr[bool] = False"
+    ],
+    [
+     290,
+     "    smem: cute.Tensor, thr_mma: cute.core.ThrMma, swapAB: cutlass.Constexpr[bool] = False",
+     "    smem: cute.Tensor, thr_mma: cute.ThrMma, swapAB: cutlass.Constexpr[bool] = False"
+    ],
+    [
+     321,
+     "        res = cute.make_fragment(val.shape, val.dtype)",
+     "        res = cute.make_rmem_tensor(val.shape, val.dtype)"
+    ],
+    [
+     387,
+     "        res = cute.make_fragment(x.shape, Float32)",
+     "        res = cute.make_rmem_tensor(x.shape, Float32)"
+    ],
+    [
+     408,
+     "        res = cute.make_fragment(x.shape, Float32)",
+     "        res = cute.make_rmem_tensor(x.shape, Float32)"
+    ],
+    [
+     438,
+     "        # res = cute.make_fragment(x.shape, Float32)",
+     "        # res = cute.make_rmem_tensor(x.shape, Float32)"
+    ],
+    [
+     451,
+     "        res = cute.make_fragment(x.shape, Float32)",
+     "        res = cute.make_rmem_tensor(x.shape, Float32)"
+    ],
+    [
+     501,
+     "    tApA = cute.make_fragment(",
+     "    tApA = cute.make_rmem_tensor("
+    ],
+    [
+     674,
+     "        dst = cute.make_fragment(src.shape, dtype)",
+     "        dst = cute.make_rmem_tensor(src.shape, dtype)"
+    ],
+    [
+     946,
+     "    vec = cute.make_fragment(1, dtype)",
+     "    vec = cute.make_rmem_tensor(1, dtype)"
+    ]
+   ]
+  }
+ ],
+ "authored_files": [
+  "__init__.py",
+  "quack/__init__.py",
+  "PROVENANCE.md",
+  "upstream_manifest.json"
+ ]
+}

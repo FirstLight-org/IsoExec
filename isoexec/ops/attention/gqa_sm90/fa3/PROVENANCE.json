@@ -1,0 +1,399 @@
+{
+  "_README": [
+    "FlashAttention-3 (hopper/) at a pinned commit: the subset gqa_sm90 compiles, byte-identical to upstream except the rewrite rules below.",
+    "The file list is the include closure of the translation units in gqa_sm90/_extension.py (SOURCES) under its build profile.",
+    "upstream_sha256 records the upstream files the copy was taken from, as citation; it is not compared with an installed or checked-out upstream. vendored_sha256 detects local edits (tests/test_vendor_cpu.py). To update, copy the listed files from upstream at upstream.commit, apply rewrite_rules, and requalify (gqa_sm90/tests/test_ops_gpu.py, test_seam_gpu.py).",
+    "LICENSE and AUTHORS are the repository-root files, stored with a .txt suffix so the wheel carries them.",
+    "isoexec_edits lists upstream files IsoExec modified for the segment split (spec.SEG_RECIPE); isoexec_files lists files IsoExec added (upstream_sha256 null). Every other file is byte-identical to upstream except the rewrite rules."
+  ],
+  "upstream": {
+    "repo": "https://github.com/Dao-AILab/flash-attention",
+    "commit": "e81a70ce92d6dd96e213c08adbadd7c7e3d17f01",
+    "subdirectory": "hopper",
+    "license": "BSD-3-Clause",
+    "cutlass_submodule": "7127592069c2fe01b041e174ba4345ef9b279671",
+    "cutlass_note": "Built against isoexec.ops.build_cache.CUTLASS_REVISION (147f5673), which differs from FA3's submodule only in copyright years, one constexpr keyword position, an unused '(void) workspace;' and CUTLASS_PATCH 4->5; the kernel SASS was identical when this was recorded (the comparison script that measured it has since been removed).",
+    "captured": "2026-11-06"
+  },
+  "rewrite_rules": [
+    {
+      "file": "flash_api_stable.cpp",
+      "old": "STABLE_TORCH_LIBRARY(flash_attn_3, m) {",
+      "new": "STABLE_TORCH_LIBRARY(isoexec_gqa_sm90, m) {",
+      "why": "own operator namespace, so the vendored library never collides with an installed flash_attn_3"
+    },
+    {
+      "file": "flash_api_stable.cpp",
+      "old": "STABLE_TORCH_LIBRARY_IMPL(flash_attn_3, CUDA, m) {",
+      "new": "STABLE_TORCH_LIBRARY_IMPL(isoexec_gqa_sm90, CUDA, m) {",
+      "why": "same"
+    }
+  ],
+  "files": [
+    {
+      "file": "AUTHORS",
+      "upstream_sha256": "f3bf4144826a62841b7f9aebc5057f75da2d32a652a573edc67250ec94a377a7",
+      "vendored_sha256": "f3bf4144826a62841b7f9aebc5057f75da2d32a652a573edc67250ec94a377a7"
+    },
+    {
+      "file": "LICENSE",
+      "upstream_sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73",
+      "vendored_sha256": "8c9ccb96c065e706135b6cbad279b721da6156e51f3a5f27c6b3329af9416d73"
+    },
+    {
+      "file": "block.h",
+      "upstream_sha256": "4c9b132fdbff869716ca673f087cf2ede20f041fa8923c2f181394b716981083",
+      "vendored_sha256": "4bc29e0f791e5a8d71f736b4943fb5a4fc14acb88339dc44bb7b88026b302b44"
+    },
+    {
+      "file": "copy_sm90_bulk_reduce.hpp",
+      "upstream_sha256": "6f83f3f914e749029b27568795605e3fbcd5149b651929832c938f9639bec396",
+      "vendored_sha256": "6f83f3f914e749029b27568795605e3fbcd5149b651929832c938f9639bec396"
+    },
+    {
+      "file": "cuda_check.h",
+      "upstream_sha256": "f93a4a55e528edaa3b51a26e26e33f6b52e2b26a30b8e325b2c5121db70d8df0",
+      "vendored_sha256": "f93a4a55e528edaa3b51a26e26e33f6b52e2b26a30b8e325b2c5121db70d8df0"
+    },
+    {
+      "file": "epilogue_bwd.hpp",
+      "upstream_sha256": "d739a90afb7c96bdfba6d8caa3fb3e4a45ac18cca72ab814e3472a89920261db",
+      "vendored_sha256": "d739a90afb7c96bdfba6d8caa3fb3e4a45ac18cca72ab814e3472a89920261db"
+    },
+    {
+      "file": "epilogue_fwd.hpp",
+      "upstream_sha256": "e49e5df2affe0b4eead15ea4e2bb8ca649f2379a9e87c8927598075ebd7db746",
+      "vendored_sha256": "e49e5df2affe0b4eead15ea4e2bb8ca649f2379a9e87c8927598075ebd7db746"
+    },
+    {
+      "file": "flash.h",
+      "upstream_sha256": "767746743ba9b360fa070bd3d003614f6767ca2976c1e4fa2bbe8c7ddc52c92b",
+      "vendored_sha256": "8573994e8301b289495761f80c385b60760957e2430d32df58e69f99e7a46591"
+    },
+    {
+      "file": "flash_api_stable.cpp",
+      "upstream_sha256": "f4a452ccfb5237abd4288304d6daeab56b818729f7366a8ff037e8227fe41358",
+      "vendored_sha256": "5258bcb8bc4b57633bad678d684da0dd1384a514d8bca659135c3fed46d20012"
+    },
+    {
+      "file": "flash_bwd_kernel_sm80.h",
+      "upstream_sha256": "e099a50d68b255cbf9a1bf91dd7e281b739059b3675dbea3945cc829a887bddb",
+      "vendored_sha256": "e099a50d68b255cbf9a1bf91dd7e281b739059b3675dbea3945cc829a887bddb"
+    },
+    {
+      "file": "flash_bwd_kernel_sm90.h",
+      "upstream_sha256": "2e0052006b2733373709cdeed0af32edcaea69958936c748275dfb61ed115feb",
+      "vendored_sha256": "2e0052006b2733373709cdeed0af32edcaea69958936c748275dfb61ed115feb"
+    },
+    {
+      "file": "flash_bwd_launch_template.h",
+      "upstream_sha256": "4a512cca378eed5d54733bfb177b2c50debed0f7ad79922356640d0feb941ac8",
+      "vendored_sha256": "4a512cca378eed5d54733bfb177b2c50debed0f7ad79922356640d0feb941ac8"
+    },
+    {
+      "file": "flash_bwd_postprocess_kernel.h",
+      "upstream_sha256": "618a6253e8d63e433e4559bfbc719f6f71afd74865658da7327dfb0f754a1df8",
+      "vendored_sha256": "618a6253e8d63e433e4559bfbc719f6f71afd74865658da7327dfb0f754a1df8"
+    },
+    {
+      "file": "flash_bwd_preprocess_kernel.h",
+      "upstream_sha256": "b5f3f319f5f080123fbd65afcec6a2c2866bf5aeac25d2e962ea8db08438bbf5",
+      "vendored_sha256": "b5f3f319f5f080123fbd65afcec6a2c2866bf5aeac25d2e962ea8db08438bbf5"
+    },
+    {
+      "file": "flash_fwd_kernel_sm80.h",
+      "upstream_sha256": "24fa9d7d383a69f1f40ebb2343114f645bfbac72ac61e188f268c71f796b755b",
+      "vendored_sha256": "24fa9d7d383a69f1f40ebb2343114f645bfbac72ac61e188f268c71f796b755b"
+    },
+    {
+      "file": "flash_fwd_kernel_sm90.h",
+      "upstream_sha256": "1d1e955e208b7830127573beece10d06416953b65143013a8ee7e57189967ea6",
+      "vendored_sha256": "1d1e955e208b7830127573beece10d06416953b65143013a8ee7e57189967ea6"
+    },
+    {
+      "file": "flash_fwd_launch_template.h",
+      "upstream_sha256": "c435e8a039cbc4e3eede523cda203773ca6681d1ace4731ae6f063574ebaad8f",
+      "vendored_sha256": "dd0d101ad6bb559f99f33861b920a106b8417b724bc881811adfc18dfbd3d84a"
+    },
+    {
+      "file": "flash_prepare_scheduler.cu",
+      "upstream_sha256": "bc45f3f7b43fd92978d5bb05aac4263d4c9666a63f34cf20dbd7b52d14b0e67e",
+      "vendored_sha256": "5efc90a5e73c7b3fe482ed36e3afd941d5ea1d8470c4e636ea5b3220a8e1b9df"
+    },
+    {
+      "file": "heuristics.h",
+      "upstream_sha256": "6929d1f301a2524b55a2407640e26dbc1bb3cc3c4ae26180a678af5e561035f2",
+      "vendored_sha256": "6929d1f301a2524b55a2407640e26dbc1bb3cc3c4ae26180a678af5e561035f2"
+    },
+    {
+      "file": "instantiations/flash_bwd_hdim128_bf16_sm90.cu",
+      "upstream_sha256": "731b39db1d24aba0d2d71c6dd34427135307206a63ae956fef2b5e6033f94ae5",
+      "vendored_sha256": "731b39db1d24aba0d2d71c6dd34427135307206a63ae956fef2b5e6033f94ae5"
+    },
+    {
+      "file": "instantiations/flash_bwd_hdim256_bf16_sm90.cu",
+      "upstream_sha256": "c151bbbb50db4c36001d58314dc6604a1985f1c48eacfdd48c405702f1effa50",
+      "vendored_sha256": "c151bbbb50db4c36001d58314dc6604a1985f1c48eacfdd48c405702f1effa50"
+    },
+    {
+      "file": "instantiations/flash_bwd_hdim64_bf16_sm90.cu",
+      "upstream_sha256": "382fc5386b47b18d23b6bb31072828fb9337446d4ecc82d0d40aff6963f82910",
+      "vendored_sha256": "382fc5386b47b18d23b6bb31072828fb9337446d4ecc82d0d40aff6963f82910"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_packgqa_sm90.cu",
+      "upstream_sha256": "5946e288fe11c1cc9a54f4186b28fdb8f5e2d9d0bfe20cece6d4d00b12e773ee",
+      "vendored_sha256": "5946e288fe11c1cc9a54f4186b28fdb8f5e2d9d0bfe20cece6d4d00b12e773ee"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_paged_sm90.cu",
+      "upstream_sha256": "312bba8772f47c59409dc4fa44f7f565c00285188bee788ed8c2fe0c11dd3d39",
+      "vendored_sha256": "312bba8772f47c59409dc4fa44f7f565c00285188bee788ed8c2fe0c11dd3d39"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_paged_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "dd4bcf0a3041cf9f4d644044f2cd861bc24a2e2df8fcd569c09ac2df0c8b33af"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_sm90.cu",
+      "upstream_sha256": "415266e1f526f53264d3d6d5658b5ee1c9538e32ff21a6b4f266fb46ca4f3a68",
+      "vendored_sha256": "415266e1f526f53264d3d6d5658b5ee1c9538e32ff21a6b4f266fb46ca4f3a68"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "698aa9e86b57a91d94ff806223f8d2702453f470603acb8f30e6dc77655a6498"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_packgqa_sm90.cu",
+      "upstream_sha256": "4f40d41be76ccd6b784f7b2a31ef9d9c32850169e2bd1ebb6fb7779a71eb17e1",
+      "vendored_sha256": "4f40d41be76ccd6b784f7b2a31ef9d9c32850169e2bd1ebb6fb7779a71eb17e1"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_paged_sm90.cu",
+      "upstream_sha256": "c4fbd1067f22a99a2f63ab009d13788513370f098884c3781e9fd7b94f29772d",
+      "vendored_sha256": "c4fbd1067f22a99a2f63ab009d13788513370f098884c3781e9fd7b94f29772d"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_paged_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "08928753bf7b9f1683479d69a1688bcdce28893f8edc6e0860f9b8864929ebd6"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_sm90.cu",
+      "upstream_sha256": "963fa041644ad3eee3eec2f81788a00f5fe18271e5bfe515a1ab0b6db79a874c",
+      "vendored_sha256": "963fa041644ad3eee3eec2f81788a00f5fe18271e5bfe515a1ab0b6db79a874c"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "dc22d0978adcd679b8562e5bb61dedc5cf10c23a33aaa9656dbc072e29873392"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_256_bf16_packgqa_sm90.cu",
+      "upstream_sha256": "cc2ab6e79b402cc534a6856583ce81286b322efe9470a8b2166574229a2fd013",
+      "vendored_sha256": "cc2ab6e79b402cc534a6856583ce81286b322efe9470a8b2166574229a2fd013"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_256_bf16_paged_sm90.cu",
+      "upstream_sha256": "40c07e93ee497e9ea135470c083ee70826f789540d1aac1875cedd8463f529cc",
+      "vendored_sha256": "40c07e93ee497e9ea135470c083ee70826f789540d1aac1875cedd8463f529cc"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_256_bf16_sm90.cu",
+      "upstream_sha256": "1b82415a6ff737e55f9886237a0e049e14c92b919cebc2769b7ea8f5d5d6c586",
+      "vendored_sha256": "1b82415a6ff737e55f9886237a0e049e14c92b919cebc2769b7ea8f5d5d6c586"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_512_bf16_packgqa_sm90.cu",
+      "upstream_sha256": "d0bcd4fdd0ca8d00216a39f1b9d42fbdab3896c544210e85fa80055911c316cd",
+      "vendored_sha256": "d0bcd4fdd0ca8d00216a39f1b9d42fbdab3896c544210e85fa80055911c316cd"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_512_bf16_paged_sm90.cu",
+      "upstream_sha256": "91e26a496b5006bc8cc2408d962e4dfed902b91235b7256eacaef65101724b7e",
+      "vendored_sha256": "91e26a496b5006bc8cc2408d962e4dfed902b91235b7256eacaef65101724b7e"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_512_bf16_sm90.cu",
+      "upstream_sha256": "ce05c015500a4b11f848b31c93c651ca7978556608084d283d457946d200f25a",
+      "vendored_sha256": "ce05c015500a4b11f848b31c93c651ca7978556608084d283d457946d200f25a"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_packgqa_sm90.cu",
+      "upstream_sha256": "f72be53815b1312156d865923a83f290758b18aa36a3210860e2503cf74e3647",
+      "vendored_sha256": "f72be53815b1312156d865923a83f290758b18aa36a3210860e2503cf74e3647"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_paged_sm90.cu",
+      "upstream_sha256": "8b353830aff26ce0c1acdeb85bfd2d21e5ba991e972f6f4073bf2c7c9f38f5f1",
+      "vendored_sha256": "8b353830aff26ce0c1acdeb85bfd2d21e5ba991e972f6f4073bf2c7c9f38f5f1"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_paged_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "2dd2d0a784202129b3256ed5ce824f1b784a198ff256a37f5a6d003bb48d4583"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_sm90.cu",
+      "upstream_sha256": "babf8cbab3b68a51dee7d08b775e5571016272356c39ed95d3efb1d6452f58a9",
+      "vendored_sha256": "babf8cbab3b68a51dee7d08b775e5571016272356c39ed95d3efb1d6452f58a9"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_split_sm90.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "16afb39ab20eecec6ff6694370c8a702f3304698f24db77a214a09de59c9a18f"
+    },
+    {
+      "file": "mainloop_bwd_sm80.hpp",
+      "upstream_sha256": "0c3414389359f309c07e84d1ab75307edc45eae8c6993c9d1d1dabc1f55d9860",
+      "vendored_sha256": "0c3414389359f309c07e84d1ab75307edc45eae8c6993c9d1d1dabc1f55d9860"
+    },
+    {
+      "file": "mainloop_bwd_sm90_tma_gmma_ws.hpp",
+      "upstream_sha256": "f936425b973dad87adaa7a24e88410a99d6a089774470c9dcdaa5d8b9859f4c5",
+      "vendored_sha256": "f936425b973dad87adaa7a24e88410a99d6a089774470c9dcdaa5d8b9859f4c5"
+    },
+    {
+      "file": "mainloop_fwd_sm80.hpp",
+      "upstream_sha256": "dac60dd25228d9c5dc4ef4c8083cd39422cb37eb251682053a7eb5e282c22260",
+      "vendored_sha256": "dac60dd25228d9c5dc4ef4c8083cd39422cb37eb251682053a7eb5e282c22260"
+    },
+    {
+      "file": "mainloop_fwd_sm90_tma_gmma_ws.hpp",
+      "upstream_sha256": "4c39acafad4acc8931a873037c223dfc6ecfd1ede3af38c75ef3608acac8afdb",
+      "vendored_sha256": "b5b162b8e461d32dc2769719c4c99b5fa2353842aacc6c4b1a12d33956a01d5b"
+    },
+    {
+      "file": "mask.h",
+      "upstream_sha256": "03db16230794b5a29ec5baa28afd58c217cb487b7a47ad43eaf29cb11750ce03",
+      "vendored_sha256": "03db16230794b5a29ec5baa28afd58c217cb487b7a47ad43eaf29cb11750ce03"
+    },
+    {
+      "file": "named_barrier.hpp",
+      "upstream_sha256": "878b7ba54627d26f5efd45fef9532e258baa3da997ecc382bd2888b5e24ca2fa",
+      "vendored_sha256": "878b7ba54627d26f5efd45fef9532e258baa3da997ecc382bd2888b5e24ca2fa"
+    },
+    {
+      "file": "pack_gqa.h",
+      "upstream_sha256": "63bbceac009290ca0cb1d9f8a69f58a1a12862922a26c0c7cb7df96e37d75966",
+      "vendored_sha256": "63bbceac009290ca0cb1d9f8a69f58a1a12862922a26c0c7cb7df96e37d75966"
+    },
+    {
+      "file": "paged_kv.h",
+      "upstream_sha256": "178f9833cec3173fe5320f1cbdaac26eed5334052a0c97dd01f514e3c58b251c",
+      "vendored_sha256": "178f9833cec3173fe5320f1cbdaac26eed5334052a0c97dd01f514e3c58b251c"
+    },
+    {
+      "file": "rotary.h",
+      "upstream_sha256": "13b0b2abf945a23ebd6c8aab864e6fef6c94bffa01524bb92f3ccd5d33f8bf0b",
+      "vendored_sha256": "13b0b2abf945a23ebd6c8aab864e6fef6c94bffa01524bb92f3ccd5d33f8bf0b"
+    },
+    {
+      "file": "seg_combine.cu",
+      "upstream_sha256": null,
+      "vendored_sha256": "82dd30680160317fc78a4b17ae0a28f843e95bc3bbf65e5867a6eb6f79301d77"
+    },
+    {
+      "file": "seg_merge.h",
+      "upstream_sha256": null,
+      "vendored_sha256": "5aacc48576c5eb940cb449e75dfa480ef283a106384a46a76e158380a7831903"
+    },
+    {
+      "file": "seqlen.h",
+      "upstream_sha256": "75af0f30fda8649f97344cfc64d4365fb87a7862402de7e15f57a071d0f7d1d7",
+      "vendored_sha256": "75af0f30fda8649f97344cfc64d4365fb87a7862402de7e15f57a071d0f7d1d7"
+    },
+    {
+      "file": "sm90_pipeline_no_cluster.hpp",
+      "upstream_sha256": "47ac659da0942736792bcd8386876464722336a4b626dc4fa565bbe8bbafdbd3",
+      "vendored_sha256": "47ac659da0942736792bcd8386876464722336a4b626dc4fa565bbe8bbafdbd3"
+    },
+    {
+      "file": "softmax.h",
+      "upstream_sha256": "0c1b7dd42c5886a7f3ddd180834fb01b5efddcaf12411df13c45aa875514bd1c",
+      "vendored_sha256": "0c1b7dd42c5886a7f3ddd180834fb01b5efddcaf12411df13c45aa875514bd1c"
+    },
+    {
+      "file": "static_switch.h",
+      "upstream_sha256": "b06397c795df2241ff4aa06d788d340523fa9d500ea3cd32e1623d2897788aa6",
+      "vendored_sha256": "b06397c795df2241ff4aa06d788d340523fa9d500ea3cd32e1623d2897788aa6"
+    },
+    {
+      "file": "tile_scheduler.hpp",
+      "upstream_sha256": "2c76165f4f41bc861674bcccec6289e6e1593bba0a74c2efa51ebce426bb42d8",
+      "vendored_sha256": "2c76165f4f41bc861674bcccec6289e6e1593bba0a74c2efa51ebce426bb42d8"
+    },
+    {
+      "file": "tile_size.h",
+      "upstream_sha256": "f7f70ff6e7cd23366811c7dadf2dc7b480babb00f474e2c913f3e773c3eeb0d0",
+      "vendored_sha256": "f7f70ff6e7cd23366811c7dadf2dc7b480babb00f474e2c913f3e773c3eeb0d0"
+    },
+    {
+      "file": "utils.h",
+      "upstream_sha256": "477538b62283d05b621ff70fba81519c01fea1e6fcc27b0cd10fa669269b64b0",
+      "vendored_sha256": "477538b62283d05b621ff70fba81519c01fea1e6fcc27b0cd10fa669269b64b0"
+    }
+  ],
+  "isoexec_edits": [
+    {
+      "file": "block.h",
+      "what": "split s attends the fixed logical KV segment [s*S, (s+1)*S) n-blocks (S = seg_n_blocks) instead of an even share of the row's range"
+    },
+    {
+      "file": "flash_fwd_launch_template.h",
+      "what": "the mainloop's num_splits slot carries seg_n_blocks when Split; passes the fold width and scratch"
+    },
+    {
+      "file": "flash_prepare_scheduler.cu",
+      "what": "a batch's split count is its number of segments (seg_n_blocks > 0), never the occupancy heuristic"
+    },
+    {
+      "file": "mainloop_fwd_sm90_tma_gmma_ws.hpp",
+      "what": "segment fold (the saturated path): with seg_n_blocks_fold > 0 the consumer walks a work tile's KV range as fixed logical segments, one FA3 pass each, right-folded per thread through an L2-resident per-CTA slot with seg_merge.h; with 0 it is upstream's single pass"
+    },
+    {
+      "file": "flash_api_stable.cpp",
+      "what": "num_splits is 1 or -(SEG + path) (segment split, path auto/split/fold; proportional split refused); seg mode keeps causal at seqlen_q == 1 for head dim <= 128; allocates the fold scratch; combine is run_isoexec_seg_combine; no split kernels for HDIMDIFF64"
+    },
+    {
+      "file": "flash.h",
+      "what": "Flash_fwd_params.seg_n_blocks / seg_tokens / seg_fold_n_blocks / seg_fold_scratch; declares run_isoexec_seg_combine"
+    }
+  ],
+  "isoexec_files": [
+    {
+      "file": "seg_combine.cu",
+      "what": "IsoExec's segment-split combine, the split path's right fold (not upstream)"
+    },
+    {
+      "file": "seg_merge.h",
+      "what": "IsoExec's segment merge, shared by the in-CTA fold and the combine (not upstream)"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim64_bf16_paged_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim128_bf16_paged_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    },
+    {
+      "file": "instantiations/flash_fwd_hdim256_bf16_paged_split_sm90.cu",
+      "what": "upstream generate_kernels.py instantiation (split), one comment line differs"
+    }
+  ]
+}

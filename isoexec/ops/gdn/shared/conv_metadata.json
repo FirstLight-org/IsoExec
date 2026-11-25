@@ -1,0 +1,12 @@
+{
+  "project": "vllm",
+  "revision": "g6f573f486",
+  "symbol": "compute_causal_conv1d_metadata",
+  "sha256": "0796f7d7b9e77cd4d811fd7517ead59da070475135d32940af6d471ac1142aa5",
+  "substitutions": {
+    "torch.tensor(offsetlist, dtype=torch.int32)": "torch.tensor(offsetlist, dtype=torch.int32, device=\"cpu\")"
+  },
+  "module": "vllm.v1.attention.backends.utils",
+  "url": "https://github.com/vllm-project/vllm/blob/6f573f486/vllm/v1/attention/backends/utils.py",
+  "license": "Apache-2.0"
+}

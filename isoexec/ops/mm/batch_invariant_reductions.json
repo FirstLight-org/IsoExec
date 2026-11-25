@@ -1,0 +1,16 @@
+{
+  "project": "vllm",
+  "revision": "g6f573f486",
+  "source_sha256": "1c5d11963d0849a407dee75d650a282664664b5ff409b4dbea79712d5c78ae85",
+  "symbols_sha256": {
+    "_log_softmax_kernel": "18b690a860a0c5b3f2e6b3ed9c99a0696b1eb276ff86bd7872bfdf5f1810391d",
+    "log_softmax": "0ffe63822bacc967c727ed0bc244a476f2a334026684b3cb0f569b368f363ac4",
+    "mean_kernel": "9c728d41e22143a969db3cd4f85ae16c355f43423ebd77f8b97f5a718fab3bd8",
+    "mean_dim": "62dd3f8dc05a8a3ae89321ef39217092ef36258c14b0d1329717adf14e681188",
+    "_log_softmax_batch_invariant": "23be5f59b8e8e14f9553088395fa813e3e475552f6b9a5e6fe151ed5eb01056c",
+    "mean_batch_invariant": "56134721771e0ba2f7affc1b2e8444ea3662eaa147df7b42e6649c154cc73e48"
+  },
+  "module": "vllm.model_executor.layers.batch_invariant",
+  "url": "https://github.com/vllm-project/vllm/blob/6f573f486/vllm/model_executor/layers/batch_invariant.py",
+  "license": "Apache-2.0"
+}

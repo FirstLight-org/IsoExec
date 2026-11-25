@@ -1,0 +1,107 @@
+{
+  "_README": [
+    "Runtime import exemptions enforced by isoexec/checks/lint.py.",
+    "Categories a (external numerics) and b (monkeypatch debt) may only shrink; adding debt requires updating the ownership design.",
+    "Category c covers runtime plumbing and registration; gate covers tests comparing with upstream implementations.",
+    "Remove an exemption when its import disappears. Core, nn, and schema permit no runtime-import exemptions.",
+    "Prefixes match normalized dotted import targets at a dot boundary, including statically resolvable importlib calls."
+  ],
+  "exemptions": [
+    {
+      "path": "ops/attention/varlen_backend.py",
+      "prefix": "vllm.model_executor.layers.attention.attention",
+      "category": "c",
+      "reason": "Engine attention-context accessor used by the registered backend. Plumbing for the same registration."
+    },
+    {
+      "path": "ops/attention/varlen_backend.py",
+      "prefix": "vllm.v1.attention",
+      "category": "c",
+      "reason": "Registers a CUSTOM vLLM attention backend. Subclassing the engine's backend/metadata types IS the registration interface; `vllm.v1.attention.backends.*` is named plumbing in \u00a72c. Engine-side only."
+    },
+    {
+      "path": "ops/attention/varlen_backend.py",
+      "prefix": "vllm.v1.kv_cache_layout",
+      "category": "c",
+      "reason": "The KV-cache layout enum the CUSTOM backend names in supported_kv_cache_layouts(), so vLLM allocates pages the arch-selected GQA kernel reads in place. Plumbing for the same registration. Engine-side only."
+    },
+    {
+      "path": "ops/gdn/shared/gdn_batch_invariant.py",
+      "prefix": "vllm.third_party.flash_linear_attention.ops",
+      "category": "c",
+      "reason": "INVERTED direction, and the two live imports are the only ones left in ops/gdn/shared/ after kernel-ownership.md \u00a75.4 vendored the FLA kernels into ops/gdn/shared/vendored_fla. Neither can be vendored away, because neither reads upstream numerics -- both WRITE ours into vLLM's modules. (1) pin_gdn_rmsnorm_rows_per_block rebinds `fla.ops.layernorm_guard.calc_rows_per_block` to a constant so vLLM's own RMSNormGated (layers.layernorm.RMSNormGated.forward_cuda -> layernorm_guard.rmsnorm_fn) stops sizing its fp32 tile from the row count; the engine keeps that norm, only _forward_core is rebound. (2) _import_upstream pins vLLM's copies of the nine autotuned FLA kernels to the same config index as ours, because QwenGatedDeltaNetAttention._warmup_prefill_kernels still launches them during V1 profiling and our _forward_core rebind does not reach it. A copy of either would pin nothing."
+    },
+    {
+      "path": "ops/gdn/shared/gdn_cpr_sleep.py",
+      "prefix": "vllm.device_allocator.cumem",
+      "category": "c",
+      "reason": "vLLM's sleep/wake memory allocator. Memory plumbing, explicitly named in kernel-ownership.md \u00a72c."
+    },
+    {
+      "path": "ops/gdn/shared/gdn_cpr_sleep.py",
+      "prefix": "vllm.v1.worker",
+      "category": "c",
+      "reason": "vLLM GPU worker lifecycle hook for sleep/wake. Process plumbing, named in kernel-ownership.md \u00a72c."
+    },
+    {
+      "path": "ops/gdn/shared/tests/gdn_native_kernel_parity_test_gpu.py",
+      "prefix": "vllm.third_party.flash_linear_attention.ops",
+      "category": "gate",
+      "reason": "Gate test: imports the upstream kernel in order to prove ours equals it bitwise. This is the vendoring discipline, not a violation of it -- after the kernel is vendored this import is the only thing keeping the copy honest, so it stays. Parity of our native GDN kernels against vLLM's FLA -- exactly the gate \u00a75.4 will need."
+    },
+    {
+      "path": "ops/gdn/shared/tests/gdn_native_kernel_parity_test_gpu.py",
+      "prefix": "vllm.model_executor.layers.mamba.ops.causal_conv1d",
+      "category": "gate",
+      "reason": "Gate test: imports the upstream kernel in order to prove ours equals it bitwise. This is the vendoring discipline, not a violation of it -- after the kernel is vendored this import is the only thing keeping the copy honest, so it stays. Parity of the conv path against vLLM's causal_conv1d."
+    },
+    {
+      "path": "ops/mm/mm_fwd_scope.py",
+      "prefix": "megatron.core.tensor_parallel",
+      "category": "c",
+      "reason": "Wraps mcore's activation-checkpoint callable (and its RNG-state machinery in tensor_parallel.random) so a recompute re-enters OUR triton kernel instead of torch.matmul. This installs our numerics onto the trainer's control flow; it borrows none of mcore's. Fail-closed: returns False and declines to install if mcore is absent, and the caller then installs the unscoped kernel -- same forward, so no impl-id change."
+    },
+    {
+      "path": "ops/mm/tests/mm_fwd_only_bmm_gpu.py",
+      "prefix": "megatron.core.tensor_parallel",
+      "category": "gate",
+      "reason": "Gate test: imports the upstream kernel in order to prove ours equals it bitwise. This is the vendoring discipline, not a violation of it -- after the kernel is vendored this import is the only thing keeping the copy honest, so it stays. Exercises the real mcore checkpoint path the fwd-only scoping wraps; a stub would not prove the recompute re-enters our kernel."
+    },
+    {
+      "path": "ops/mm/tests/mm_fwd_only_bmm_gpu.py",
+      "prefix": "vllm.model_executor.determinism.batch_invariant",
+      "category": "gate",
+      "reason": "Gate test: imports the upstream kernel in order to prove ours equals it bitwise. This is the vendoring discipline, not a violation of it -- after the kernel is vendored this import is the only thing keeping the copy honest, so it stays. Gates the forward-only bmm scope against vLLM's kernel."
+    },
+    {
+      "path": "ops/attention/tests/test_varlen_backend_contract_cpu.py",
+      "prefix": "vllm.v1.attention",
+      "category": "gate",
+      "reason": "Gate test, of the class check 8 exists for: it imports the pinned wheel's own `FlashAttentionBackend` / `FlashAttentionMetadataBuilder` / `AttentionCGSupport` / `AttentionBackendEnum` in order to assert that the three class facts the CUSTOM backend owes vLLM are still what the WHEEL says -- `forward_includes_kv_cache_update=False` and `supports_batch_invariance()->True` are INHERITED, and re-declaring them on our side to avoid this import is exactly the failure mode the test exists to prevent (our copy would then agree with itself forever). Assertions only: nothing here builds a backend, allocates, or runs a kernel."
+    },
+    {
+      "path": "ops/attention/tests/test_varlen_backend_contract_cpu.py",
+      "prefix": "vllm.v1.kv_cache_layout",
+      "category": "gate",
+      "reason": "Gate test: asserts the CUSTOM backend's declared KV-cache layouts are the pinned wheel's own enum members. Assertions only."
+    },
+    {
+      "path": "ops/attention/mla_sm90/tests/_harness.py",
+      "prefix": "vllm.third_party.flashmla.flash_mla_interface.flash_mla_with_kvcache",
+      "category": "gate",
+      "reason": "Test-only stock FlashMLA comparator and its required metadata helper. The MLA qualification harness measures upstream behavior and sensitivity to occupancy; production MLA execution does not import this harness or bind this upstream implementation."
+    },
+    {
+      "path": "ops/attention/mla_sm90/tests/_harness.py",
+      "prefix": "vllm.vllm_flash_attn",
+      "category": "gate",
+      "reason": "Test-only incumbent comparator: FA3 with its own split heuristic (num_splits=0), which IsoExec's gqa_sm90 build compiles out. The sensitivity battery shows that incumbent failing the relations; production MLA never imports it."
+    },
+    {
+      "path": "ops/attention/mla_sm90/tests/_harness.py",
+      "prefix": "vllm.third_party.flashmla.flash_mla_interface.get_mla_metadata",
+      "category": "gate",
+      "reason": "Test-only stock FlashMLA comparator and its required metadata helper. The MLA qualification harness measures upstream behavior and sensitivity to occupancy; production MLA execution does not import this harness or bind this upstream implementation."
+    }
+  ]
+}

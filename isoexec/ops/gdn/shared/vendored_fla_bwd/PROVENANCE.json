@@ -1,0 +1,233 @@
+{
+  "_README": [
+    "Provenance for the FLA 0.5.2 chunk gated-delta-rule tree the GDN backward runs.",
+    "",
+    "`upstream` names the exact artefact the copy was taken from: flash-linear-attention 0.5.2",
+    "(the fla package itself ships in the fla-core 0.5.2 wheel), tag v0.5.2, commit 9c8e42e.",
+    "This is a DIFFERENT upstream from ops/gdn/shared/vendored_fla (vLLM's port of FLA at vLLM",
+    "commit 6f573f486), which is why it is a separate tree with its own PROVENANCE.json.",
+    "",
+    "Every vendored file equals header_template + rewrite(upstream file), where rewrite applies",
+    "rewrite_rules in order as literal substitutions. The rules only redirect imports to this",
+    "tree; no kernel body, config list or constant is changed. upstream_sha256 is the hash of",
+    "the upstream file; vendored_sha256 is the hash of the file here (checked by",
+    "ops/gdn/shared/tests/test_vendored_fla_bwd_cpu.py, which needs no upstream installed).",
+    "",
+    "`authored_files` are IsoExec-written package glue (package __init__ files and _compat.py),",
+    "not upstream source."
+  ],
+  "upstream": {
+    "project": "flash-linear-attention",
+    "distribution": "fla-core",
+    "distribution_meta": "flash-linear-attention 0.5.2 (depends on fla-core==0.5.2; fla-core ships the fla package)",
+    "version": "0.5.2",
+    "tag": "v0.5.2",
+    "commit": "9c8e42e762fce087c27b673af4922795d9edb85e",
+    "repo": "https://github.com/fla-org/flash-linear-attention",
+    "url": "https://github.com/fla-org/flash-linear-attention/tree/v0.5.2/fla",
+    "license": "MIT",
+    "license_file": "https://github.com/fla-org/flash-linear-attention/blob/v0.5.2/LICENSE",
+    "copyright": "Copyright (c) 2023-2026, Songlin Yang, Yu Zhang, Zhiyuan Li",
+    "package": "fla",
+    "captured": "2026-11-07",
+    "captured_from": "site-packages/fla of the SkyRL-locked runtime (fla-core 0.5.2 wheel, RECORD hashes verified); every file also byte-identical to the v0.5.2 tag on GitHub",
+    "owner": "isoexec-numerics"
+  },
+  "provenance_label": "ops/gdn/shared/vendored_fla_bwd/PROVENANCE.json",
+  "header_template": "# ---------------------------------------------------------------------------------------------\n# VENDORED KERNEL -- DO NOT EDIT BY HAND.\n# upstream_module: {module}\n# upstream_dist:   flash-linear-attention / fla-core {version}  (tag {tag}, commit {commit})\n# upstream_url:    {repo} (MIT; see NOTICE)\n# provenance:      {provenance}\n# local changes:   only the rewrite_rules recorded in PROVENANCE.json (import redirects into this\n#                  tree); vendored_sha256 pins this file.\n# why vendored:    the trainer's GDN backward runs these kernels; IsoExec owns the source it runs\n#                  instead of importing the fla package at runtime.\n# ---------------------------------------------------------------------------------------------\n",
+  "rewrite_rules": [
+    [
+      "from fla.ops.backends import dispatch",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd._compat import dispatch"
+    ],
+    [
+      "from fla.ops.common.backends import dispatch",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd._compat import dispatch"
+    ],
+    [
+      "from fla.modules.backends import dispatch",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd._compat import dispatch"
+    ],
+    [
+      "from fla.ops.cp import FLACPContext",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd._compat import FLACPContext"
+    ],
+    [
+      "from fla.ops.cp.chunk_delta_h import (",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd._compat import ("
+    ],
+    [
+      "sys.modules.get('fla.utils')",
+      "sys.modules.get('isoexec.ops.gdn.shared.vendored_fla_bwd.utils')"
+    ],
+    [
+      "from fla.",
+      "from isoexec.ops.gdn.shared.vendored_fla_bwd."
+    ]
+  ],
+  "authored_files": {
+    "__init__.py": "package root; defines __version__ = '0.5.2' for utils/_decorators.py's `from .. import __version__`",
+    "_compat.py": "identity `dispatch` (upstream's own behaviour under FLA_DISABLE_BACKEND_DISPATCH=1) and fail-loud context-parallel stubs",
+    "ops/__init__.py": "empty package marker",
+    "ops/common/__init__.py": "empty package marker (upstream's is also empty)",
+    "ops/gated_delta_rule/__init__.py": "empty package marker",
+    "ops/utils/__init__.py": "re-exports only chunk_local_cumsum, prepare_chunk_indices, prepare_chunk_offsets, solve_tril",
+    "modules/__init__.py": "empty package marker"
+  },
+  "files": [
+    {
+      "file": "ops/gated_delta_rule/chunk.py",
+      "upstream_module": "fla.ops.gated_delta_rule.chunk",
+      "upstream_path": "fla/ops/gated_delta_rule/chunk.py",
+      "upstream_sha256": "fd4e01dc22a8c139c2a6eb61e47ae472a50322e4b4fff006cc5039a4602b310e",
+      "vendored_sha256": "6df492d00ca59ea619f6d24a3a18488280ec1695ca36762959f3cfb1b45277f8"
+    },
+    {
+      "file": "ops/gated_delta_rule/chunk_fwd.py",
+      "upstream_module": "fla.ops.gated_delta_rule.chunk_fwd",
+      "upstream_path": "fla/ops/gated_delta_rule/chunk_fwd.py",
+      "upstream_sha256": "1760a7dd26db2118bb1af7b9b7c115a27c97372e6a4d2e913d1542c9fedcda9e",
+      "vendored_sha256": "b4d96df608289403a475d31cb757731e993f545a8416847e96579d929a868ca0"
+    },
+    {
+      "file": "ops/gated_delta_rule/gate.py",
+      "upstream_module": "fla.ops.gated_delta_rule.gate",
+      "upstream_path": "fla/ops/gated_delta_rule/gate.py",
+      "upstream_sha256": "edd7c409213ea7bccd05dc6dfa4ead615c9fdcce28008cb8325f5f9be9aab0a7",
+      "vendored_sha256": "b6575c8f55ac1b6b0107e3dc53014bfa05461b1085e8ca04520f089c5dfbc6c3"
+    },
+    {
+      "file": "ops/gated_delta_rule/wy_fast.py",
+      "upstream_module": "fla.ops.gated_delta_rule.wy_fast",
+      "upstream_path": "fla/ops/gated_delta_rule/wy_fast.py",
+      "upstream_sha256": "bf24a66524ea56383fe6c9a97ae6b060ebe9490589c8499fba06d6172dc4510f",
+      "vendored_sha256": "16cd1234b95989000ad5daad3679d0c90593424f2516616b082896035cf02342"
+    },
+    {
+      "file": "ops/common/chunk_delta_h.py",
+      "upstream_module": "fla.ops.common.chunk_delta_h",
+      "upstream_path": "fla/ops/common/chunk_delta_h.py",
+      "upstream_sha256": "ff461bcc40e9cd0b2ca24af9ae9c3c6d99b2deae047c3737687c93b3fcd6ea57",
+      "vendored_sha256": "4ac8b4c25a936787403e89c672da99eec57ecb2c976143398a9ca8e0639dd73d"
+    },
+    {
+      "file": "ops/common/chunk_o.py",
+      "upstream_module": "fla.ops.common.chunk_o",
+      "upstream_path": "fla/ops/common/chunk_o.py",
+      "upstream_sha256": "f174d431ce67139204a0916f638b5af158dd5917e2cb37c0ca03f5ce735466a0",
+      "vendored_sha256": "b57c9906ea5647fa6a1b5bc1548ec29f47b583d310824efa3e80eb93c8dec0bd"
+    },
+    {
+      "file": "ops/common/chunk_scaled_dot_kkt.py",
+      "upstream_module": "fla.ops.common.chunk_scaled_dot_kkt",
+      "upstream_path": "fla/ops/common/chunk_scaled_dot_kkt.py",
+      "upstream_sha256": "3711f607d06cfd8fb1613e8f0d0d423fcb3d35a687bc574343092c16832a5b34",
+      "vendored_sha256": "c0b001a38d75b747f385bcab4c7df2e34e31ec6ba778e1fdaca57b78ac25ef87"
+    },
+    {
+      "file": "ops/common/gate.py",
+      "upstream_module": "fla.ops.common.gate",
+      "upstream_path": "fla/ops/common/gate.py",
+      "upstream_sha256": "86f30f7afe7e87d2e02302d8978e7a63ae61917ee988a64dad71ce4d860deb81",
+      "vendored_sha256": "6a035a7daaef240865724f20ea0c15333e38457c32916af04f711e1336b126f3"
+    },
+    {
+      "file": "ops/utils/cache.py",
+      "upstream_module": "fla.ops.utils.cache",
+      "upstream_path": "fla/ops/utils/cache.py",
+      "upstream_sha256": "a64b09ffd3f51aed547ad72559dee94cb9aeafd2a5f02c6c8e60a6e020147a9c",
+      "vendored_sha256": "b8defa57c5070b8f3f329aae5f6ea7483c26162bae68b0a3b55400d26382cd89"
+    },
+    {
+      "file": "ops/utils/constant.py",
+      "upstream_module": "fla.ops.utils.constant",
+      "upstream_path": "fla/ops/utils/constant.py",
+      "upstream_sha256": "b952bdcf039dee433f0cf49093c725971e6791878ad0afca655c82bb464574f8",
+      "vendored_sha256": "3c5ec3ba2af0214a9bce87e7559e31f763f7962b472546ddc0581de3894f48d5"
+    },
+    {
+      "file": "ops/utils/cumsum.py",
+      "upstream_module": "fla.ops.utils.cumsum",
+      "upstream_path": "fla/ops/utils/cumsum.py",
+      "upstream_sha256": "0405701c46cee331088bfee395b3bf37f8384829dace0aa3a55a509844bcf4cb",
+      "vendored_sha256": "8c249cbadc73685811549a7425646818cde07904eeaa0c71a6ee5ddd3f2a0990"
+    },
+    {
+      "file": "ops/utils/index.py",
+      "upstream_module": "fla.ops.utils.index",
+      "upstream_path": "fla/ops/utils/index.py",
+      "upstream_sha256": "b679166f8259224f1e7c42c7c238086544f1da1385863b57251bd663bfe47507",
+      "vendored_sha256": "3a463bbf290463aaeef64fb12500a7541b841b55343508be829a2692ad81a4da"
+    },
+    {
+      "file": "ops/utils/op.py",
+      "upstream_module": "fla.ops.utils.op",
+      "upstream_path": "fla/ops/utils/op.py",
+      "upstream_sha256": "99a0d6d10c506e104b57be49719cf5cc48bfcacdf2746f0a3b4dc19459dd319b",
+      "vendored_sha256": "5748ec43ddc04697c088894b21528c52d18e159e4c30badddd66e4bbf730c4b9"
+    },
+    {
+      "file": "ops/utils/softplus.py",
+      "upstream_module": "fla.ops.utils.softplus",
+      "upstream_path": "fla/ops/utils/softplus.py",
+      "upstream_sha256": "f826ee89eaed66bdc83aeaeee931dc6523593bef078167cb1d9babc5b40d4c4f",
+      "vendored_sha256": "da51aa5d3359e436c2dc9ae67a7ce85e619e8674744ac4280484925436541334"
+    },
+    {
+      "file": "ops/utils/solve_tril.py",
+      "upstream_module": "fla.ops.utils.solve_tril",
+      "upstream_path": "fla/ops/utils/solve_tril.py",
+      "upstream_sha256": "75bec200b08aa288584be1c7c0e8db25c390a466c8880cfd2648ca2222225845",
+      "vendored_sha256": "4c55ad23e23091f9c12a47f2cca4eaf82103948d3aa745bd34160e1c042e8816"
+    },
+    {
+      "file": "modules/l2norm.py",
+      "upstream_module": "fla.modules.l2norm",
+      "upstream_path": "fla/modules/l2norm.py",
+      "upstream_sha256": "30f7feebdbfa87b8e90c143ec62a7fa0781bfd736c856c0ec69452f0c778be3f",
+      "vendored_sha256": "399eba00f9561cc5b6da49d45fe4a9f5066dd1b73818aee8842736b835c51e85"
+    },
+    {
+      "file": "utils/__init__.py",
+      "upstream_module": "fla.utils",
+      "upstream_path": "fla/utils/__init__.py",
+      "upstream_sha256": "25ea758e169e547f4650eb8ceb37602ed5f8262f8134c2787c94edb5909a3adb",
+      "vendored_sha256": "efce74c3f4629c9c149673cc5c0497d55a93926e66b7ffa91890ec695ad14cb2"
+    },
+    {
+      "file": "utils/_compat.py",
+      "upstream_module": "fla.utils._compat",
+      "upstream_path": "fla/utils/_compat.py",
+      "upstream_sha256": "87bb9a1162e2f024e8acdd4e1bea3e6431ec5beba97d3249a9ac915b50473400",
+      "vendored_sha256": "ad535112e4f191865e9fe120ac3cb17e986faac84e612b4a09a568a83a6da5d0"
+    },
+    {
+      "file": "utils/_config.py",
+      "upstream_module": "fla.utils._config",
+      "upstream_path": "fla/utils/_config.py",
+      "upstream_sha256": "9753c19dfd82e9200196d38086cf46074193af4a254357c0eddfdb8734dbe880",
+      "vendored_sha256": "49e614cd43fa054f56a1d72a32434877c9dff938de2908210e7ff304ee146902"
+    },
+    {
+      "file": "utils/_decorators.py",
+      "upstream_module": "fla.utils._decorators",
+      "upstream_path": "fla/utils/_decorators.py",
+      "upstream_sha256": "3bab3f12662ec7804f69dc990450ac8d61dadb170ec0f7316a155f9bde248e18",
+      "vendored_sha256": "436bd43532b94af9672e7c9acf9b2c119703d70571571c243589729453020ae3"
+    },
+    {
+      "file": "utils/_device.py",
+      "upstream_module": "fla.utils._device",
+      "upstream_path": "fla/utils/_device.py",
+      "upstream_sha256": "c844bc8056e462384219d5f186dd12e6e2732b83019b6cc2678556c36a28b29f",
+      "vendored_sha256": "79a2fa822be880988a9bb7abda9f0816fc23b6c755a22eea70706f32de7f8810"
+    },
+    {
+      "file": "utils/_testing.py",
+      "upstream_module": "fla.utils._testing",
+      "upstream_path": "fla/utils/_testing.py",
+      "upstream_sha256": "78572173fef84090d75afe53d58988645cd146915687ede0698a50d5da33b73b",
+      "vendored_sha256": "fea91dfde02eb0b6db02773d2aef76915857cfc00b5f07dc6f11bff89c854d42"
+    }
+  ]
+}

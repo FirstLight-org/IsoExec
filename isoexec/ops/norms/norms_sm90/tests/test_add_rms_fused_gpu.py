@@ -1,0 +1,151 @@
+"""Fused residual join + RMSNorm (``sm90_add_rms_v1``) is the unfused program, bit for bit, forward and backward.
+
+The unfused program is what the captured graph runs without the fusion pass: ``h = residual + x``
+(``aten.add`` on two bf16 tensors) and then the bound ``sm90_rms_v1`` norm (``ops.rms_norm``, with its
+C++ autograd). Both outputs (``norm(h)`` and ``h``) and every gradient (x, residual, weight) are
+compared as integer views.
+"""
+
+from __future__ import annotations
+
+import pytest
+import torch
+
+from isoexec.ops._testing import bitwise_equal
+from isoexec.ops.norms.norms_sm90 import ops as O
+from isoexec.ops.norms.norms_sm90 import reference as R
+from isoexec.ops.norms.norms_sm90.tests.test_sm90 import rows, weight
+
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.get_device_capability() != (9, 0), reason="requires H100/SM90"
+)
+
+EPS = 1e-6
+MS = (1, 2, 3, 7, 16, 64, 127, 256, 1024, 4096, 8192)
+
+
+def _pair(m, n, seed):
+    x = rows(m, n, scale=1.5, seed=seed)  # a sublayer output
+    r = rows(m, n, scale=8.0, seed=seed + 100)  # the residual stream, wider range
+    if m > 2:
+        r[1] = -x[1]  # exact cancellation row: h = +-0
+    return x, r
+
+
+@pytest.mark.parametrize("zero_centered", [True, False])
+@pytest.mark.parametrize("n", [5120, 4096, 2048])
+@pytest.mark.parametrize("m", MS)
+def test_forward_matches_unfused_and_recipe(m, n, zero_centered):
+    x, r = _pair(m, n, seed=m * 7 + n)
+    w = weight(n, zero_centered=zero_centered)
+    with torch.no_grad():
+        y, h = O.add_rms_norm_fused(x, r, w, EPS, zero_centered)
+        h_ref = r + x
+        y_ref = O.rms_norm(h_ref, w, EPS, zero_centered)
+    assert bitwise_equal(h, h_ref)
+    assert bitwise_equal(y, y_ref)
+    ry, rh = R.add_rms_norm(x, r, w, EPS, zero_centered)
+    assert bitwise_equal(h, rh) and bitwise_equal(y, ry)
+
+
+@pytest.mark.parametrize("m", MS)
+@pytest.mark.parametrize("zero_centered", [True, False])
+def test_backward_matches_unfused_autograd(m, zero_centered):
+    n = 5120
+    x0, r0 = _pair(m, n, seed=m + 3)
+    w0 = weight(n, zero_centered=zero_centered)
+    g = torch.Generator(device="cuda").manual_seed(m)
+    dy = (torch.randn(m, n, generator=g, device="cuda") * 0.3).bfloat16()
+    dh = (torch.randn(m, n, generator=g, device="cuda") * 0.7).bfloat16()
+
+    def run(fused):
+        x, r, w = (t.detach().clone().requires_grad_(True) for t in (x0, r0, w0))
+        if fused:
+            y, h = O.add_rms_norm_fused(x, r, w, EPS, zero_centered)
+        else:
+            h = r + x
+            y = O.rms_norm(h, w, EPS, zero_centered)
+        torch.autograd.backward([y, h], [dy, dh])
+        return y.detach(), h.detach(), x.grad, r.grad, w.grad
+
+    got, ref = run(True), run(False)
+    for name, a, b in zip(("y", "h", "dx", "dresidual", "dw"), got, ref):
+        assert bitwise_equal(a, b), name
+
+
+def test_backward_without_residual_gradient():
+    """The last join of a stage: only the norm output is consumed."""
+    m, n = 33, 5120
+    x0, r0 = _pair(m, n, seed=9)
+    w0 = weight(n, zero_centered=True)
+    dy = torch.randn(m, n, device="cuda").bfloat16()
+
+    def run(fused):
+        x, r, w = (t.detach().clone().requires_grad_(True) for t in (x0, r0, w0))
+        y = O.add_rms_norm_fused(x, r, w, EPS, True)[0] if fused else O.rms_norm(r + x, w, EPS, True)
+        y.backward(dy)
+        return x.grad, r.grad, w.grad
+
+    for a, b in zip(run(True), run(False)):
+        assert bitwise_equal(a, b)
+
+
+def test_out_of_domain_operands_run_the_unfused_statement():
+    m, n = 4, 5120
+    x, r = _pair(m, n, seed=1)
+    w = weight(n, zero_centered=True)
+    with torch.no_grad():
+        y, h = O.add_rms_norm_fused(x[:1], r, w, EPS, True)  # a broadcast join: not the kernel's domain
+        h_ref = r + x[:1]
+        assert bitwise_equal(h, h_ref) and bitwise_equal(y, O.rms_norm(h_ref, w, EPS, True))
+
+
+def test_graph_replay_is_bitwise_stable():
+    m, n = 256, 5120
+    x, r = _pair(m, n, seed=2)
+    w = weight(n, zero_centered=True)
+    with torch.no_grad():
+        eager = O.add_rms_norm_fused(x, r, w, EPS, True)
+        graph = torch.cuda.CUDAGraph()
+        s = torch.cuda.Stream()
+        s.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(s):
+            O.add_rms_norm_fused(x, r, w, EPS, True)
+        torch.cuda.current_stream().wait_stream(s)
+        with torch.cuda.graph(graph):
+            out = O.add_rms_norm_fused(x, r, w, EPS, True)
+        graph.replay()
+        torch.cuda.synchronize()
+    assert bitwise_equal(out[0], eager[0]) and bitwise_equal(out[1], eager[1])
+
+
+@pytest.mark.parametrize("n", (5120, 1024, 384))
+def test_backward_residual_fold_signed_zero_and_specials(n):
+    """The in-kernel residual-gradient fold (round dx, then the bf16 add) on -0, zero rows, large and
+    subnormal values: bit for bit the unfused ``dx + dh``."""
+    m = 67
+    x0, r0 = _pair(m, n, seed=n)
+    w0 = weight(n, zero_centered=True)
+    g = torch.Generator(device="cuda").manual_seed(n + 1)
+    dy = (torch.randn(m, n, generator=g, device="cuda") * 0.3)
+    dy[::3] = 0.0
+    dy[1::5] = -0.0
+    dy = dy.bfloat16()
+    dh = torch.randn(m, n, generator=g, device="cuda")
+    dh.view(-1)[::7] = -0.0
+    dh.view(-1)[1::11] = 3.0e38
+    dh.view(-1)[2::13] = 1e-40
+    dh = dh.bfloat16()
+
+    def run(fused):
+        x, r, w = (t.detach().clone().requires_grad_(True) for t in (x0, r0, w0))
+        if fused:
+            y, h = O.add_rms_norm_fused(x, r, w, EPS, True)
+        else:
+            h = r + x
+            y = O.rms_norm(h, w, EPS, True)
+        torch.autograd.backward([y, h], [dy, dh])
+        return x.grad, r.grad, w.grad
+
+    for name, a, b in zip(("dx", "dresidual", "dw"), run(True), run(False)):
+        assert bitwise_equal(a, b), name

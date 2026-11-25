@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isoexec"
+version = "0.1.0"
+description = "A shared numerical model for exact trainer and rollout execution"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+# torch, triton and nvidia-cutlass-dsl mirror `accepted` in isoexec/checks/dependencies.py, which
+# refuses other versions at run time; change both together.
+dependencies = [
+    "torch>=2.13,<2.15",
+    "triton>=3.8,<3.9",
+    "safetensors>=0.6.2",
+    "numpy",
+    "packaging",
+    "nvidia-cutlass-dsl==4.8.0",
+    # The vendored FlashAttention-4 SM100 backward (isoexec/ops/_vendor/flash_attn_cute) compiles with
+    # CuTe DSL's TVM-FFI calling convention; FA4's own requirement.
+    "apache-tvm-ffi>=0.1.5,<0.2",
+    "transformers>=5.20.2,<6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "build"]
+
+[project.entry-points."vllm.general_plugins"]
+isoexec = "isoexec.runtimes.vllm.vllm_plugin:register"
+isoexec_skyrl = "isoexec.integrations.skyrl.weight_transfer:register"
+
+[tool.setuptools.packages.find]
+include = ["isoexec*"]
+
+[tool.setuptools.package-data]
+isoexec = ["**/*.cu", "**/*.cuh", "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.json", "**/*.yaml", "**/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["isoexec"]
+addopts = "--import-mode=importlib"
+consider_namespace_packages = true
+# GPU script batteries run in isolated subprocesses through test_gpu_battery_runs_gpu.py.
+# The CPU manifest check requires every battery to be listed or explicitly excluded.
+python_files = ["test_*.py", "*_test.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

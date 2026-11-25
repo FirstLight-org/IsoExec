@@ -1,0 +1,39 @@
+{
+  "_README": [
+    "Pinned upstream artifact and the local transformations of this vendored kernel tree.",
+    "`upstream` and `upstream_sha256` cite the artefact the copy was taken from; they are not compared with an installed package.",
+    "vendored_sha256 detects local changes (ops/gdn/shared/tests/test_vendored_provenance_cpu.py).",
+    "Owner: upstream.owner."
+  ],
+  "upstream": {
+    "distribution": "vllm",
+    "version": "1.0.0.dev20260620+cu130",
+    "scm_version": "0.22.1rc1.dev436+g6f573f486",
+    "commit": "6f573f486",
+    "repo": "https://github.com/vllm-project/vllm",
+    "wheel": "pinned-wheels/vllm-1.0.0.dev20260620+cu130-cp312-cp312-linux_x86_64.whl",
+    "captured": "2026-09-04",
+    "owner": "isoexec-numerics",
+    "package": "vllm.model_executor.layers.mamba.ops"
+  },
+  "provenance_label": "ops/gdn/conv_sm90/vendored/PROVENANCE.json",
+  "header_template": "# ---------------------------------------------------------------------------------------------\n# VENDORED KERNEL -- DO NOT EDIT BY HAND.\n# upstream_module: {module}\n# upstream_dist:   vllm {version}  (scm {scm}, commit {commit})\n# upstream_url:    {repo} (Apache-2.0; see NOTICE)\n# provenance:      {provenance}\n# local changes:   only the rewrite_rules recorded in PROVENANCE.json; vendored_sha256 pins this file.\n# why vendored:    kernel-ownership.md 1 -- this kernel DETERMINES a rounding schedule the\n#                  IsoExec arithmetic contract pins, and its upstream is an internal module of a\n#                  fast-moving project with no API-stability contract. Test 2 says: vendor it.\n# ---------------------------------------------------------------------------------------------\n",
+  "rewrite_rules": [
+    [
+      "from vllm.triton_utils import tl, triton",
+      "from isoexec.ops.gdn.conv_sm90.vendored._compat import tl, triton"
+    ],
+    [
+      "from vllm.v1.attention.backends.utils import NULL_BLOCK_ID, PAD_SLOT_ID",
+      "from isoexec.ops.gdn.conv_sm90.vendored._compat import NULL_BLOCK_ID, PAD_SLOT_ID"
+    ]
+  ],
+  "files": [
+    {
+      "file": "causal_conv1d.py",
+      "upstream_module": "vllm.model_executor.layers.mamba.ops.causal_conv1d",
+      "upstream_sha256": "5f3d16d730fd6dc427cf6981a3de58b1e1e625e624ae8fa0fe77891f58b8bd5c",
+      "vendored_sha256": "da9a80e95dfa7050360bd7a50c6ea0355624d57256ee6ca7843145117a23d6bd"
+    }
+  ]
+}

@@ -1,0 +1,254 @@
+IsoExec
+Copyright 2026 The IsoExec Authors
+
+IsoExec is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software developed by third parties. The files listed below contain code
+copied or derived from the projects named, each under the license shown and reproduced in full
+here. Each listed file also keeps the upstream copyright notice in its header.
+
+Not redistributed: NVIDIA CUTLASS (BSD 3-Clause) headers are fetched at a pinned commit by
+`make setup`; they are not part of this repository or its wheel.
+
+====================================================================================================
+vLLM (https://github.com/vllm-project/vllm)
+License: Apache License 2.0 (the same text as this repository's LICENSE)
+Copyright contributors to the vLLM project
+Used in:
+  - isoexec/ops/gdn/shared/vendored_fla/ (vllm/model_executor/layers/fla/ops/, vLLM's copy of flash-linear-attention
+    kernels, commit 6f573f486; PROVENANCE.json records each file)
+  - isoexec/ops/gdn/conv_sm90/vendored/causal_conv1d.py (vllm/model_executor/layers/mamba/ops/causal_conv1d.py, commit 6f573f486)
+  - isoexec/ops/mm/mm_batch_invariant.py and isoexec/ops/mm/batch_invariant_reductions.py
+    (vllm/model_executor/layers/batch_invariant.py, commit 6f573f486)
+  - isoexec/ops/gdn/shared/conv_metadata.py (vllm/v1/attention/backends/utils.py, commit 6f573f486)
+
+====================================================================================================
+flash-linear-attention (https://github.com/fla-org/flash-linear-attention)
+License: MIT License
+Copyright (c) 2023-2025, Songlin Yang, Yu Zhang
+Copyright (c) 2023-2026, Songlin Yang, Yu Zhang, Zhiyuan Li (the 0.5.2 sources in vendored_fla_bwd/)
+Used in:
+  - isoexec/ops/gdn/shared/vendored_fla/ (via vLLM, which copied these kernels from flash-linear-attention)
+  - isoexec/ops/gdn/shared/vendored_fla_bwd/ (copied directly from flash-linear-attention 0.5.2, tag v0.5.2,
+    commit 9c8e42e762fce087c27b673af4922795d9edb85e: the chunk gated-delta-rule forward/backward kernels and
+    the fla.utils helpers they use; provenance in that directory's PROVENANCE.json)
+
+MIT License
+
+Copyright (c) 2023-2026 Songlin Yang, Yu Zhang, Zhiyuan Li
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+====================================================================================================
+causal-conv1d (https://github.com/Dao-AILab/causal-conv1d)
+License: BSD 3-Clause License
+Copyright (c) 2024, Tri Dao
+Used in:
+  - isoexec/ops/gdn/conv_sm90/vendored/causal_conv1d.py (via vLLM, adapted from causal_conv1d_interface.py)
+
+BSD 3-Clause License
+
+Copyright (c) 2022, the respective contributors, as shown by the AUTHORS file.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+====================================================================================================
+FlashMLA (https://github.com/deepseek-ai/FlashMLA)
+License: MIT License
+Copyright (c) 2025 DeepSeek
+Used in:
+  - isoexec/ops/attention/mla_sm90/ (derived from FlashMLA ba89a34)
+  - isoexec/ops/attention/mla_sm100/ (SM100 port of mla_sm90, so derived from the same FlashMLA ba89a34 sources)
+
+MIT License
+
+Copyright (c) 2025 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+====================================================================================================
+FlashAttention (https://github.com/Dao-AILab/flash-attention)
+License: BSD 3-Clause License
+Copyright (c) 2024, Tri Dao
+Copyright (c) 2024, Jay Shah, Ganesh Bikshandi, Ying Zhang, Vijay Thakkar, Pradeep Ramani, Tri Dao
+Copyright (c) 2025, the respective contributors of flash_attn/cute (FlashAttention-4), as shown by its AUTHORS file
+Used in:
+  - isoexec/ops/attention/gqa_sm90/fa3/ (FlashAttention-3, hopper/ at commit e81a70ce92d6dd96e213c08adbadd7c7e3d17f01,
+    a file subset copied unmodified except the operator namespace in flash_api_stable.cpp; the
+    repository's LICENSE and AUTHORS are kept beside it as LICENSE.txt and AUTHORS.txt, and
+    fa3/PROVENANCE.json records each file's upstream and vendored hash)
+  - isoexec/ops/attention/mla_sm90/csrc/fwd/leaf.cuh, gemm() helper (adapted from hopper/utils.h, via FlashMLA)
+  - isoexec/ops/_vendor/flash_attn_cute/ (FlashAttention-4's SM100 backward, flash_attn/cute/ at commit
+    0bbb25a3a5ad3c58c029b3d287d6c9af56a5cad5: the backward's import closure, imports rewritten to the
+    package and the SM100 varlen path of interface.py extracted into interface_bwd_sm100.py; LICENSE and
+    AUTHORS kept in licenses/, and upstream_manifest.json records each file's upstream and vendored hash
+    and every modification)
+  - isoexec/ops/attention/gqa_sm100/csrc/ (the forward's execution -- warp roles, TMEM layout, TMA and MMA
+    issue order, the exp2 emulation -- is derived from FlashAttention-4's SM100 forward through TileFoundry's
+    CUDA port of it; the derived files keep the notice)
+
+BSD 3-Clause License
+
+Copyright (c) 2022, the respective contributors, as shown by the AUTHORS file.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+====================================================================================================
+Megatron-LM (https://github.com/NVIDIA/Megatron-LM)
+License: BSD 3-Clause License
+Copyright (c) 2019-2025, NVIDIA CORPORATION. All rights reserved.
+Used in:
+  - isoexec/ops/attention/rope_sm90/rope_reference.py (megatron/core/models/common/embeddings/rope_utils.py, 71e418ea7)
+  - isoexec/ops/attention/attention_gate.py, _apply_output_gate (megatron/core/transformer/attention.py, 71e418ea7)
+
+The following applies to all files unless otherwise noted:
+
+# Copyright (c) 2019-2025, NVIDIA CORPORATION. All rights reserved.
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#  * Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+#  * Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#  * Neither the name of NVIDIA CORPORATION nor the names of its
+#    contributors may be used to endorse or promote products derived
+#    from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
+# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+====================================================================================================
+torchtitan (https://github.com/pytorch/torchtitan)
+License: BSD 3-Clause License
+Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+Used in:
+  - isoexec/ops/attention/varlen_backend.py (modified from torchtitan/experiments/rl/models/attention.py)
+
+BSD 3-Clause License
+
+(c) Meta Platforms, Inc. and affiliates.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,this list
+of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this
+list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may
+be used to endorse or promote products derived from this software without specific
+prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS “AS IS” AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT
+SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+
+====================================================================================================
+QuACK (https://github.com/Dao-AILab/quack)
+License: Apache License 2.0 (the same text as this repository's LICENSE)
+Copyright (c) 2025-2026, QuACK team; Copyright (c) 2025-2026, Tri Dao, Wentao Guo, Ted Zadouri, Vijay Thakkar
+Used in:
+  - isoexec/ops/_vendor/flash_attn_cute/quack/ (the QuACK modules FlashAttention-4's SM100 backward imports,
+    quack/ at tag v0.5.0, commit 25b4b879b66cbab75ca127c5f5b1c3d84c84aadb, imports rewritten to the package;
+    LICENSE kept as licenses/quack.txt)

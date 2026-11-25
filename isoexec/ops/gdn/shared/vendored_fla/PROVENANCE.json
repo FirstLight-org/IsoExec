@@ -1,0 +1,123 @@
+{
+  "_README": [
+    "Provenance for a vendored upstream kernel tree (kernel-ownership.md 1, 4, 5.4).",
+    "",
+    "`upstream` cites the exact artefact the copy was taken from (distribution, version, commit, repo).",
+    "`rewrite_rules` are the ONLY edits applied, as ordered literal substitutions, plus `header_template`",
+    "prepended to every file. `upstream_sha256` records the upstream file the copy was taken from, as",
+    "citation; it is not compared with an installed package. The tree was qualified for determinism when",
+    "it was vendored.",
+    "",
+    "`vendored_sha256` is the tamper check on OUR copy (ops/gdn/shared/tests/test_vendored_provenance_cpu.py),",
+    "and needs no runtime installed to run. Owner: see `upstream.owner`."
+  ],
+  "upstream": {
+    "distribution": "vllm",
+    "version": "1.0.0.dev20260620+cu130",
+    "scm_version": "0.22.1rc1.dev436+g6f573f486",
+    "commit": "6f573f486",
+    "repo": "https://github.com/vllm-project/vllm",
+    "wheel": "pinned-wheels/vllm-1.0.0.dev20260620+cu130-cp312-cp312-linux_x86_64.whl",
+    "captured": "2026-09-04",
+    "owner": "isoexec-numerics",
+    "package": "vllm.model_executor.layers.fla.ops"
+  },
+  "provenance_label": "ops/gdn/shared/vendored_fla/PROVENANCE.json",
+  "header_template": "# ---------------------------------------------------------------------------------------------\n# VENDORED KERNEL -- DO NOT EDIT BY HAND.\n# upstream_module: {module}\n# upstream_dist:   vllm {version}  (scm {scm}, commit {commit})\n# upstream_url:    {repo} (Apache-2.0; see NOTICE)\n# provenance:      {provenance}\n# local changes:   only the rewrite_rules recorded in PROVENANCE.json; vendored_sha256 pins this file.\n# why vendored:    kernel-ownership.md 1 -- this kernel DETERMINES a rounding schedule the\n#                  IsoExec arithmetic contract pins, and its upstream is an internal module of a\n#                  fast-moving project with no API-stability contract. Test 2 says: vendor it.\n# ---------------------------------------------------------------------------------------------\n",
+  "rewrite_rules": [
+    [
+      "from vllm.triton_utils import tl, tldevice, triton",
+      "from ._compat import tl, tldevice, triton"
+    ],
+    [
+      "from vllm.triton_utils import tl, triton",
+      "from ._compat import tl, triton"
+    ],
+    [
+      "from vllm.triton_utils import triton",
+      "from ._compat import triton"
+    ],
+    [
+      "from vllm.platforms import current_platform",
+      "from ._compat import current_platform"
+    ],
+    [
+      "    p_b = b + bos * HV + i_hv\n    p_o = o + ((i_k * all + bos) * HV + i_hv) * V + o_v\n\n    mask_k = o_k < K\n    mask_v = o_v < V\n    mask_h = mask_v[:, None] & mask_k[None, :]\n\n    b_h = tl.zeros([BV, BK], dtype=tl.float32)\n    if USE_INITIAL_STATE:\n        if IS_CONTINUOUS_BATCHING:\n            if IS_SPEC_DECODING:\n                i_t = tl.load(num_accepted_tokens + i_n).to(tl.int64) - 1\n            else:\n                i_t = 0\n            # Load state index and check for invalid entries\n            state_idx = tl.load(ssm_state_indices + i_n * stride_indices_seq + i_t).to(\n                tl.int64\n            )\n            # Skip if state index is invalid (NULL_BLOCK_ID=0)\n            if state_idx <= 0:\n                return\n",
+      "    p_b = b + bos * HV + i_hv\n    p_o = o + ((i_k * all + bos) * HV + i_hv) * V + o_v\n\n    mask_k = o_k < K\n    mask_v = o_v < V\n    mask_h = mask_v[:, None] & mask_k[None, :]\n\n    b_h = tl.zeros([BV, BK], dtype=tl.float32)\n    if USE_INITIAL_STATE:\n        if IS_CONTINUOUS_BATCHING:\n            if IS_SPEC_DECODING:\n                i_t = tl.load(num_accepted_tokens + i_n).to(tl.int64) - 1\n            else:\n                i_t = 0\n            # Load state index and check for invalid entries\n            state_idx = tl.load(ssm_state_indices + i_n * stride_indices_seq + i_t).to(\n                tl.int64\n            )\n            # Skip if state index is invalid (NULL_BLOCK_ID=0)\n            if state_idx <= 0:\n                # IsoExec: a lane on the null block owns no state; write a zero output row instead of leaving\n                # the output uninitialized (padded CUDA-graph lanes). Valid lanes are untouched.\n                for _i_t_null in range(0, T):\n                    tl.store(p_o + _i_t_null * HV * V, tl.zeros([BV], dtype=tl.float32).to(p_o.dtype.element_ty),\n                             mask=mask_v)\n                return\n"
+    ]
+  ],
+  "files": [
+    {
+      "file": "chunk_delta_h.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.chunk_delta_h",
+      "upstream_sha256": "5dea0583bbf0ead5745ba5b21d68674596f9000df4a7280dee95b9379e255440",
+      "vendored_sha256": "2233e363c3194af563a63b006a37bbc987925a5b58679cee1d166177dd337621"
+    },
+    {
+      "file": "chunk_o.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.chunk_o",
+      "upstream_sha256": "3b63b836a8cc561723c23db5a528a0b474d9cd78508d610f0b348c585a889a19",
+      "vendored_sha256": "856999e362a14ab3d5a599e0c70e3de7e54e7a9fd170f4e971eebda02ba8f089"
+    },
+    {
+      "file": "chunk_scaled_dot_kkt.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.chunk_scaled_dot_kkt",
+      "upstream_sha256": "84858e90b881c9594b1184bcfdefed9f3e96887a8fb140dfdecd624c790d396d",
+      "vendored_sha256": "dea64601cf937af3ff210df8a36f69e8bb56f58db8ccec79dd423e4ba3174cac"
+    },
+    {
+      "file": "cumsum.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.cumsum",
+      "upstream_sha256": "d818215669b451868823202ac0bcea77e7a9d75957254c7c1060a73a55dc39b6",
+      "vendored_sha256": "b714560f5ef958b6c16f4d0a8dae90223b69642bf201494a630712ab9ec9edf1"
+    },
+    {
+      "file": "fused_recurrent.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.fused_recurrent",
+      "upstream_sha256": "3a2a3c5245acba127af326f0b3f287b352776a8eb1e1f6e40c24a767fae3c2ef",
+      "vendored_sha256": "5d4e83c907147aaf3b2d1d06a4b70728bc154b35fdf94e95ef01f07f1f296727"
+    },
+    {
+      "file": "fused_sigmoid_gating.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.fused_sigmoid_gating",
+      "upstream_sha256": "000ab8996af9788fdb8843a6a3b91833e7a14c8acc0e1ea073a536330f64cb6f",
+      "vendored_sha256": "8c030a96e8336fbb8d2a5a4eb0d473c09ae672d492d06c94743940b01774d73f"
+    },
+    {
+      "file": "index.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.index",
+      "upstream_sha256": "1fa36b77833c56cdc1ec1af3ea38225d8ae9e1faec5b218cf48af5482ddf15a0",
+      "vendored_sha256": "66b831e4b20ab37ff4c4144f6d3181f105562f2c7da24f6f605eb9b056c22e03"
+    },
+    {
+      "file": "l2norm.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.l2norm",
+      "upstream_sha256": "520f4513ef4fc97e6b88dc07877cca8e29da0d34e44673fe989e3af002d86381",
+      "vendored_sha256": "91bcc9bdc9723d2f74774c3f7b683072e8a837802c6d5c956f78ebbe7144a197"
+    },
+    {
+      "file": "op.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.op",
+      "upstream_sha256": "456da84fd12411cf53c96a90dd4f78f49afb454c3d51d2c524ea8e7106fe8ae5",
+      "vendored_sha256": "331ca800c81343e37cf061cc8abc355064078177c973f21c99b24a2785e7a91b"
+    },
+    {
+      "file": "solve_tril.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.solve_tril",
+      "upstream_sha256": "d1a4ff27623a938825052500afa7e2aa24fadd2fa4c9be6376c9128824f86f82",
+      "vendored_sha256": "7ad3ee5a24368118f44d3e63c743f6d24ae9f258ef456b7c4bcb64bc0d236d79"
+    },
+    {
+      "file": "utils.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.utils",
+      "upstream_sha256": "d6c90d36505e02086954c23ca4dd2fea82a69416d68ff1d0501e16b3148b5b0c",
+      "vendored_sha256": "a2217e931b7245da74293ebf7b167d4800573fe127df8f035794f2ae2536f87f"
+    },
+    {
+      "file": "wy_fast.py",
+      "upstream_module": "vllm.model_executor.layers.fla.ops.wy_fast",
+      "upstream_sha256": "c9fc8259db0a8746dc04f1d799cb73333457118cf89a0bdce8dde8a80a28cd96",
+      "vendored_sha256": "5fbe955c6a52cccd0bd745badb3a5e80ba2939991bdc0bf458569f59eaccf516"
+    }
+  ]
+}

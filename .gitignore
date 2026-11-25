@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache
+.ruff_cache
+.venv
+build/
+dist/
+third_party/
+wandb/
+
+# Machine-local experiment reports; validation tools are on the debug branch.
+/docs/validation/
+
+# Agent worktrees and local session state (never synced/committed)
+.claude/

@@ -1,0 +1,110 @@
+{
+  "schema": "isoexec_mm_sm100_segments_v2",
+  "policy_version": 4,
+  "recipe": "sm100_tcgen05_segtree_v2",
+  "target_sm_count": 148,
+  "segment_align": 256,
+  "legal_splits": [
+    1
+  ],
+  "keyed_by": "K and dtype; never N, so a column shard or a packed projection is the same program",
+  "merge": "balanced adjacent-pair tree over segment index, fp32, one bf16 RNE root",
+  "rows": [
+    [
+      256,
+      "bf16",
+      1
+    ],
+    [
+      512,
+      "bf16",
+      1
+    ],
+    [
+      768,
+      "bf16",
+      1
+    ],
+    [
+      1024,
+      "bf16",
+      1
+    ],
+    [
+      1280,
+      "bf16",
+      1
+    ],
+    [
+      1536,
+      "bf16",
+      1
+    ],
+    [
+      1792,
+      "bf16",
+      1
+    ],
+    [
+      2048,
+      "bf16",
+      1
+    ],
+    [
+      2560,
+      "bf16",
+      1
+    ],
+    [
+      3072,
+      "bf16",
+      1
+    ],
+    [
+      3584,
+      "bf16",
+      1
+    ],
+    [
+      4096,
+      "bf16",
+      1
+    ],
+    [
+      5120,
+      "bf16",
+      1
+    ],
+    [
+      6144,
+      "bf16",
+      1
+    ],
+    [
+      7168,
+      "bf16",
+      1
+    ],
+    [
+      8192,
+      "bf16",
+      1
+    ],
+    [
+      10240,
+      "bf16",
+      1
+    ],
+    [
+      12288,
+      "bf16",
+      1
+    ],
+    [
+      14336,
+      "bf16",
+      1
+    ]
+  ],
+  "digest": "7ca85244cf08b897d52120c6"
+}

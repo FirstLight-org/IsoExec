@@ -1,0 +1,158 @@
+# The IsoExec runtime that `make setup` (scripts/setup_env.py) installs or reuses and `make check-env`
+# checks. The package set is SkyRL's pinned lock plus the overrides below; this file does not
+# repeat what the lock fixes. FlashAttention-3 is vendored (isoexec/ops/attention/gqa_sm90/fa3) and
+# compiles at first use like IsoExec's other CUDA sources.
+
+schema = 1
+
+[host]
+# Setup accepts a compatible bare host and uses uv to obtain the exact Python below.
+platform = "linux-x86_64"
+# Ray requires the driver and the cluster to run the same CPython patch release; this matches the
+# managed Ray image (Ray 2.57.0 on CPython 3.12.13). uv publishes it for Linux x86_64.
+python = "3.12.13"
+# IsoExec's own CUDA sources, vendored FA3 included (torch.utils.cpp_extension, at first use),
+# compile with the host's CUDA toolkit: $CUDA_HOME, else $CUDA_PATH, else the one whose nvcc is on
+# PATH. The lock also installs pip nvidia-cuda-nvcc 13.4.92, which is not on PATH and unused: its
+# runtime headers (nvidia-cuda-runtime 13.0.96) do not match that compiler, so it cannot build FA3.
+# CUDA 13.0 release notes: https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/
+cuda_major = 13
+# Setup only warns below this driver: it builds without a GPU, and the runtime host may differ.
+driver_minimum = "580.65.06"
+# IsoExec's sm90 and sm100 kernels: Hopper (9.0, e.g. H100) and Blackwell B200 (10.0). B300 reports
+# 10.3 and RTX Blackwell 12.0 (https://developer.nvidia.com/cuda-gpus); setup refuses a visible GPU
+# outside this list.
+compute_capabilities = ["9.0", "10.0"]
+
+[skyrl]
+# This lock is the runtime resolution; IsoExec does not resolve its own. A fresh resolution
+# cannot reproduce this package set and only adds chances for torch or triton to drift.
+# SkyRL main at 9cbb1bc0 (2026-11-20, #2784) plus the changes IsoExec enters through: the isoexec
+# config field and its hooks in the trainer, workers and vLLM server, the Tinker engine building
+# IsoExec's backend, and the Tinker engine started on the API's interpreter under uv --no-project.
+# They are on the fork branch below until they land upstream; then pin upstream main again. The
+# uv.lock is main's from 387bce8d (#2779): vLLM 0.33.0, torch 2.14.0, megatron-core
+# 0.21.0+ed9c2c8c1, Megatron-Bridge 0.8.0+7171584b. Setup fetches this commit by SHA.
+repository = "https://github.com/JiangJiaWei1103/SkyRL.git"
+branch = "feat/skyrl-isoexec"
+revision = "d2f629d90bf7fb61da695d440d9549802ce65b1d"
+lock_sha256 = "27f0790391ca92ad0ccd6135db5f825bc3bdc3945748108492c2eec5e96b4018"
+# tinker: SkyRL's Tinker API server (examples/run_tinker_tiny.py).
+extras = ["megatron", "tinker"]
+
+[overrides]
+# Replaced after the lock with --no-deps --require-hashes.
+# transformers 5.22.0: the lock pins 5.16.1, which lacks core_model_loading.Split that IsoExec's
+#   Hugging Face checkpoint conversion uses. vLLM 0.33.0 declares transformers<5.21.0; see
+#   [[metadata_conflicts]].
+# nvidia-cutlass-dsl is no longer overridden: the lock's 4.8.0 (vLLM 0.33.0's pin) is installed.
+#   The 4.5.2 override cannot coexist with flashinfer 0.7.2, which needs cute.FastDivmodDivisorV2
+#   (absent in 4.5.2) at import, and megatron-core imports flashinfer unconditionally. torch 2.14
+#   admits only cutedsl 4.4.1/4.4.2/4.5.2 for its _native overrides, so under 4.8.0 eager
+#   torch.nn.functional.rms_norm runs ATen's kernel (see checks/dependencies.py).
+uninstall = ["transformers"]
+install = [
+    "transformers==5.22.0 --hash=sha256:3cca65f94b0aa33511433c7c1a661c513e4ad8bc0504cb370d181d771e7c9aa0",
+]
+
+[cutlass]
+# CUTLASS/CuTe headers for IsoExec's CUDA sources that include them (mla_sm90, gqa_sm90's vendored
+# FA3; mla_sm100 uses the same tree by default). This is the csrc/cutlass submodule of FlashMLA
+# ba89a34, which mla_sm90 is derived from and was qualified against. It reports 4.3.5 but is not the
+# v4.3.5 tag (six headers differ, including the SM90 TMA copy traits) and PyPI has no matching
+# nvidia-cutlass, so setup fetches include/ and tools/util/include/ at this SHA into
+# venv/share/isoexec/cutlass (~32 MB). FA3 e81a70ce's own submodule (7127592) differs from it only in
+# comments, CUTLASS_PATCH and one constexpr position, and gqa_sm90's kernels compile to the same SASS
+# against either. isoexec.ops.build_cache.CUTLASS_REVISION must equal this revision.
+repository = "https://github.com/NVIDIA/cutlass.git"
+revision = "147f5673d0c1c3dcf66f78d677fd647e4a020219"
+
+[env]
+# Process environment passed to setup/check subprocesses; launchers must propagate it to workers.
+CUDA_DEVICE_MAX_CONNECTIONS = "1"
+# Not SKYRL_PYTHONPATH_EXPORT: SkyRL then reads PYTHONPATH unconditionally, which setup clears.
+SKYRL_LD_LIBRARY_PATH_EXPORT = "1"
+RAY_ENABLE_UV_RUN_RUNTIME_ENV = "0"
+UV_LINK_MODE = "copy"
+PYTHONDONTWRITEBYTECODE = "1"
+PYTHONUNBUFFERED = "1"
+# The first native kernel builds can exceed SkyRL's default inference startup window.
+SKYRL_WAIT_UNTIL_INFERENCE_SERVER_HEALTHY_TIMEOUT_S = "1200"
+
+[caches]
+# Directories under the setup root.
+UV_CACHE_DIR = "cache/uv"
+TRITON_CACHE_DIR = "cache/triton"
+TORCH_EXTENSIONS_DIR = "cache/torch-extensions"
+TORCHINDUCTOR_CACHE_DIR = "cache/inductor"
+CUDA_CACHE_PATH = "cache/cuda"
+CUTE_DSL_CACHE_DIR = "cache/cute"
+XDG_CACHE_HOME = "cache/xdg"
+HF_HOME = "cache/hf"
+
+# Every installed-metadata conflict in the venv setup builds; any other conflict fails make setup-dev.
+# Source: scripts/check_runtime_dependency_conflicts.py in a venv built from the lock below on H100,
+# 2026-11-19 (vLLM 0.33.0, torch 2.14.0, SkyRL 387bce8d).
+# An omitted `installed` means the required package is not installed.
+#
+# Caused by IsoExec's [overrides] above.
+[[metadata_conflicts]]
+package = "skyrl"
+requirement = "transformers<=5.16.1,>=5.6.1"
+installed = "5.22.0"
+reason = "The pinned SkyRL upper bound predates the core_model_loading.Split override."
+
+[[metadata_conflicts]]
+package = "megatron-bridge"
+requirement = "transformers<5.21,>=5.15"
+installed = "5.22.0"
+reason = "transformers override; Megatron-Bridge 0.8.0 caps transformers below 5.21."
+
+[[metadata_conflicts]]
+package = "vllm"
+requirement = "transformers<5.21.0,>=5.16.1"
+installed = "5.22.0"
+reason = "transformers override; vLLM 0.33.0 caps transformers below 5.21."
+
+# Caused by [tool.uv] override-dependencies in the pinned SkyRL pyproject.toml, which replace
+# these requirements when the lock is resolved.
+[[metadata_conflicts]]
+package = "megatron-bridge"
+requirement = "flashinfer-python==0.6.18.post1"
+installed = "0.7.2.post1"
+reason = "SkyRL override flashinfer-python==0.7.2.post1 (vLLM 0.33.0's pin)."
+
+[[metadata_conflicts]]
+package = "megatron-bridge"
+requirement = "flashinfer-cubin==0.6.18.post1"
+installed = "0.7.2.post1"
+reason = "SkyRL override flashinfer-cubin==0.7.2.post1 (must match flashinfer-python)."
+
+[[metadata_conflicts]]
+package = "mamba-ssm"
+requirement = "tilelang==0.1.8"
+installed = "0.1.13"
+reason = "SkyRL override tilelang==0.1.13."
+
+[[metadata_conflicts]]
+package = "vllm"
+requirement = "tilelang==0.1.12"
+installed = "0.1.13"
+reason = "SkyRL override tilelang==0.1.13."
+
+[[metadata_conflicts]]
+package = "mamba-ssm"
+requirement = "apache-tvm-ffi<=0.1.9"
+installed = "0.1.12"
+reason = "SkyRL override apache-tvm-ffi==0.1.12."
+
+[[metadata_conflicts]]
+package = "vllm"
+requirement = "apache-tvm-ffi==0.1.11"
+installed = "0.1.12"
+reason = "SkyRL override apache-tvm-ffi==0.1.12."
+
+[[metadata_conflicts]]
+package = "nixl"
+requirement = "nixl-cu12==1.5.2"
+reason = "SkyRL override nixl-cu12; sys_platform == 'never' drops it; the lock installs nixl-cu13."
