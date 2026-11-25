@@ -279,7 +279,7 @@ def test_model_resolves_the_check_after_the_load_and_every_commit(monkeypatch):
     rows = [GuardedRow(source)]
     body, walks = _counting_body(monkeypatch, rows)
     model = object.__new__(VllmModel)
-    model.__dict__.update(body=body, _derived_check=None, _loaded_weights=None, _weight_update_failed=False)
+    model.__dict__.update(body=body, _derived_check=None, _loaded_weights=None, _verify_weight_updates=False)
     monkeypatch.setattr("isoexec.runtimes.vllm.model.refresh_packed_storage", lambda body: None)
     refreshed = []
     monkeypatch.setattr("isoexec.runtimes.vllm.model.refresh_derived_weights",

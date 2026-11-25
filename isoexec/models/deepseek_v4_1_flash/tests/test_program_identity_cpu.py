@@ -87,6 +87,7 @@ def _engine(ident):
     model.body.member = _Member(ident)
     model.head = None
     model._loaded_weights, model._weight_update_failed = None, False
+    model._verify_weight_updates = False
     model._remote_updates, model._update_aliases = set(), {}
     model._copy_parameter_update = lambda name, parameter, tensor, loaded: loaded.add(parameter)
     return model

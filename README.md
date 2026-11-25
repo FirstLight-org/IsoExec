@@ -14,7 +14,7 @@ execution. It eliminates training-inference mismatch by introducing:
 
 DeepSeek-V4.1-Flash text training and inference on B200 are available in the
 [V4.1 model package](isoexec/models/deepseek_v4_1_flash/README.md). The
-[SkyRL GRPO example](examples/run_v41_gsm8k.py) accepts checkpoint and GSM8K data paths.
+[four-B200 SkyRL guide](docs/v41-six-layer-skyrl.md) reproduces the six-layer GRPO experiment.
 
 ## Quickstart
 
@@ -42,6 +42,7 @@ make run-tiny
 
 | Model | Package | Checkpoints |
 | --- | --- | --- |
+| DeepSeek V4.1 Flash (B200) | `isoexec.models.deepseek_v4_1_flash` | `deepseek-ai/DeepSeek-V4.1-Flash` (text) |
 | Qwen3.5 | `isoexec.models.qwen3_5` | `Qwen/Qwen3.5-0.8B`, `Qwen/Qwen3.5-9B` |
 | Qwen3.5 MoE | `isoexec.models.qwen3_5_moe` | `Qwen/Qwen3.5-35B-A3B-Base` |
 | Qwen2 MoE | `isoexec.models.qwen2_moe` | `Qwen/Qwen1.5-MoE-A2.7B` |

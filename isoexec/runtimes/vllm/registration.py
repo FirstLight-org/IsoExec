@@ -99,7 +99,7 @@ def register_native(source: ModelSource, raw_config: Mapping[str, Any], *, check
     (``gdn_engine_patch.assert_engine_args_compatible``).
     A model package may choose the engine settings listed in ``ENGINE_SETTING_DEFAULTS``
     (``engine_settings()`` on its model class: its own cache encoding, block size,
-    chunked prefill); a model's declaration takes precedence over the caller's
+    chunked prefill). The model's declaration takes precedence for these settings.
     """
     from pathlib import Path
 

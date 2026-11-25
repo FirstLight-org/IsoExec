@@ -64,10 +64,10 @@ program with the decoder windows floored at the segment start; trainer per-segme
 generation (single and multi-turn, packed); every chunk split of a prompt gives the same decoder rows, state
 and logits.
 
-GPU execution: the encoder blocks run the confirmed composition below. The decoder components' GPU
-composition (the entry projection split from the FULL layer's attention call, segment-row attention with the
-truncated window) needs attention-package entry points that are not there yet; until they are, a CUDA forward
-of `decoder.entry` / `decoder.blocks` is refused by name (`block.DECODER_GPU_PENDING`).
+On SM100, the trainer runs the decoder entry projection over packed tokens. The engine writes the
+same projections into paged KV and index caches. Both execute decoder attention on the rows selected
+by bounded replay. These entry points are in `isoexec/ops/attention/deepseek_v41_cache_sm100/ced.py`.
+The [six-layer SkyRL run](../../../docs/v41-six-layer-skyrl.md) exercises both paths in one GRPO step.
 
 Kernels (all SM100, `isoexec/ops`): `fused_sm100.embed_expand`; `embed/engram_sm100` (hash, FP8 row
 lookup, gated residual); `residual/deepseek_mhc_sm100` (coefficients, fused boundary rows, expand,
@@ -166,11 +166,10 @@ prefill, no global attention backend) and its per-step host state (`engine_model
   from vLLM's sliding-window slots, the compressed rail as 64-record pages of a block, index keys as pages
   of `128 / ratio` entries, the compressor state in the request's ring block. Records are the kernels'
   own formats; `tests/test_engine_cache_cpu.py` checks byte-exclusive addressing on vLLM's allocator.
-- Decode steps replay FULL_DECODE_ONLY graphs; prefill and mixed steps run eagerly. FULL_AND_PIECEWISE is
-  refused by name for now (the paged step reads host-side metadata). Under EP the captured
-  buckets run static-capacity routes (`ceil(tokens / ep)` rows per home, prepared for the largest capture
-  size); eager steps run host-counted routes. A captured step scores at most
-  `decode_graph_score_element_budget / tokens` context positions (`additional_config.isoexec`).
+- In the SkyRL experiment, uniform decode steps use full CUDA graphs. Mixed batches use vLLM's
+  breakable piecewise graphs with `ISOEXEC_V41_PIECEWISE_BREAKS=core`. The model declares these
+  boundaries in `piecewise.py`. A captured decode step scores at most
+  `decode_graph_score_element_budget / tokens` context positions.
 - After the checkpoint load each row packs its experts, prepares the MegaMoE workspace (EP > 1) and records
   the address of every parameter the kernels read in place (DeepGEMM projections and MegaMoE read the BF16
   masters with no derived copy). Weight updates write in place (`VllmModel.finish_weight_update` refuses an
@@ -235,16 +234,15 @@ Engram residual, FP32 head root).
   the engine's registered names, every global expert) into `VllmModel.start_weight_update` /
   `load_weights` / `finish_weight_update`.
 
-Refused on the trainer: EP over token-disjoint ranks (TP = 1, EP > 1: the replicated parameters' gradient
-sums over the EP ranks are not run yet), sequence and context parallelism (`admission`).
+The six-layer run used token-disjoint EP4 at TP1. Placement admission rejects sequence and context
+parallelism for this model.
 
 ## Not yet in this package
 
 - vLLM's `inputs_embeds` paths (`embed_input_ids`: multimodal inputs, prompt embeddings, speculative
   drafts): the embedding and the Engram hash run inside the forward on token ids; none of these paths is
   enabled for this model, and `embed_input_ids` refuses.
-- Trainable Engram row masters (the FP8 tables are frozen) and the trainer's EP gradient sums of
-  replicated parameters under token-disjoint EP.
+- Trainable Engram row masters. The FP8 tables are frozen.
 
 CPU tests cover the CED geometry of the released, B14 and reduced configs and the named refusals of
 non-CED layouts, the stacks, layer kinds, handoff ownership and state classes, admission, checkpoint key
