@@ -7,8 +7,10 @@ This product includes software developed by third parties. The files listed belo
 copied or derived from the projects named, each under the license shown and reproduced in full
 here. Each listed file also keeps the upstream copyright notice in its header.
 
-Not redistributed: NVIDIA CUTLASS (BSD 3-Clause) headers are fetched at a pinned commit by
-`make setup`; they are not part of this repository or its wheel.
+NVIDIA CUTLASS (https://github.com/NVIDIA/cutlass, BSD 3-Clause): the wheel bundles its include/ and
+tools/util/include/ headers with its LICENSE.txt, unmodified, under isoexec/_runtime/cutlass/ at the
+commit pinned in environments/default.toml; setup.py checks them out when the wheel is built, and
+`make setup` installs the same commit into its venv. They are not part of this repository.
 
 ====================================================================================================
 vLLM (https://github.com/vllm-project/vllm)

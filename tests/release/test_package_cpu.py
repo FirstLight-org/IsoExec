@@ -24,7 +24,11 @@ def write_wheel(tmp_path, init=b'__version__ = "0.1.0"\n'):
         'isoexec/kernels/example.cu': b'// kernel\n',
         'isoexec/_runtime/__init__.py': b'',
         'isoexec/_runtime/setup_env.py': INSTALLER,
-        'isoexec/_runtime/default.toml': b'schema = 1\n',
+        'isoexec/_runtime/default.toml': b'schema = 1\n[cutlass]\nrevision = "0123abc"\n',
+        'isoexec/_runtime/cutlass/include/cutlass/version.h': b'#define CUTLASS_MAJOR 4\n',
+        'isoexec/_runtime/cutlass/tools/util/include/cutlass/util/device_memory.h': b'// util\n',
+        'isoexec/_runtime/cutlass/LICENSE.txt': b'BSD-3-Clause\n',
+        'isoexec/_runtime/cutlass/.isoexec-revision': b'0123abc\n',
         'isoexec-0.1.0.dist-info/METADATA': b'Metadata-Version: 2.4\nName: isoexec\nVersion: 0.1.0\n',
         'isoexec-0.1.0.dist-info/WHEEL': b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
         'isoexec-0.1.0.dist-info/entry_points.txt':
@@ -78,6 +82,25 @@ def test_missing_bundled_installer_refuses(tmp_path):
         compare_with_source(wheel, source)
     with pytest.raises(RuntimeError, match='default.toml'):
         install_and_import(wheel)
+
+
+@pytest.mark.parametrize('change,error', [
+    ('pin', 'not the manifest pin'), ('missing', 'wheel lacks'), ('stray', 'unexpected files')])
+def test_bundled_cutlass_must_be_the_pinned_headers(tmp_path, change, error):
+    wheel, source = write_wheel(tmp_path)
+    if change == 'pin':
+        (source / 'environments/default.toml').write_bytes(b'schema = 1\n[cutlass]\nrevision = "fedcba9"\n')
+    else:
+        with zipfile.ZipFile(wheel) as archive:
+            kept = {name: archive.read(name) for name in archive.namelist()
+                    if not (change == 'missing' and name.endswith('/LICENSE.txt'))}
+        if change == 'stray':
+            kept['isoexec/_runtime/cutlass/examples/main.cu'] = b'// not a header part\n'
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            for name, content in kept.items():
+                archive.writestr(name, content)
+    with pytest.raises(ValueError, match=error):
+        compare_with_source(wheel, source)
 
 
 def test_import_cannot_use_runtime_dependencies(tmp_path, monkeypatch):

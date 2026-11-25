@@ -24,7 +24,7 @@ isoexec-setup
 `isoexec-setup` builds the managed runtime in `~/.isoexec` (or `--root`): the third-party packages of the SkyRL
 lock pinned in `environments/default.toml`, the CUTLASS headers and the `[overrides]`, installed with `--no-deps`
 because they deliberately violate other packages' metadata (see `[[metadata_conflicts]]`). `pip install isoexec`
-alone installs the package, not this runtime. From a checkout, `make setup` does the same:
+alone installs the package, which bundles the pinned CUTLASS headers, not this runtime. From a checkout, `make setup` does the same:
 
 ```sh
 git clone https://github.com/FirstLight-org/IsoExec.git

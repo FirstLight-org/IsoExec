@@ -120,9 +120,13 @@ CUTLASS_REVISION = "147f5673d0c1c3dcf66f78d677fd647e4a020219"
 #: Where setup puts that commit's headers, inside the managed venv, with its revision recorded.
 CUTLASS_INSTALLED = Path(sys.prefix) / "share" / "isoexec" / "cutlass"
 CUTLASS_REVISION_FILE = ".isoexec-revision"
+#: The same commit's headers that a built wheel bundles (setup.py), for an environment managed setup
+#: did not build, such as SkyRL's own venv.
+CUTLASS_BUNDLED = Path(__file__).resolve().parents[1] / "_runtime" / "cutlass"
 
 CUTLASS_CANDIDATES = (
     str(CUTLASS_INSTALLED / "include"),
+    str(CUTLASS_BUNDLED / "include"),
     str(Path(__file__).resolve().parents[2] / "third_party" / "cutlass" / "include"),
 )
 
@@ -145,7 +149,8 @@ def cutlass_include(family: str = "", arch: str = "SM100") -> Path | None:
     """The CUTLASS include root for a build, or ``None`` when no checkout is present.
 
     ``ISOEXEC_<FAMILY>_<ARCH>_CUTLASS`` or ``ISOEXEC_<ARCH>_CUTLASS`` select a tree explicitly;
-    otherwise the first of ``CUTLASS_CANDIDATES`` that holds one, the setup-installed tree first.
+    otherwise the first of ``CUTLASS_CANDIDATES`` that holds one: the setup-installed tree, then the
+    wheel's bundled tree.
     """
     overrides = [f"ISOEXEC_{arch}_CUTLASS"]
     if family:
@@ -178,7 +183,8 @@ def require_pinned_cutlass(family: str, arch: str) -> Path:
     if include is None:
         raise RuntimeError(
             f"ops/{family} needs CUTLASS headers at {CUTLASS_REVISION[:8]} and none were found "
-            f"(searched {list(CUTLASS_CANDIDATES)}). Run `make setup` (it installs them into the venv), "
+            f"(searched {list(CUTLASS_CANDIDATES)}). Install the isoexec wheel (it bundles them) or run "
+            f"`make setup` (it installs them into the venv), "
             f"or set ISOEXEC_{family.upper()}_{arch}_CUTLASS to a CUTLASS checkout at that commit."
         )
     revision = cutlass_revision(include)

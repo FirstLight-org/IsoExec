@@ -65,7 +65,7 @@ FLAGS: List[Flag] = [
     ),
     Flag(
         "ISOEXEC_MLA_SM90_CUTLASS", "", ("both",),
-        "CUTLASS checkout used to build MLA forward kernels (default: the one make setup installs)", FUNCTION, (TRAIN, ENGINE),
+        "CUTLASS checkout used to build MLA forward kernels (default: the one make setup installs, else the wheel's)", FUNCTION, (TRAIN, ENGINE),
         notes="Compared conservatively: selecting another header tree can change generated numerical code.",
     ),
     Flag(
@@ -78,7 +78,7 @@ FLAGS: List[Flag] = [
     ),
     Flag(
         "ISOEXEC_GQA_SM90_CUTLASS", "", ("both",),
-        "CUTLASS checkout used to build the vendored FA3 kernels (default: the one make setup installs)",
+        "CUTLASS checkout used to build the vendored FA3 kernels (default: the one make setup installs, else the wheel's)",
         FUNCTION, (TRAIN, ENGINE),
         notes="Compared conservatively: selecting another header tree can change generated numerical code.",
     ),

@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
 
 SUFFIXES = {'.py', '.cu', '.cuh', '.cpp', '.h', '.hpp', '.json', '.yaml', '.txt'}
@@ -31,6 +32,8 @@ installer = sys.modules[entry.load().__module__]
 assert installer.__name__ == 'isoexec._runtime.setup_env' and installer.INSTALLED, installer.__file__
 assert installer.MANIFEST.is_file(), installer.MANIFEST
 assert 'torch' not in sys.modules
+# The bundled CUTLASS headers land where isoexec.ops.build_cache.CUTLASS_BUNDLED looks for them.
+assert (Path(isoexec.__file__).parent / '_runtime/cutlass/include/cutlass/version.h').is_file()
 '''
 
 PUBLIC_API_CHECK = '''
@@ -64,13 +67,39 @@ BUNDLED = {'isoexec/_runtime/setup_env.py': 'scripts/setup_env.py',
            'isoexec/_runtime/default.toml': 'environments/default.toml'}
 
 
+#: The CUTLASS tree setup.py checks out into the wheel; it is not in the source, so it is checked
+#: against the source manifest's [cutlass] pin instead.
+CUTLASS = 'isoexec/_runtime/cutlass/'
+
+
+def check_cutlass(archive: zipfile.ZipFile, source: Path) -> int:
+    """The bundled CUTLASS tree holds the headers and license of the manifest's pinned commit only."""
+    revision = tomllib.loads((source / 'environments/default.toml').read_text())['cutlass']['revision']
+    names = [name[len(CUTLASS):] for name in archive.namelist()
+             if name.startswith(CUTLASS) and not name.endswith('/')]
+    stray = sorted(name for name in names if not name.startswith(('include/', 'tools/util/include/'))
+                   and name not in ('LICENSE.txt', '.isoexec-revision'))
+    if stray:
+        raise ValueError(f'unexpected files in {CUTLASS}: {stray[:5]}')
+    missing = [name for name in ('include/cutlass/version.h', 'tools/util/include/cutlass/util/device_memory.h',
+                                 'LICENSE.txt', '.isoexec-revision') if name not in names]
+    if missing:
+        raise ValueError(f'wheel lacks {[CUTLASS + name for name in missing]}')
+    found = archive.read(CUTLASS + '.isoexec-revision').decode().strip()
+    if found != revision:
+        raise ValueError(f'bundled CUTLASS is {found}, not the manifest pin {revision}')
+    return len(names)
+
+
 def compare_with_source(wheel: Path, source: Path) -> int:
     expected = {p.relative_to(source).as_posix(): p.read_bytes() for p in (source / 'isoexec').rglob('*')
                 if p.is_file() and p.suffix in SUFFIXES}
     expected |= {name: (source / origin).read_bytes() for name, origin in BUNDLED.items()}
     with zipfile.ZipFile(wheel) as archive:
+        check_cutlass(archive, source)
         actual = {name: archive.read(name) for name in archive.namelist()
-                  if name.startswith('isoexec/') and (Path(name).suffix in SUFFIXES or name in BUNDLED)}
+                  if name.startswith('isoexec/') and not name.startswith(CUTLASS)
+                  and (Path(name).suffix in SUFFIXES or name in BUNDLED)}
     if not expected or expected.keys() != actual.keys():
         raise ValueError(f'wheel/source file lists differ: {sorted(expected.keys() ^ actual.keys())}')
     stale = sorted(name for name in expected if expected[name] != actual[name])
@@ -101,6 +130,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.source is not None:
         print(f'{compare_with_source(args.wheel, args.source)} package files match {args.source}')
+        with zipfile.ZipFile(args.wheel) as archive:
+            print(f'{check_cutlass(archive, args.source)} bundled CUTLASS files at the manifest pin')
     install_and_import(args.wheel, public_api=args.public_api)
     print(f'{args.wheel.name}: installed import{" and public API" if args.public_api else ""} passed')
 
