@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Install the published IsoExec wheel, or editable IsoExec for development, in a managed root.
 
+Run as `make setup` from a checkout, or as `isoexec-setup` after `pip install isoexec`.
+
 The root's venv holds the pinned SkyRL lock, the pinned CUTLASS headers
 and the overrides in environments/default.toml. Rerunning setup, or --check-only, checks an existing root instead of
 installing again. --wheel selects a local candidate instead of the published wheel. A nonempty
@@ -26,9 +28,12 @@ import urllib.error
 import urllib.request
 import zipfile
 
-REPO = Path(__file__).resolve().parents[1]
-MANIFEST = REPO / 'environments/default.toml'
-RELEASE_API = 'https://api.github.com/repos/zanderjiang/IsoExec/releases/tags'
+HERE = Path(__file__).resolve().parent
+#: Installed as isoexec/_runtime/setup_env.py (setup.py bundles it with its manifest), or run from a checkout.
+INSTALLED = (HERE / 'default.toml').is_file()
+REPO = None if INSTALLED else HERE.parent
+MANIFEST = HERE / 'default.toml' if INSTALLED else REPO / 'environments/default.toml'
+PYPI_API = 'https://pypi.org/pypi/isoexec'
 
 # Runs in the managed venv: the runtime's own dependency check, then, with a wheel, the installed
 # package must be exactly the wheel's files.
@@ -152,6 +157,9 @@ def check_host(manifest: dict) -> dict:
 
 
 def project_version() -> str:
+    if INSTALLED:
+        from importlib import metadata
+        return metadata.version('isoexec')
     return tomllib.loads((REPO / 'pyproject.toml').read_text())['project']['version']
 
 
@@ -167,44 +175,39 @@ def check_wheel_version(path: Path, version: str) -> None:
 
 
 def download_release_wheel(directory: Path) -> Path:
-    """Download this version's published wheel and verify GitHub's SHA256 digest."""
+    """Download this version's wheel from PyPI and verify PyPI's SHA256 digest."""
     version = project_version()
-    tag = f'v{version}'
-    request = urllib.request.Request(f'{RELEASE_API}/{tag}', headers={
-        'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'IsoExec-setup'})
+    request = urllib.request.Request(f'{PYPI_API}/{version}/json', headers={'Accept': 'application/json'})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             release = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise SetupError(f'{tag} is not published; pass WHEEL=/path/to/candidate.whl') from error
-        raise SetupError(f'GitHub release lookup failed: HTTP {error.code}') from error
+            raise SetupError(f'isoexec {version} is not on PyPI; pass WHEEL=/path/to/candidate.whl') from error
+        raise SetupError(f'PyPI lookup failed: HTTP {error.code}') from error
     except (urllib.error.URLError, json.JSONDecodeError) as error:
-        raise SetupError(f'GitHub release lookup failed: {error}') from error
+        raise SetupError(f'PyPI lookup failed: {error}') from error
 
-    prefix = f'isoexec-{version}-'
-    assets = [asset for asset in release.get('assets', [])
-              if asset.get('name', '').startswith(prefix) and asset['name'].endswith('.whl')]
-    if len(assets) != 1:
-        raise SetupError(f'{tag} must contain exactly one IsoExec wheel, found {len(assets)}')
-    asset = assets[0]
-    digest = asset.get('digest', '')
-    if re.fullmatch(r'sha256:[0-9a-f]{64}', digest) is None:
-        raise SetupError(f"GitHub did not provide a SHA256 digest for {asset['name']}")
+    files = [item for item in release.get('urls', []) if item.get('packagetype') == 'bdist_wheel']
+    if len(files) != 1:
+        raise SetupError(f'isoexec {version} must have exactly one wheel on PyPI, found {len(files)}')
+    item = files[0]
+    digest = item.get('digests', {}).get('sha256', '')
+    if re.fullmatch(r'[0-9a-f]{64}', digest) is None:
+        raise SetupError(f"PyPI did not provide a SHA256 digest for {item.get('filename')}")
 
     directory.mkdir(parents=True, exist_ok=True)
-    partial = directory / f"{asset['name']}.partial"
-    path = directory / asset['name']
+    partial = directory / f"{item['filename']}.partial"
+    path = directory / item['filename']
     try:
-        with urllib.request.urlopen(asset['browser_download_url'], timeout=60) as response, \
-                partial.open('wb') as output:
+        with urllib.request.urlopen(item['url'], timeout=60) as response, partial.open('wb') as output:
             shutil.copyfileobj(response, output)
     except (OSError, urllib.error.URLError) as error:
         partial.unlink(missing_ok=True)
-        raise SetupError(f"failed to download {asset['name']}: {error}") from error
-    if sha256(partial) != digest.removeprefix('sha256:'):
+        raise SetupError(f"failed to download {item['filename']}: {error}") from error
+    if sha256(partial) != digest:
         partial.unlink()
-        raise SetupError(f"downloaded {asset['name']} does not match GitHub's SHA256 digest")
+        raise SetupError(f"downloaded {item['filename']} does not match PyPI's SHA256 digest")
     partial.replace(path)
     check_wheel_version(path, version)
     return path
@@ -369,7 +372,9 @@ def setup(args, manifest: dict) -> None:
         log(f'ENV_PASS: reused {root}; numerical qualification not run')
         return
     if args.check_only:
-        raise SetupError(f'{receipt} is missing; run make setup first')
+        raise SetupError(f'{receipt} is missing; run make setup (or isoexec-setup) first')
+    if args.dev and INSTALLED:
+        raise SetupError('--dev needs a source checkout: clone the repository and run make setup-dev')
     if root.exists() and any(root.iterdir()):
         raise SetupError(f'{root} is nonempty without a receipt; choose a new ISOEXEC_ROOT')
     version = project_version()
@@ -405,7 +410,8 @@ def setup(args, manifest: dict) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--root', type=Path, default=Path(os.environ.get('ISOEXEC_ROOT', '~/.isoexec')),
+                        help='managed runtime root (default: $ISOEXEC_ROOT or ~/.isoexec)')
     parser.add_argument('--skyrl-source', type=Path, help='existing SkyRL checkout instead of cloning into the root')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--wheel', type=Path, help='IsoExec wheel to install')

@@ -14,7 +14,17 @@ execution. It eliminates training-inference mismatch by introducing:
 
 ## Quickstart
 
-Install `isoexec` and its dependencies:
+Install `isoexec` and its dependencies (Python 3.12, Linux x86_64):
+
+```sh
+pip install isoexec
+isoexec-setup
+```
+
+`isoexec-setup` builds the managed runtime in `~/.isoexec` (or `--root`): SkyRL's pinned lock, the CUTLASS
+headers and the `[overrides]` in `environments/default.toml`, installed with `--no-deps` because they deliberately
+violate other packages' metadata (see `[[metadata_conflicts]]`). `pip install isoexec` alone installs the package,
+not this runtime. From a checkout, `make setup` does the same:
 
 ```sh
 git clone https://github.com/FirstLight-org/IsoExec.git

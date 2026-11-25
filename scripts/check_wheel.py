@@ -52,12 +52,19 @@ assert not torch.cuda.is_initialized()
 '''
 
 
+#: Files setup.py copies into the package from outside isoexec/ (its generated __init__.py is skipped).
+BUNDLED = {'isoexec/_runtime/setup_env.py': 'scripts/setup_env.py',
+           'isoexec/_runtime/default.toml': 'environments/default.toml'}
+
+
 def compare_with_source(wheel: Path, source: Path) -> int:
     expected = {p.relative_to(source).as_posix(): p.read_bytes() for p in (source / 'isoexec').rglob('*')
                 if p.is_file() and p.suffix in SUFFIXES}
+    expected |= {name: (source / origin).read_bytes() for name, origin in BUNDLED.items()}
     with zipfile.ZipFile(wheel) as archive:
         actual = {name: archive.read(name) for name in archive.namelist()
-                  if name.startswith('isoexec/') and Path(name).suffix in SUFFIXES}
+                  if name.startswith('isoexec/') and (Path(name).suffix in SUFFIXES or name in BUNDLED)
+                  and name != 'isoexec/_runtime/__init__.py'}
     if not expected or expected.keys() != actual.keys():
         raise ValueError(f'wheel/source file lists differ: {sorted(expected.keys() ^ actual.keys())}')
     stale = sorted(name for name in expected if expected[name] != actual[name])
