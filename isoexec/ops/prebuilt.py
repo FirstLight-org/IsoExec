@@ -565,7 +565,6 @@ EXTENSIONS: tuple[tuple[str, str, str, tuple], ...] = (
     ("conv_sm100", "isoexec.ops.gdn.conv_sm100._extension", "extension", ()),
     ("gdn_cpr_sm100", "isoexec.ops.gdn.gdn_cpr_sm100._extension", "extension", ()),
     ("logprobs_sm100", "isoexec.ops.logprobs.logprobs_sm100._extension", "extension", ()),
-    ("logprobs_sm100_v2", "isoexec.ops.logprobs.logprobs_sm100._extension_v2", "extension", ()),
     ("logprobs_sm100_sampler", "isoexec.ops.logprobs.logprobs_sm100._extension_sampler", "extension", ()),
     ("mlp_sm100", "isoexec.ops.mlp.mlp_sm100._extension", "extension", ()),
     ("mm_sm100", "isoexec.ops.mm.mm_sm100._extension", "extension", ()),
