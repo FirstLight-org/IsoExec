@@ -13,9 +13,9 @@ are executed through ``linear_fn``; everything else is native:
   (compressor, index key/weights, grouped ``wo_a``), FP32 root for the ratio>1 compressor; at decode rows
   the same segment trees with the segments on vendored DeepGEMM (``mm/deepgemm_sm100/segtree.py``, also
   ``wo_b``'s leaf tree): the same bits;
-* ``attention/dsa_sm100``: index scores (``sm100_dsa_index_logits_dg_v1``: DeepGEMM's SM100 MQA logits, vendored; FP8
+* ``attention/sparse_sm100``: index scores (``sm100_dsa_index_logits_dg_v1``: DeepGEMM's SM100 MQA logits, vendored; FP8
   keys and queries, one exponent per row),
-  top-k (``sm100_dsa_topk_v1``), learned-sink sparse attention (``sm100_dsa_sparse_sink_v1``,
+  top-k (``sm100_dsa_topk_v1``), learned-sink sparse attention (``sm100_sparse_sink_v1``,
   G = 1 chain) and its no-atomic backward.
 
 Torch glue is limited to allocation, views, contiguous copies of operands, ``arange`` index prep and
@@ -638,11 +638,11 @@ def compressor_full(comp, x2d, B, T, ratio, eps):
 
 # ---------------------------------------------------------------------------------------------
 # indexer (no gradient: the selector is frozen in the actor recipe)
-def _dsa():
-    from isoexec.ops.attention.dsa_sm100 import indexer as dsa_indexer
-    from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
-    from isoexec.ops.attention.dsa_sm100._extension import extension as dsa_ext
-    return dsa_indexer, dsa_topk, dsa_ext
+def _sparse():
+    from isoexec.ops.attention.sparse_sm100 import indexer as dsa_indexer
+    from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
+    from isoexec.ops.attention.sparse_sm100._extension import extension as sparse_ext
+    return dsa_indexer, dsa_topk, sparse_ext
 
 
 def check_index_query_format():
@@ -819,14 +819,14 @@ def indexer_tree(codes, sf, w, ke, *, width, leaves=spec.TP_LEAVES, f32=False, i
     retired cross-rank form, kept for its qualification (tests/test_index_local_gpu.py).
     ``bt_rows`` (paged): query row r reads ``block_table`` row ``bt_rows[r]`` -- the same page ids as
     ``block_table.index_select(0, bt_rows)``, without the copy."""
-    _, _, dsa_ext = _dsa()
+    _, _, sparse_ext = _sparse()
     if ieee_levels is None:
         ieee_levels = spec.INDEX_TREE_IEEE_LEVELS if leaves == spec.TP_LEAVES and not f32 else 0
     rows = codes.shape[0]
     stride = (width + 255) // 256 * 256
     out = torch.empty((rows, stride), dtype=torch.float32 if f32 else torch.bfloat16, device=codes.device)[:, :width]
     tiles = (width + 127) // 128
-    ext = dsa_ext("indexer")
+    ext = sparse_ext("indexer")
     if cache is None:
         qb, span = 2, 1 << 20
         g = max(1, min(((rows + qb - 1) // qb) * ((tiles + span - 1) // span), 148))
@@ -854,20 +854,20 @@ def indexer_tree(codes, sf, w, ke, *, width, leaves=spec.TP_LEAVES, f32=False, i
 
 
 def index_schedule(ke, rows_seq):
-    """The paged index-score work division of a step's rows (``dsa_sm100.index_logits.paged_schedule``): one launch
+    """The paged index-score work division of a step's rows (``sparse_sm100.index_logits.paged_schedule``): one launch
     per step and compress ratio, shared by every index layer of that ratio. None under the FP32-tree fold."""
     if spec.INDEX_FOLD == "fp32_tree":
         return None
-    from isoexec.ops.attention.dsa_sm100 import index_logits
+    from isoexec.ops.attention.sparse_sm100 import index_logits
     return index_logits.paged_schedule(ke, rows_seq.to(torch.int32).contiguous())
 
 
 def index_key_ranges(ke, rows_seq, seqs, width):
-    """The gathered route's per-row key ranges of a step (``dsa_sm100.index_logits.key_ranges``): one launch per
+    """The gathered route's per-row key ranges of a step (``sparse_sm100.index_logits.key_ranges``): one launch per
     step and compress ratio, shared by every index layer of that ratio. None under the FP32-tree fold."""
     if spec.INDEX_FOLD == "fp32_tree":
         return None
-    from isoexec.ops.attention.dsa_sm100 import index_logits
+    from isoexec.ops.attention.sparse_sm100 import index_logits
     return index_logits.key_ranges(ke.to(torch.int32).contiguous(), rows_seq.to(torch.int32).contiguous(), seqs,
                                    width)
 
@@ -879,7 +879,7 @@ def index_scores(codes, sf, w, ke, *, width, keys=None, cache=None, block_table=
 
     ``spec.INDEX_FOLD == "bf16_dg"`` (the recipe): DeepGEMM's SM100 MQA logits program per (row, key) -- the FP32 MMA
     accumulator, per head bf16(relu), four BF16 fma chains over heads 4i + c, (c0 + c2, c1 + c3), low + high -- in
-    the vendored kernel (``dsa_sm100.index_logits``); the same bits from the paged (engine) and the contiguous
+    the vendored kernel (``sparse_sm100.index_logits``); the same bits from the paged (engine) and the contiguous
     (trainer) form, at every batch composition and schedule. ``bt_rows`` (paged): query row r reads block-table row
     ``bt_rows[r]``; ``schedule``: ``index_schedule(ke, bt_rows)`` of the step (computed here when None).
     ``gather`` (paged): the gathered route instead of the paged kernel -- the keys of the rows' sequences packed
@@ -890,7 +890,7 @@ def index_scores(codes, sf, w, ke, *, width, keys=None, cache=None, block_table=
     if spec.INDEX_FOLD == "fp32_tree":
         return indexer_tree(codes, sf, w, ke, width=width, keys=keys, cache=cache, block_table=block_table,
                             bt_rows=bt_rows)
-    from isoexec.ops.attention.dsa_sm100 import index_logits
+    from isoexec.ops.attention.sparse_sm100 import index_logits
     ke = ke.to(torch.int32).contiguous()
     if cache is None:
         kc, ksf = keys
@@ -920,7 +920,7 @@ def index_scores_full(keys, q, ratio, B, T, C):
 
 def select_full(scores, ke, cfg, index, state, B, T, C):
     """Candidate filter and causal top-k from the (TP-reduced) scores. [B*T, topk] int32."""
-    _, dsa_topk, _ = _dsa()
+    _, dsa_topk, _ = _sparse()
     out = torch.empty((B * T, cfg.index_topk), dtype=torch.int32, device=ke.device)
     cands = state.setdefault("candidates_native", {}) if index == cfg.candidate_source_layer_id else None
     for b in range(B):
@@ -949,22 +949,22 @@ def drive(gen):
 
 
 # ---------------------------------------------------------------------------------------------
-# learned-sink sparse attention (dsa_sm100, G = 1)
-#: the sparse-attention recipe when a caller passes ``recipe=None``: 1 = ``sm100_dsa_sparse_sink_v1`` (dsa_sm100 leaf
-#: recipe 1, frozen), 2 = its lazy-rescale v2 leaf, 3 = ``sm100_dsa_sparse_dualrail_sink_v1`` (dsa_sm100 dual-rail
+# learned-sink sparse attention (sparse_sm100, G = 1)
+#: the sparse-attention recipe when a caller passes ``recipe=None``: 1 = ``sm100_sparse_sink_v1`` (sparse_sm100 leaf
+#: recipe 1, frozen), 2 = its lazy-rescale v2 leaf, 3 = ``sm100_sparse_dualrail_sink_v1`` (sparse_sm100 dual-rail
 #: leaf). Full sequence, chunked prefill, decode and every TP rank must run the same one.
 DEFAULT_SINK_RECIPE = 1
 
 
 def sink_forward(q3, kv2, lists, sink, scale, recipe):
-    """``sm100_dsa_sparse_sink_v1`` at G = 1 with the sink root fused into the leaf epilogue (recipe 1 / 2), or the
+    """``sm100_sparse_sink_v1`` at G = 1 with the sink root fused into the leaf epilogue (recipe 1 / 2), or the
     dual-rail leaf with the sink in its epilogue (recipe 3).
 
-    dsa_sm100's ``sparse_sink_fused_fwd`` evaluates the root's exact expressions on the leaf's raw
+    sparse_sm100's ``sparse_sink_fused_fwd`` evaluates the root's exact expressions on the leaf's raw
     (O, L, M) instead of after an FP32 partial round trip (tests/test_fused_sink_gpu.py: bit-identical
     to ``sparse_sink_fwd``); no ``[T, 1, H, 520]`` FP32 partials and no second launch.
     """
-    _, _, dsa_ext = _dsa()
+    _, _, sparse_ext = _sparse()
     T, h, _ = q3.shape
     out = torch.empty((T, h, 512), dtype=torch.bfloat16, device=q3.device)
     lse = torch.empty((T, h), dtype=torch.float32, device=q3.device)
@@ -973,10 +973,10 @@ def sink_forward(q3, kv2, lists, sink, scale, recipe):
     if recipe is None:
         recipe = DEFAULT_SINK_RECIPE
     if recipe == 3:
-        from isoexec.ops.attention.dsa_sm100.dualrail import dualrail_attn
+        from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
         return dualrail_attn(q3, kv2, lists, scale, sink=sink)
     with torch.cuda.device(q3.device):
-        dsa_ext("attn").sparse_sink_fused_fwd(q3, kv2, lists, float(scale), out, lse, recipe, sink)
+        sparse_ext("attn").sparse_sink_fused_fwd(q3, kv2, lists, float(scale), out, lse, recipe, sink)
     return out, lse
 
 
@@ -984,16 +984,16 @@ def sink_forward(q3, kv2, lists, sink, scale, recipe):
 #: correction of 2026-11-19: backward kernels must be deterministic run to run, because parameters replicated across
 #: TP ranks are updated per rank from gradients every rank must compute identically).
 #:   "cudnn_det"  (DEFAULT) cuDNN-frontend ``DSA.sparse_attention_backward_wrapper(..., deterministic=True)``;
-#:   "isoexec"    IsoExec's own atomics-free backward (dsa_sm100.bwd): the FALLBACK where cuDNN's DSA namespace or
+#:   "isoexec"    IsoExec's own atomics-free backward (sparse_sm100.bwd): the FALLBACK where cuDNN's DSA namespace or
 #:                its ``deterministic`` argument is missing;
 #:   "cudnn"      deterministic=False (native's default, order-dependent fp32 atomics): REFUSED BY NAME unless the
-#:                diagnostic override ``ISOEXEC_DSA_BWD_ALLOW_NONDET=1`` is set, and ALWAYS refused at TP > 1.
-#: Selected by ``ISOEXEC_DSA_BWD`` or ``BWD_PROVIDER``; every backward records its program tag in
+#:                diagnostic override ``ISOEXEC_SPARSE_BWD_ALLOW_NONDET=1`` is set, and ALWAYS refused at TP > 1.
+#: Selected by ``ISOEXEC_SPARSE_BWD`` or ``BWD_PROVIDER``; every backward records its program tag in
 #: ``BACKWARD_PROGRAMS_USED`` (``backward_programs_used()``).
 BWD_PROVIDER = None
 #: TP degree of the trainer's attention, set by the caller when known (else read from Megatron's parallel state)
 BWD_TP_DEGREE = None
-BWD_PROGRAM_TAGS = {"cudnn_det": "cudnn_dsa_bwd_det", "isoexec": "sm100_dsa_sparse_bwd_v1",
+BWD_PROGRAM_TAGS = {"cudnn_det": "cudnn_dsa_bwd_det", "isoexec": "sm100_sparse_bwd_v1",
                     "cudnn": "cudnn_dsa_bwd_nondet_DIAGNOSTIC"}
 BACKWARD_PROGRAMS_USED = set()
 _CUDNN_DSA = {}
@@ -1034,19 +1034,19 @@ def _tp_degree():
 def backward_provider():
     """The provider the next sparse-attention backward uses."""
     import os
-    want = BWD_PROVIDER or os.environ.get("ISOEXEC_DSA_BWD", "cudnn_det")
+    want = BWD_PROVIDER or os.environ.get("ISOEXEC_SPARSE_BWD", "cudnn_det")
     if want not in BWD_PROGRAM_TAGS:
-        raise ValueError(f"ISOEXEC_DSA_BWD / BWD_PROVIDER: {want!r} is not one of {sorted(BWD_PROGRAM_TAGS)}")
+        raise ValueError(f"ISOEXEC_SPARSE_BWD / BWD_PROVIDER: {want!r} is not one of {sorted(BWD_PROGRAM_TAGS)}")
     if want == "cudnn":
         tp = _tp_degree()
         if tp != 1:
             raise NondeterministicBackwardError(
                 f"sparse-attention backward 'cudnn' (non-deterministic, fp32 atomics) is refused at TP degree {tp} "
                 "(replicated parameters would drift across ranks); use the default 'cudnn_det'")
-        if os.environ.get("ISOEXEC_DSA_BWD_ALLOW_NONDET") != "1":
+        if os.environ.get("ISOEXEC_SPARSE_BWD_ALLOW_NONDET") != "1":
             raise NondeterministicBackwardError(
                 "sparse-attention backward 'cudnn' (non-deterministic, fp32 atomics) is refused; it is a diagnostic "
-                "only (ISOEXEC_DSA_BWD_ALLOW_NONDET=1, TP 1); use the default 'cudnn_det'")
+                "only (ISOEXEC_SPARSE_BWD_ALLOW_NONDET=1, TP 1); use the default 'cudnn_det'")
     if want == "isoexec":
         return want
     ns, det = _cudnn_dsa()
@@ -1099,8 +1099,8 @@ class _SinkFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, d_out):
-        from isoexec.ops.attention.dsa_sm100.bwd import dsa_sparse_attn_bwd
-        _, _, dsa_ext = _dsa()
+        from isoexec.ops.attention.sparse_sm100.bwd import sparse_attn_bwd
+        _, _, sparse_ext = _sparse()
         q3, kv2, lists, sink, out, lse = ctx.saved_tensors
         d_out = d_out.contiguous().to(torch.bfloat16)
         with torch.cuda.device(q3.device):
@@ -1111,12 +1111,12 @@ class _SinkFn(torch.autograd.Function):
             if prov == "isoexec":
                 if ctx.recipe == 3:
                     lists = extension().compact_lists(lists)
-                dq, dkv = dsa_sparse_attn_bwd(q3, kv2, lists, out, lse, d_out, ctx.scale, recompute_delta=True)
+                dq, dkv = sparse_attn_bwd(q3, kv2, lists, out, lse, d_out, ctx.scale, recompute_delta=True)
             else:
                 dq, dkv = _cudnn_backward(q3, kv2, lists, out, lse, d_out, ctx.scale, prov == "cudnn_det")
             BACKWARD_PROGRAMS_USED.add(BWD_PROGRAM_TAGS[prov])
             dsink = torch.empty_like(sink)
-            dsa_ext("attn").sink_grad(out, d_out, lse, sink, dsink)
+            sparse_ext("attn").sink_grad(out, d_out, lse, sink, dsink)
         return dq, dkv, None, dsink.to(ctx.sink_dtype), None, None
 
 

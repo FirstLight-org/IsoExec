@@ -261,6 +261,6 @@ DeepGEMM and DeepJIT (MIT), and their CUTLASS headers (BSD-3-Clause):
 FlashInfer batch-invariant MoE and its upstream components:
   isoexec/ops/_vendor/flashinfer_bi_moe/PROVENANCE.md and licenses/
 FlashMLA (MIT) and associated sparse attention sources:
-  isoexec/ops/attention/dsa_sm100/csrc/dualrail/PROVENANCE.md and LICENSE-FlashMLA.txt
+  isoexec/ops/attention/sparse_sm100/csrc/dualrail/PROVENANCE.md and LICENSE-FlashMLA.txt
 vLLM sources used by the V4.1 MoE:
   isoexec/ops/moe/deepseek_v41_sm100/csrc/PROVENANCE.md and licenses/

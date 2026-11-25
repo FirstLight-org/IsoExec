@@ -234,7 +234,7 @@ def test_topk_extra_list_on_engine_tables(vllm_config, sm100, case):  # noqa: F8
     on the same selection; the selection itself is unchanged by the second output."""
     from isoexec.ops.attention.deepseek_v41_cache_sm100 import paged
     from isoexec.ops.attention.deepseek_v41_cache_sm100._extension import extension
-    from isoexec.ops.attention.dsa_sm100 import topk as T
+    from isoexec.ops.attention.sparse_sm100 import topk as T
     b, step, _ = _step(vllm_config, case, 9)
     cfg, batch, pools = b.cfg, step.batch, step.pools
     N, W, K = batch.tok_seq.numel(), cfg.sliding_window, cfg.index_topk

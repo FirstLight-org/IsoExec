@@ -1,7 +1,7 @@
 """A relocatable, content-keyed store of IsoExec's compiled extensions, and the prebuilt-only mode.
 
 Every IsoExec torch extension is loaded through :func:`load_extension` (``build_cache.build_sm100_extension`` /
-``build_sm90_extension``, ``dsa_sm100``, the vendored DeepGEMM host module). Its KEY is a digest of what determines
+``build_sm90_extension``, ``sparse_sm100``, the vendored DeepGEMM host module). Its KEY is a digest of what determines
 the machine code, never of where the checkout or the cache lives:
 
 - the toolchain: ``nvcc --version``, the host compiler's ``--version`` (program name dropped), torch and its CUDA,
@@ -553,7 +553,7 @@ def load_extension(*, name: str, sources: Sequence[str], build_directory: str | 
 EXTENSIONS: tuple[tuple[str, str, str, tuple], ...] = (
     ("deep_gemm_C", "isoexec.ops._vendor.deep_gemm._extension", "extension", ()),
     ("deepseek_v41_rows", "isoexec.ops.attention.deepseek_v41_cache_sm100._extension", "extension", ()),
-    *((f"dsa_{sub}", "isoexec.ops.attention.dsa_sm100._extension", "extension", (sub,))
+    *((f"sparse_{sub}", "isoexec.ops.attention.sparse_sm100._extension", "extension", (sub,))
       for sub in ("topk", "indexer", "attn", "prims", "bwd", "dualrail", "mqa")),
     ("gqa_sm100", "isoexec.ops.attention.gqa_sm100._extension", "extension", ()),
     ("mla_sm100", "isoexec.ops.attention.mla_sm100._extension", "extension", ()),

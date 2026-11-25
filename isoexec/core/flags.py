@@ -1349,7 +1349,7 @@ FLAGS: List[Flag] = [
         "ISOEXEC_DUALRAIL_PLAN", "", ("both",),
         "force the dual-rail sparse-attention plan (\"one\" or \"tpc,nc\"); unset picks it from the launch shape",
         DIAGNOSTIC, (TRAIN, ENGINE),
-        notes="attention/dsa_sm100: the split plan and the one-CTA plan are bitwise equal (ownership only).",
+        notes="attention/sparse_sm100: the split plan and the one-CTA plan are bitwise equal (ownership only).",
     ),
     Flag(
         "ISOEXEC_SMALL_PDL", "1", ("both",),
@@ -1387,9 +1387,9 @@ FLAGS: List[Flag] = [
         notes="collectives/detreduce_sm100: larger payloads reduce in consecutive elementwise chunks; capacity only.",
     ),
     Flag(
-        "ISOEXEC_DSA_BWD", "cudnn_det", ("trainer",),
+        "ISOEXEC_SPARSE_BWD", "cudnn_det", ("trainer",),
         "provider of the V4.1 trainer sparse-attention backward: cudnn_det (cuDNN deterministic, default), isoexec "
-        "(the atomics-free IsoExec kernel), cudnn (non-deterministic: refused unless ISOEXEC_DSA_BWD_ALLOW_NONDET=1 "
+        "(the atomics-free IsoExec kernel), cudnn (non-deterministic: refused unless ISOEXEC_SPARSE_BWD_ALLOW_NONDET=1 "
         "and TP 1)",
         FUNCTION, (TRAIN,),
         notes="attention/deepseek_v41_cache_sm100/ops.py; each provider records its program tag. TRAIN-only like "
@@ -1402,11 +1402,11 @@ FLAGS: List[Flag] = [
         "the debug-layout setting of native's SKYRL_DSV41_FREEZE_ROUTED_EXPERTS; 0 (default) = the actor recipe",
         FUNCTION, (TRAIN,),
         notes="models/deepseek_v4_1_flash/training.py; reported beside the program identity as trained_set. "
-        "TRAIN-only like ISOEXEC_DSA_BWD: it changes which gradients exist, never the forward the gate compares; "
+        "TRAIN-only like ISOEXEC_SPARSE_BWD: it changes which gradients exist, never the forward the gate compares; "
         "every trainer rank must use the same value (DDP buffers and optimizer groups follow it).",
     ),
     Flag(
-        "ISOEXEC_DSA_BWD_ALLOW_NONDET", "0", ("trainer",),
+        "ISOEXEC_SPARSE_BWD_ALLOW_NONDET", "0", ("trainer",),
         "diagnostic override admitting cuDNN's non-deterministic sparse-attention backward at TP 1",
         FUNCTION, (TRAIN,),
         notes="attention/deepseek_v41_cache_sm100/ops.py; never set in a release run (repeat-run training bits).",
@@ -1512,8 +1512,8 @@ NUMERICS_SWITCHES: Tuple[str, ...] = (
     "ISOEXEC_BWD_COMPILE",
     "ISOEXEC_BWD_COMPILE_LEDGER",
     "ISOEXEC_BWD_COMPILE_ROLE",
-    "ISOEXEC_DSA_BWD",
-    "ISOEXEC_DSA_BWD_ALLOW_NONDET",
+    "ISOEXEC_SPARSE_BWD",
+    "ISOEXEC_SPARSE_BWD_ALLOW_NONDET",
     "ISOEXEC_DS_FREEZE_ROUTED_EXPERTS",
     "ISOEXEC_FUSED_RESIDUAL_NORM",
     "ISOEXEC_FUSED_SAMPLER",

@@ -15,7 +15,7 @@ Pools (engine-owned memory; ``PagedPools`` allocates them for tests and simple h
 Producer sharing is the full-sequence program's: consumers read their producer's pools; the window pool
 is per layer. A step is a packed varlen batch: sequences with ``p0`` cached tokens and ``n`` new tokens
 (prefill chunks and decode rows mixed, tokens of a sequence contiguous and in order). Attention is the
-dual-rail sink recipe (``sm100_dsa_sparse_dualrail_sink_v1``, recipe 3) reading the FP8 window pool as
+dual-rail sink recipe (``sm100_sparse_dualrail_sink_v1``, recipe 3) reading the FP8 window pool as
 its main list (W fixed slots) and the FP8 compressed pool as its extra list -- bit for bit the contiguous
 recipe-3 program (whose lists use the same fixed slots), so paged == contiguous == incremental == full.
 Everything is device-resident and shape-static for a given (tokens, sequences, group bounds): a decode
@@ -280,7 +280,7 @@ INDEX_KQ_STORE = True
 
 #: The leaf rotates the query's RoPE tail itself (and, with one output group per rank, applies the output's inverse
 #: RoPE): ``dualrail_attn(rope_q=True, rope_o=True)``, the same bits as ``ops.q_rope`` + ``ROW_OUT_INV_ROPE``
-#: (dsa_sm100 tests/test_dualrail_fused_rope_gpu.py); two launches per layer fewer. False: the separate launches.
+#: (sparse_sm100 tests/test_dualrail_fused_rope_gpu.py); two launches per layer fewer. False: the separate launches.
 LEAF_ROPE = True
 
 #: Index scores of prefill-shaped launches on the gathered route (``ops.index_scores(gather=True)``: the keys of the
@@ -298,7 +298,7 @@ INDEX_GATHER_MAX_KEYS = 1 << 20
 def index_gather_route(rows, seqs, table_rows, width):
     """The index-score route of one launch from its shape: ``rows`` query rows of ``seqs`` sequences (host shape)
     reading a ``table_rows``-row block table of ``width`` keys per row. Never data: an execution choice only."""
-    from isoexec.ops.attention.dsa_sm100 import index_logits
+    from isoexec.ops.attention.sparse_sm100 import index_logits
     keys = index_logits.gather_capacity(rows, table_rows, width)
     if not (rows > 0 and keys > 0 and 1 <= table_rows <= index_logits.MAX_GATHER_SEQS
             and table_rows * width < (1 << 31)):
@@ -661,7 +661,7 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
                            table=table, pos=ops.Pos(pos=gpos), codes=codes, sf=sf.view(R))
                 extension().paged_index_write(codes, sf, idest, pools.index[key])
         if index in cfg.index_source_layer_ids:
-            from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
+            from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
             def make_ke():          # (pos + 1) // r, 0 on padded rows: one integer launch
                 ke = torch.empty(N, dtype=torch.int32, device=dev)
                 extension().index_bounds(pos.to(torch.int32).contiguous(), batch.valid, r, ke)
@@ -767,7 +767,7 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
     else:
         main, extra = _per_step(batch, ("lists", window_key, ckey if r else r, gen,
                                         None if floor is None else "floor"), make_lists)
-    from isoexec.ops.attention.dsa_sm100.dualrail import dualrail_attn
+    from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
     o, _ = dualrail_attn(q.view(N, H, D), pools.window[index], main, D ** -0.5, sink=module.attn_sink,
                          extra_kv=pools.comp[cfg.source_layer(index, "kv")] if r else None, extra_lists=extra,
                          rope=(cos, sin, pos) if leaf_rope else None, rope_q=leaf_rope, rope_o=rope_o)

@@ -268,8 +268,8 @@ def attention_decode_gen(module, x, cfg, index, cache, *, linear_fn, dequant_fn,
 
 
 def _decode_topk(idx, x, x2d, qr, cfg, index, cache, key, table, pos, ke, linear_fn):
-    from isoexec.ops.attention.dsa_sm100 import indexer as dsa_indexer
-    from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
+    from isoexec.ops.attention.sparse_sm100 import indexer as dsa_indexer
+    from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
     B = x.shape[0]
     ke = ke.contiguous()
     hi = cfg.index_n_heads                     # every rank: all index heads (ops.index_scores)
@@ -392,8 +392,8 @@ def attention_chunk_gen(module, x, cfg, index, cache, *, rows, linear_fn, dequan
                 cpos = torch.arange(c0, c0 + G)
                 cache._write_index_keys(key, slot_h.expand(b, G).reshape(-1), cpos.repeat(b), codes, sf, dev=dev)
         if index in cfg.index_source_layer_ids:
-            from isoexec.ops.attention.dsa_sm100 import indexer as dsa_indexer
-            from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
+            from isoexec.ops.attention.sparse_sm100 import indexer as dsa_indexer
+            from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
             ke = torch.div(pos + 1, r, rounding_mode="floor").to(torch.int32)
             hi = cfg.index_n_heads             # every rank: all index heads (ops.index_scores)
             codes, sf, w = ops.index_queries(module.indexer, x2d, qr, cfg, table, ops.Pos(pos=pos, div=hi),

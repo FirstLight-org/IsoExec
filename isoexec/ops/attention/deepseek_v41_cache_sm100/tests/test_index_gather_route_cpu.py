@@ -5,7 +5,7 @@ only: prefill-shaped launches take the gathered route, decode-shaped ones the pa
 import pytest
 
 from isoexec.ops.attention.deepseek_v41_cache_sm100 import paged
-from isoexec.ops.attention.dsa_sm100 import index_logits as il
+from isoexec.ops.attention.sparse_sm100 import index_logits as il
 
 
 @pytest.mark.parametrize("rows,seqs,table_rows,width,want", [

@@ -31,7 +31,7 @@ def test_backward_provider_and_transport_fallbacks_are_recorded_not_compared(cfg
     recorded = v41_config.program_recorded()
     assert recorded == {"tp_reducer": "tree", "ep_exchange": "mega", "attention_backward": "cudnn_det",
                         "trained_set": "actor"}
-    monkeypatch.setenv("ISOEXEC_DSA_BWD", "isoexec")
+    monkeypatch.setenv("ISOEXEC_SPARSE_BWD", "isoexec")
     monkeypatch.setenv("ISOEXEC_DS_FREEZE_ROUTED_EXPERTS", "1")
     monkeypatch.setenv("ISOEXEC_DS_TP_REDUCER", "all_gather")
     monkeypatch.setenv("ISOEXEC_DS_EP_EXCHANGE", "fixed_order")
