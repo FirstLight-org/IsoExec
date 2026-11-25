@@ -14,7 +14,17 @@ execution. It eliminates training-inference mismatch by introducing:
 
 ## Quickstart
 
-Install `isoexec` and its dependencies:
+Install `isoexec`, then build its managed runtime (Python 3.12, Linux x86_64, CUDA 13):
+
+```sh
+pip install isoexec
+isoexec-setup
+```
+
+`isoexec-setup` builds the managed runtime in `~/.isoexec` (or `--root`): the third-party packages of the SkyRL
+lock pinned in `environments/default.toml`, the CUTLASS headers and the `[overrides]`, installed with `--no-deps`
+because they deliberately violate other packages' metadata (see `[[metadata_conflicts]]`). `pip install isoexec`
+alone installs the package, which bundles the pinned CUTLASS headers, not this runtime. From a checkout, `make setup` does the same:
 
 ```sh
 git clone https://github.com/FirstLight-org/IsoExec.git
@@ -22,18 +32,16 @@ cd IsoExec
 make setup
 ```
 
-`make setup` installs the third-party packages of the SkyRL lock pinned in
-`environments/default.toml`, not SkyRL itself. Install SkyRL into the same environment from a
-checkout that has SkyRL's `isoexec` config field (until it lands upstream, the
-`feat/skyrl-isoexec` branch of `JiangJiaWei1103/SkyRL`). `--no-deps` keeps the packages setup
-installed:
+Neither installs SkyRL itself. Install SkyRL into the same environment from a checkout that has SkyRL's
+`isoexec` config field (until it lands upstream, the `feat/skyrl-isoexec` branch of `JiangJiaWei1103/SkyRL`).
+`--no-deps` keeps the packages setup installed:
 
 ```sh
 git clone -b feat/skyrl-isoexec https://github.com/JiangJiaWei1103/SkyRL.git ../SkyRL
 uv pip install --python ~/.isoexec/venv/bin/python --no-deps -e ../SkyRL -e ../SkyRL/skyrl-gym
 ```
 
-Next, train Qwen3.5-0.8B for one GRPO step on GSM8K using one GPU:
+Next, from the IsoExec checkout, train Qwen3.5-0.8B for one GRPO step on GSM8K using one GPU:
 
 ```sh
 make run-tiny
@@ -131,7 +139,7 @@ With a preinstalled environment, start the API with
 `uv run --isolated --no-project -- /path/to/python -m skyrl.tinker.api ...`; the engine subprocess
 uses that same interpreter.
 
-See [STATUS](./STATUS.md) for what is natively qualified.
+See [STATUS](https://github.com/FirstLight-org/IsoExec/blob/HEAD/STATUS.md) for what is natively qualified.
 
 ## Host Requirements
 
@@ -152,10 +160,10 @@ this check.
 
 ## Documentation
 
-- [Support a new model](./docs/support-new-model.md)
-- [GDN modes: CPR and recurrent](./docs/gdn-modes.md)
-- [Compiler design](./isoexec/compiler/DESIGN.md)
-- [Status and limits](./STATUS.md)
+- [Support a new model](https://github.com/FirstLight-org/IsoExec/blob/HEAD/docs/support-new-model.md)
+- [GDN modes: CPR and recurrent](https://github.com/FirstLight-org/IsoExec/blob/HEAD/docs/gdn-modes.md)
+- [Compiler design](https://github.com/FirstLight-org/IsoExec/blob/HEAD/isoexec/compiler/DESIGN.md)
+- [Status and limits](https://github.com/FirstLight-org/IsoExec/blob/HEAD/STATUS.md)
 
 ## Acknowledgements
 
@@ -186,5 +194,5 @@ IsoExec builds on the work of these projects:
 
 ## License
 
-[Apache-2.0](LICENSE). Third-party code included in this repository keeps its own license; see
-[NOTICE](NOTICE) for the files, copyright holders and full license texts.
+[Apache-2.0](https://github.com/FirstLight-org/IsoExec/blob/HEAD/LICENSE). Third-party code included in this repository keeps its own license; see
+[NOTICE](https://github.com/FirstLight-org/IsoExec/blob/HEAD/NOTICE) for the files, copyright holders and full license texts.

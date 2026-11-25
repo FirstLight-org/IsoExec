@@ -10,17 +10,52 @@ import check_wheel
 from check_wheel import compare_with_source, install_and_import
 
 
+CUTLASS_FILES = {
+    'include/cutlass/version.h': b'#define CUTLASS_MAJOR 4\n',
+    'include/cute/tensor.hpp': b'// tensor\n',
+    'tools/util/include/cutlass/util/device_memory.h': b'// util\n',
+    'LICENSE.txt': b'BSD-3-Clause\n',
+}
+
+
+@pytest.fixture(autouse=True)
+def pinned_cutlass_tree(monkeypatch):
+    # Stands in for the git fetch of the pinned commit: the fixture's files are that commit's tree.
+    monkeypatch.setattr(check_wheel, 'cutlass_blobs', lambda repository, revision: {
+        name: check_wheel.git_blob_id(content) for name, content in CUTLASS_FILES.items()})
+
+
+INSTALLER = b"""from pathlib import Path
+INSTALLED = __package__ == 'isoexec._runtime'
+MANIFEST = Path(__file__).with_name('default.toml')
+def main(argv=None):
+    return 0
+"""
+
+
 def write_wheel(tmp_path, init=b'__version__ = "0.1.0"\n'):
     files = {
         'isoexec/__init__.py': init,
         'isoexec/kernels/example.cu': b'// kernel\n',
+        'isoexec/_runtime/__init__.py': b'',
+        'isoexec/_runtime/setup_env.py': INSTALLER,
+        'isoexec/_runtime/default.toml': b'schema = 1\n[cutlass]\nrepository = "unused"\nrevision = "0123abc"\n',
+        **{f'isoexec/_runtime/cutlass/{name}': content for name, content in CUTLASS_FILES.items()},
+        'isoexec/_runtime/cutlass/.isoexec-revision': b'0123abc\n',
         'isoexec-0.1.0.dist-info/METADATA': b'Metadata-Version: 2.4\nName: isoexec\nVersion: 0.1.0\n',
         'isoexec-0.1.0.dist-info/WHEEL': b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n',
+        'isoexec-0.1.0.dist-info/entry_points.txt':
+            b'[console_scripts]\nisoexec-setup = isoexec._runtime.setup_env:main\n',
     }
     source = tmp_path / 'source'
-    for name in ('isoexec/__init__.py', 'isoexec/kernels/example.cu'):
+    # Source path -> wheel path; setup.py copies the last two over the stand-in.
+    sources = {name: name for name in ('isoexec/__init__.py', 'isoexec/kernels/example.cu',
+                                       'isoexec/_runtime/__init__.py')}
+    sources |= {'isoexec/_runtime/setup_env.py': None, 'scripts/setup_env.py': 'isoexec/_runtime/setup_env.py',
+                'environments/default.toml': 'isoexec/_runtime/default.toml'}
+    for name, packed in sources.items():
         (source / name).parent.mkdir(parents=True, exist_ok=True)
-        (source / name).write_bytes(files[name])
+        (source / name).write_bytes(files[packed] if packed else b'# source-tree stand-in\n')
     record = io.StringIO()
     for name, content in files.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b'=').decode()
@@ -36,7 +71,7 @@ def write_wheel(tmp_path, init=b'__version__ = "0.1.0"\n'):
 
 def test_wheel_matches_source_and_imports(tmp_path):
     wheel, source = write_wheel(tmp_path)
-    assert compare_with_source(wheel, source) == 2
+    assert compare_with_source(wheel, source) == 5
     install_and_import(wheel)
 
 
@@ -45,6 +80,47 @@ def test_source_mismatch_refuses(tmp_path, change, error):
     wheel, source = write_wheel(tmp_path)
     path = source / ('isoexec/kernels/example.cu' if change == 'stale' else 'isoexec/kernels/other.cu')
     path.write_text('// not in the wheel\n')
+    with pytest.raises(ValueError, match=error):
+        compare_with_source(wheel, source)
+
+
+def test_missing_bundled_installer_refuses(tmp_path):
+    wheel, source = write_wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as archive:
+        kept = {name: archive.read(name) for name in archive.namelist() if name != 'isoexec/_runtime/default.toml'}
+    with zipfile.ZipFile(wheel, 'w') as archive:
+        for name, content in kept.items():
+            archive.writestr(name, content)
+    with pytest.raises(ValueError, match='file lists differ'):
+        compare_with_source(wheel, source)
+    with pytest.raises(RuntimeError, match='default.toml'):
+        install_and_import(wheel)
+
+
+@pytest.mark.parametrize('change,error', [
+    ('pin', 'not the manifest pin'), ('license_missing', 'wheel lacks'), ('header_missing', 'wheel lacks'),
+    ('stray', 'unexpected files'), ('header_extra', 'unexpected files'), ('header_changed', 'bytes differ'),
+    ('license_empty', 'bytes differ')])
+def test_bundled_cutlass_must_be_the_pinned_headers(tmp_path, change, error):
+    wheel, source = write_wheel(tmp_path)
+    if change == 'pin':
+        (source / 'environments/default.toml').write_bytes(b'schema = 1\n[cutlass]\nrevision = "fedcba9"\n')
+    else:
+        name, content = {
+            'license_missing': ('LICENSE.txt', None), 'header_missing': ('include/cute/tensor.hpp', None),
+            'stray': ('examples/main.cu', b'// not a header part\n'),
+            'header_extra': ('include/cute/extra.hpp', b'// not in the pinned commit\n'),
+            'header_changed': ('include/cute/tensor.hpp', b'// changed\n'), 'license_empty': ('LICENSE.txt', b''),
+        }[change]
+        with zipfile.ZipFile(wheel) as archive:
+            kept = {entry: archive.read(entry) for entry in archive.namelist()}
+        if content is None:
+            del kept[check_wheel.CUTLASS + name]
+        else:
+            kept[check_wheel.CUTLASS + name] = content
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            for name, content in kept.items():
+                archive.writestr(name, content)
     with pytest.raises(ValueError, match=error):
         compare_with_source(wheel, source)
 

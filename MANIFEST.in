@@ -1,3 +1,4 @@
+include setup.py
 include Makefile
 recursive-include scripts *.py
 recursive-include tests/release *.py

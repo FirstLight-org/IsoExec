@@ -7,8 +7,18 @@ name = "isoexec"
 version = "0.1.0"
 description = "A shared numerical model for exact trainer and rollout execution"
 readme = "README.md"
-requires-python = ">=3.12"
+# The managed runtime (environments/default.toml) is CPython 3.12.13 to match the Ray image.
+requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
+authors = [
+    { name = "Alexander Jiang", email = "zander.jiang@gmail.com" },
+    { name = "Wil Jiang", email = "waynechuang97@gmail.com" },
+    { name = "Han-Ju Chen", email = "eric901201@gmail.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+]
 # torch, triton and nvidia-cutlass-dsl mirror `accepted` in isoexec/checks/dependencies.py, which
 # refuses other versions at run time; change both together.
 dependencies = [
@@ -23,6 +33,14 @@ dependencies = [
     "apache-tvm-ffi>=0.1.5,<0.2",
     "transformers>=5.20.2,<6",
 ]
+
+[project.urls]
+Repository = "https://github.com/FirstLight-org/IsoExec"
+
+[project.scripts]
+# Builds the managed runtime: the pinned SkyRL lock's third-party packages, CUTLASS headers and the
+# --no-deps [overrides].
+isoexec-setup = "isoexec._runtime.setup_env:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "build"]

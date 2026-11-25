@@ -130,6 +130,14 @@ def test_cutlass_pin_matches_the_setup_manifest():
     assert manifest["cutlass"]["revision"] == build_cache.CUTLASS_REVISION
 
 
+def test_bundled_cutlass_is_where_the_wheel_puts_it():
+    # setup.py checks the headers out into isoexec/_runtime/cutlass of a built wheel.
+    package = Path(build_cache.__file__).resolve().parents[1]
+    assert build_cache.CUTLASS_BUNDLED == package / "_runtime" / "cutlass"
+    assert build_cache.CUTLASS_CANDIDATES[:2] == (
+        str(build_cache.CUTLASS_INSTALLED / "include"), str(build_cache.CUTLASS_BUNDLED / "include"))
+
+
 def test_pinned_cutlass_needs_no_environment_when_setup_installed_it(tmp_path, monkeypatch):
     installed = _fake_cutlass(tmp_path / "venv-cutlass", build_cache.CUTLASS_REVISION)
     monkeypatch.delenv("ISOEXEC_MLA_SM90_CUTLASS", raising=False)
