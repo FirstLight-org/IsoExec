@@ -27,15 +27,15 @@ compute_capabilities = ["9.0", "10.0"]
 [skyrl]
 # This lock is the runtime resolution; IsoExec does not resolve its own. A fresh resolution
 # cannot reproduce this package set and only adds chances for torch or triton to drift.
-# SkyRL main at 9cbb1bc0 (2026-11-20, #2784) plus the changes IsoExec enters through: the isoexec
-# config field and its hooks in the trainer, workers and vLLM server, the Tinker engine building
-# IsoExec's backend, and the Tinker engine started on the API's interpreter under uv --no-project.
-# They are on the fork branch below until they land upstream; then pin upstream main again. The
-# uv.lock is main's from 387bce8d (#2779): vLLM 0.33.0, torch 2.14.0, megatron-core
-# 0.21.0+ed9c2c8c1, Megatron-Bridge 0.8.0+7171584b. Setup fetches this commit by SHA.
-repository = "https://github.com/JiangJiaWei1103/SkyRL.git"
-branch = "feat/skyrl-isoexec"
-revision = "d2f629d90bf7fb61da695d440d9549802ce65b1d"
+# Setup fetches this commit by SHA and installs only the third-party packages of its uv.lock
+# (uv sync --no-install-local). SkyRL's own packages (skyrl, skyrl-gym) come from the SkyRL
+# checkout the user runs, installed with --no-deps into the managed venv after setup; that
+# checkout needs SkyRL's isoexec config field and must carry this same uv.lock. SkyRL main at
+# 9cbb1bc0 (2026-11-20, #2784); its uv.lock is main's from 387bce8d (#2779): vLLM 0.33.0, torch
+# 2.14.0, megatron-core 0.21.0+ed9c2c8c1, Megatron-Bridge 0.8.0+7171584b.
+repository = "https://github.com/skyrl-project/SkyRL.git"
+branch = "main"
+revision = "9cbb1bc09f27746207e1b9278d0b032629665b20"
 lock_sha256 = "27f0790391ca92ad0ccd6135db5f825bc3bdc3945748108492c2eec5e96b4018"
 # tinker: SkyRL's Tinker API server (examples/run_tinker_tiny.py).
 extras = ["megatron", "tinker"]

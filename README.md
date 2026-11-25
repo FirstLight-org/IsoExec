@@ -22,6 +22,17 @@ cd IsoExec
 make setup
 ```
 
+`make setup` installs the third-party packages of the SkyRL lock pinned in
+`environments/default.toml`, not SkyRL itself. Install SkyRL into the same environment from a
+checkout that has SkyRL's `isoexec` config field (until it lands upstream, the
+`feat/skyrl-isoexec` branch of `JiangJiaWei1103/SkyRL`). `--no-deps` keeps the packages setup
+installed:
+
+```sh
+git clone -b feat/skyrl-isoexec https://github.com/JiangJiaWei1103/SkyRL.git ../SkyRL
+uv pip install --python ~/.isoexec/venv/bin/python --no-deps -e ../SkyRL -e ../SkyRL/skyrl-gym
+```
+
 Next, train Qwen3.5-0.8B for one GRPO step on GSM8K using one GPU:
 
 ```sh
@@ -54,9 +65,9 @@ make run-tiny
 
 ## SkyRL
 
-IsoExec runs inside [SkyRL](https://github.com/skyrl-project/SkyRL) (the commit pinned in
-`environments/default.toml`) through SkyRL's `isoexec` config field. Add one argument to a SkyRL
-Megatron/vLLM recipe:
+IsoExec runs inside [SkyRL](https://github.com/skyrl-project/SkyRL), installed as in the
+Quickstart, through SkyRL's `isoexec` config field. Add one argument to a SkyRL Megatron/vLLM
+recipe:
 
 ```sh
 python -m skyrl.train.entrypoints.main_base \
