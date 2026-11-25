@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Install the published IsoExec wheel, or editable IsoExec for development, in a managed root.
 
-The root's venv holds the pinned SkyRL lock, the pinned CUTLASS headers
-and the overrides in environments/default.toml. Rerunning setup, or --check-only, checks an existing root instead of
-installing again. --wheel selects a local candidate instead of the published wheel. A nonempty
-root without a receipt is refused, never deleted.
+The root's venv holds the third-party packages of the pinned SkyRL lock, the pinned CUTLASS headers
+and the overrides in environments/default.toml. SkyRL's own packages are not installed here: the user
+installs them from their SkyRL checkout with --no-deps, and the receipt does not record them.
+Rerunning setup, or --check-only, checks an existing root instead of installing again. --wheel
+selects a local candidate instead of the published wheel. A nonempty root without a receipt is
+refused, never deleted.
 """
 from __future__ import annotations
 
@@ -29,13 +31,16 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / 'environments/default.toml'
 RELEASE_API = 'https://api.github.com/repos/zanderjiang/IsoExec/releases/tags'
+#: SkyRL's own (local path) distributions in its lock. Setup skips them and the user installs them from
+#: the SkyRL checkout they run, so the receipt leaves them out.
+SKYRL_DISTRIBUTIONS = frozenset({'skyrl', 'skyrl-gym', 'skycap'})
 
 # Runs in the managed venv: the runtime's own dependency check, then, with a wheel, the installed
 # package must be exactly the wheel's files.
 PROBE = r'''
 import importlib.metadata as metadata, platform, sys, zipfile
 from pathlib import Path
-import torch, megatron.core, vllm, skyrl, isoexec
+import torch, megatron.core, vllm, isoexec
 from isoexec.checks import dependencies
 dependencies.check(host='setup')
 if sys.argv[1]:
@@ -211,7 +216,8 @@ def download_release_wheel(directory: Path) -> Path:
 
 
 def skyrl_checkout(manifest: dict, path: Path, env: dict, *, clone: bool) -> Path:
-    """The clean SkyRL checkout at the pinned revision and lock."""
+    """The clean SkyRL checkout at the pinned revision and lock, from which setup installs the lock's
+    third-party packages."""
     spec = manifest['skyrl']
     if clone and not (path / '.git').is_dir():
         path.mkdir(parents=True, exist_ok=True)
@@ -273,7 +279,10 @@ def install(manifest: dict, skyrl: Path, root: Path, env: dict, wheel: Path | No
     run(['uv', 'venv', '--no-config', '-q', '--python', manifest['host']['python'], root / 'venv'], env=env)
     cutlass_headers(manifest, root / 'venv', env, fetch=True)
     extras = [flag for extra in manifest['skyrl']['extras'] for flag in ('--extra', extra)]
-    run(['uv', 'sync', '--project', skyrl, '--frozen', '--inexact', *extras], env=env, cwd=skyrl)
+    # --no-install-local skips SkyRL's own path packages (SKYRL_DISTRIBUTIONS); their third-party
+    # dependencies are still installed.
+    run(['uv', 'sync', '--project', skyrl, '--frozen', '--inexact', '--no-install-local', *extras],
+        env=env, cwd=skyrl)
     run(pip('install', python, '--no-deps', *(['-e', REPO] if wheel is None else [wheel])), env=env)
     install_overrides(manifest, root, python, env)
     if wheel is None:
@@ -318,17 +327,26 @@ def install_overrides(manifest: dict, root: Path, python: Path, env: dict) -> No
             raise SetupError(f'{intact}: files overwritten by another wheel after the overrides: {stale}')
 
 
+def third_party(freeze: list[str]) -> list[str]:
+    """``uv pip freeze --exclude-editable`` lines without SKYRL_DISTRIBUTIONS installed non-editable."""
+    def name(line: str) -> str:
+        return re.sub(r'[-_.]+', '-', re.split(r'\s*(?:==|@)', line, maxsplit=1)[0].strip()).lower()
+    return [line for line in freeze if name(line) not in SKYRL_DISTRIBUTIONS]
+
+
 def verify(manifest: dict, root: Path, env: dict, wheel: Path | None) -> list[str]:
     """Run isoexec.checks.dependencies.check() in the managed venv and return its package list.
 
-    That check, not this script, holds the accepted versions; it reads the libnccl torch loads.
+    That check, not this script, holds the accepted versions; it reads the libnccl torch loads. The
+    list leaves out editable installs and SkyRL's own packages, so installing SkyRL from a checkout
+    after setup does not invalidate the receipt.
     """
     python = root / 'venv/bin/python'
     cutlass_headers(manifest, root / 'venv', env, fetch=False)
     found = run([python, '-I', '-c', PROBE, wheel or ''], env=env, cwd=root, capture=True).splitlines()[-1]
     if found != manifest['host']['python']:
         raise SetupError(f"venv Python {found} != {manifest['host']['python']}")
-    return run(pip('freeze', python), env=env, capture=True).splitlines()
+    return third_party(run(pip('freeze', python, '--exclude-editable'), env=env, capture=True).splitlines())
 
 
 def check_metadata_conflicts(manifest: dict, root: Path, env: dict) -> None:
@@ -353,8 +371,6 @@ def setup(args, manifest: dict) -> None:
         if not args.check_only:
             different = built['dev'] != args.dev
             different |= wheel is not None and built['wheel_sha256'] != sha256(wheel)
-            if args.skyrl_source:
-                different |= built['skyrl'] != str(args.skyrl_source.expanduser().resolve())
             if different:
                 raise SetupError(f'{root} holds a different install; choose a new ISOEXEC_ROOT')
         try:
@@ -386,10 +402,7 @@ def setup(args, manifest: dict) -> None:
             wheel = Path(shutil.copy(wheel, root))
     elif wheel:
         wheel = Path(shutil.copy(wheel, root))
-    if args.skyrl_source:
-        skyrl = skyrl_checkout(manifest, args.skyrl_source.expanduser().resolve(), env, clone=False)
-    else:
-        skyrl = skyrl_checkout(manifest, root / 'skyrl', env, clone=True)
+    skyrl = skyrl_checkout(manifest, root / 'skyrl', env, clone=True)
     install(manifest, skyrl, root, env, wheel)
     packages = verify(manifest, root, env, wheel)
     if args.dev:
@@ -401,12 +414,13 @@ def setup(args, manifest: dict) -> None:
         'host': facts, 'packages': packages,
     }, indent=2) + '\n')
     log(f'ENV_PASS: {root}; numerical qualification not run')
+    log(f'next: install SkyRL from your checkout: uv pip install --python {root / "venv/bin/python"} '
+        f'--no-deps -e <SkyRL checkout> -e <SkyRL checkout>/skyrl-gym')
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--skyrl-source', type=Path, help='existing SkyRL checkout instead of cloning into the root')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--wheel', type=Path, help='IsoExec wheel to install')
     mode.add_argument('--dev', action='store_true', help='install editable IsoExec and the dev tools')

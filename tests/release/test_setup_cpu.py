@@ -45,6 +45,13 @@ def test_failed_check_removes_the_receipt(tmp_path, manifest):
     assert not (tmp_path / 'root/receipt.json').exists()
 
 
+def test_receipt_packages_leave_out_skyrls_own_distributions():
+    freeze = ['skyrl==0.4.0', 'skyrl_gym @ file:///src/SkyRL/skyrl-gym', 'SkyCap==0.1.0', 'torch==2.14.0',
+              'skyrl-agent==0.1.0', 'transformers @ https://example.invalid/transformers-5.22.0.whl']
+    assert setup_env.third_party(freeze) == [
+        'torch==2.14.0', 'skyrl-agent==0.1.0', 'transformers @ https://example.invalid/transformers-5.22.0.whl']
+
+
 def test_only_conflicts_listed_in_the_manifest_pass(manifest):
     def dist(name, version, *requires):
         return SimpleNamespace(metadata={'Name': name}, version=version, requires=list(requires))

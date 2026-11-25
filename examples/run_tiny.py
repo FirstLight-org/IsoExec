@@ -90,8 +90,20 @@ def overrides(model: Path, data: Path, run_dir: Path) -> dict:
     }
 
 
+def skyrl_source(python: Path, env: dict) -> Path:
+    """The SkyRL checkout installed editable into the managed venv (setup leaves SkyRL to the user)."""
+    probe = 'import pathlib, skyrl; print(pathlib.Path(skyrl.__file__).resolve().parents[1])'
+    found = subprocess.run([python, '-I', '-c', probe], env=env, capture_output=True, text=True)
+    checkout = Path(found.stdout.strip()) if found.returncode == 0 else None
+    if checkout is None or not (checkout / 'pyproject.toml').is_file():
+        sys.exit(f'no editable SkyRL in {python}; install one from your SkyRL checkout: uv pip install '
+                 f'--python {python} --no-deps -e <SkyRL checkout> -e <SkyRL checkout>/skyrl-gym')
+    return checkout
+
+
 def runtime(root: Path) -> tuple[dict, Path, Path]:
-    """The environment, interpreter and SkyRL checkout that `make setup` created under ``root``."""
+    """The environment and interpreter that `make setup` created under ``root``, and the SkyRL checkout
+    installed into it."""
     if not (root / 'receipt.json').is_file():
         sys.exit(f'{root / "receipt.json"} is missing; run make setup first')
     with setup_env.MANIFEST.open('rb') as stream:
@@ -104,7 +116,8 @@ def runtime(root: Path) -> tuple[dict, Path, Path]:
         # not this private one.
         for key in [key for key in env if key.startswith('RAY_') and key not in ('RAY_ADDRESS', 'RAY_ENABLE_UV_RUN_RUNTIME_ENV')]:
             env.pop(key)
-    return env, root / 'venv/bin/python', root / 'skyrl'
+    python = root / 'venv/bin/python'
+    return env, python, skyrl_source(python, env)
 
 
 def download_model(python: Path, env: dict) -> Path:
