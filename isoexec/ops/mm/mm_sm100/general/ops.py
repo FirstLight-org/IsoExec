@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
 from isoexec.ops import schedule_policy
@@ -10,15 +12,24 @@ from ..segments import REDUCER_BLOCK, REDUCER_SHORTEST
 from ._extension import extension
 
 RECIPE_CHAIN = "sm100_tcgen05_chain_v1"
-#: v2: the segment count of an MN-major operand is the schedule policy's (one segment per shard, as
-#: every tensor-core sum). v1 split K >= 16384 into up to 16 segments of at least 8192 terms by a rule
-#: of this file; that rule and its two constants are removed. The kernel's tree over segments stays
-#: compiled in csrc/gen.cu and no caller passes a split above 1.
-RECIPE_KSEGTREE = "sm100_tcgen05_ksegtree_v2"
+RECIPE_KSEGTREE = "sm100_tcgen05_ksegtree_v1"
 #: deployment constant for the tile choice only (ownership; the bits never read it)
 _SLOTS = 148
-#: The reducer (block 16, no published shortest segment) is ``mm_sm100/segments.py``'s, imported above:
-#: one place for the operator. This kernel's K atom of 64 is its dispatch granularity, not a schedule input.
+# ---- the K schedule: rule 3 of ``isoexec/ops/schedule_policy.py`` on the constants this reducer publishes.
+#: The reducer's block for this kernel: one K atom of 64 (four ``tcgen05.mma`` of 16), the unit its segments
+#: are cut in (``REDUCER_BLOCK`` of ``mm_sm100/segments.py`` divides it).
+SEGMENT_BLOCK = 64
+assert SEGMENT_BLOCK % REDUCER_BLOCK == 0 and REDUCER_SHORTEST is None
+#: Published shortest segment L_r and cap of the MN-major step program (an operand walked across its rows: the
+#: trainer's dgrad / wgrad). Source: this kernel's own rule ("segments of at least 8192 terms, at most 16"),
+#: and policy_validation/port/dense/results/bench_general_*.json: with ONE segment instead, reductions of
+#: 16384-131072 terms measured 1.05-1.13 of the time at the wide shapes and 2-16 times the error against
+#: float64. Occupancy: one worker per segment of one output (the split multiplies the launch's work items), so
+#: p = SMs, and the cap binds first. With these constants rule 3 returns exactly the segment count and the
+#: ceil-sized segments this kernel has always run; nothing here is keyed on a weight or a table.
+SEGMENT_MIN_K = 8192        # L_r
+MAX_SPLIT = 16              # cap
+SEGMENT_OCCUPANCY = 1
 
 __all__ = ["RECIPE_CHAIN", "RECIPE_KSEGTREE", "bmm", "mm", "plan", "recipe_for", "split_for", "supported"]
 
@@ -71,9 +82,20 @@ def supported(a: torch.Tensor, b: torch.Tensor) -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=None)
+def schedule(K: int, a_mn: bool, b_mn: bool) -> schedule_policy.Segments:
+    """The policy's schedule of the K reduction. K-major x K-major operands run the chain step program, whose
+    reducer publishes nothing: one segment. An MN-major operand runs the step program that publishes
+    ``SEGMENT_MIN_K`` / ``MAX_SPLIT``: G = pow2floor(min(p, cap, K // L)), S = 64 ceil(K / (64 G))."""
+    if not (a_mn or b_mn):
+        return schedule_policy.reduce(K, b=SEGMENT_BLOCK, L=REDUCER_SHORTEST)
+    return schedule_policy.reduce(K, b=SEGMENT_BLOCK, L=SEGMENT_MIN_K,
+                                  p=schedule_policy.workers(_SLOTS, SEGMENT_OCCUPANCY), cap=MAX_SPLIT)
+
+
 def split_for(K: int, a_mn: bool, b_mn: bool) -> int:
-    """The segment count of the K reduction: the schedule policy's G (rule 3) for every layout."""
-    return schedule_policy.reduce(K, b=REDUCER_BLOCK, L=REDUCER_SHORTEST).G
+    """The segment count of the K reduction: the schedule policy's G (cached per (K, layout))."""
+    return schedule(K, bool(a_mn), bool(b_mn)).G
 
 
 def recipe_for(a: torch.Tensor, b: torch.Tensor) -> str:

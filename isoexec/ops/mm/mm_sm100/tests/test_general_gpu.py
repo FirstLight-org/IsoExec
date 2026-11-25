@@ -68,7 +68,7 @@ def test_accuracy_and_ownership_invariance(name):
 
 
 @pytest.mark.parametrize("name", list(CASES))
-def test_the_k_reduction_is_one_whole_k_chain_in_every_layout(name):
+def test_the_split_is_the_declared_tree_of_segment_chains(name):
     from isoexec.ops.mm.mm_sm100.general import ops as G
 
     a, b = CASES[name]()
@@ -76,14 +76,22 @@ def test_the_k_reduction_is_one_whole_k_chain_in_every_layout(name):
     K = a.shape[-1]
     S = G.split_for(K, a_mn, b_mn)
     y = G.mm(a, b) if a.dim() == 2 else G.bmm(a, b)
-    assert S == 1, "the schedule policy gives every tensor-core K reduction one segment"
-    # The declared program: ONE ascending chain over the whole K, whatever the operand layout. The K-major
-    # copy runs the chain kernel's own layout; an MN-major operand must give the same FP32 root.
-    assert _eq(y, _chain_f32(G, a, b).to(torch.bfloat16)), "one segment: the whole-K chain"
-    if a.dim() == 2 and a.shape[0] >= 64 and K < 16384:
-        # cuBLAS runs an unsplit chain too at these K. At K >= 16384 (the two "split" cases, which the
-        # removed K-split rule cut into 2 segments) cuBLAS's own program is not one chain and is not compared.
-        assert _eq(y, a @ b), "an unsplit chain is cuBLAS's unsplit chain"
+    if S == 1:
+        if a.dim() == 2 and a.shape[0] >= 64:
+            assert _eq(y, a @ b), "an unsplit chain is cuBLAS's unsplit chain"
+        return
+    seg = -(-(K // 64) // S) * 64
+    parts = []
+    for s in range(S):
+        k0, k1 = s * seg, min(K, (s + 1) * seg)
+        aa, bb = a[..., k0:k1], b[..., k0:k1, :]
+        parts.append(_chain_f32(G, aa, bb))
+    width = 1
+    while width < S:
+        for i in range(0, S - width, 2 * width):
+            parts[i] = parts[i] + parts[i + width]
+        width *= 2
+    assert _eq(y, parts[0].to(torch.bfloat16))
 
 
 def _chain_f32(G, a, b):

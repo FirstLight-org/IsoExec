@@ -488,3 +488,24 @@ def test_installed_provider_refuses_unrecorded_recipes(monkeypatch, supported, h
     assert integration.install_mm_sm100()
     with pytest.raises(integration.mm_ops.UnsupportedShape, match="declined"):
         integration.V.matmul_persistent(object(), object(), bias=object() if has_bias else None)
+
+
+def test_the_general_kernels_k_schedule_is_the_schedule_policy():
+    """``mm_sm100/general`` (the backward layouts): its segment count and length are rule 3 on the constants the
+    kernel publishes (L = 8192, cap 16 for an MN-major operand; nothing for K-major x K-major), and that is the
+    schedule the kernel has always run."""
+    from isoexec.ops import schedule_policy as P
+    from isoexec.ops.mm.mm_sm100.general import ops as G
+
+    assert (G.SEGMENT_BLOCK, G.SEGMENT_MIN_K, G.MAX_SPLIT, G.SEGMENT_OCCUPANCY) == (64, 8192, 16, 1)
+    for K in (64, 4608, 5120, 8192, 16320, 16384, 32768, 65536, 131072, 262144, 100032):
+        assert G.schedule(K, False, False) == P.reduce(K, b=64) and G.split_for(K, False, False) == 1
+        want = P.reduce(K, b=64, L=8192, p=P.workers(148, 1), cap=16)
+        for layout in ((True, False), (False, True), (True, True)):
+            assert G.schedule(K, *layout) == want and G.split_for(K, *layout) == want.G
+        # the rule the kernel ran before the policy: largest power of two <= 16 with K / S >= 8192, ceil-sized
+        s = 1
+        while s * 2 <= 16 and K // (s * 2) >= 8192:
+            s *= 2
+        assert (want.G, want.S) == (s, -(-(K // 64) // s) * 64), K
+        assert G.plan(256, 512, K, 1, True, False)[0] == want.G
