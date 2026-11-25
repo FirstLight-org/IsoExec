@@ -60,13 +60,14 @@ struct Part {
 };
 
 // One segment: columns ascending, fp32. m = fmaxf chain from -inf; s (and a) = add.rn chains from +0.
-template <class T, bool TEMP, bool ENT>
+// FULL: the segment has all SEG columns (every segment but possibly a shard's last): no per-strip test.
+template <class T, bool TEMP, bool ENT, bool FULL>
 __device__ __forceinline__ Part segment(const pack8<T> *__restrict__ xs, int nstrip, float t) {
   float v[SEG];
   float m = NINF;
 #pragma unroll
   for (int k = 0; k < SEG / STRIP; ++k) {
-    if (k < nstrip) {
+    if (FULL || k < nstrip) {
       pack8<T> p = xs[k];
 #pragma unroll
       for (int j = 0; j < STRIP; ++j) {
@@ -79,7 +80,7 @@ __device__ __forceinline__ Part segment(const pack8<T> *__restrict__ xs, int nst
   float s = 0.f, a = 0.f;
 #pragma unroll
   for (int k = 0; k < SEG / STRIP; ++k) {
-    if (k < nstrip) {
+    if (FULL || k < nstrip) {
 #pragma unroll
       for (int j = 0; j < STRIP; ++j) {
         float d = __fsub_rn(v[k * STRIP + j], F);
@@ -136,7 +137,8 @@ __device__ __forceinline__ void leaf_state_body(const T *__restrict__ x, int64_t
     int top = 0;
     for (int l = 0; l < nl; ++l) {
       const int q = (l0 + l) * per;
-      Part cur = segment<T, TEMP, ENT>(xs + q, min(per, strips - q), t);
+      Part cur = q + per <= strips ? segment<T, TEMP, ENT, true>(xs + q, per, t)
+                                   : segment<T, TEMP, ENT, false>(xs + q, strips - q, t);
       for (int k = l; k & 1; k >>= 1) { // the left sibling is on the stack: merge(left, this)
         --top;
         merge<ENT>(st[top], cur);
