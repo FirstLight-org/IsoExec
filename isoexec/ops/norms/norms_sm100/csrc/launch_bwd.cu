@@ -74,7 +74,9 @@ fold_dw_tree(const float *__restrict__ partials, float *__restrict__ out, int64_
     out[int64_t(blockIdx.y) * width + col0 + col] = tree_present<4>(st + col, 64 * COLS, (n + 63) / 64);
 }
 
-constexpr int64_t kPerRowMax = 256; // rows; measured (policy_validation/port/seq/logs/rms_release_bwd_plans.log)
+// Largest row count at which one row per thread group is the faster plan, by threads per row: measured
+// (policy_validation/port/seq/logs/rms_release_bwd_plans.log).
+constexpr int64_t kPerRowMaxWide = 256, kPerRowMaxNarrow = 1024;
 
 struct RmsBwdArgs {
   const __nv_bfloat16 *dy, *x, *dres;
@@ -151,11 +153,11 @@ int row_segment() { return ROW_SEG; }
 
 // Rows per thread group (execution only; see bwd.cuh): single rows while the row count is small enough that one
 // row per group keeps more CTAs in flight than a segment per group, else whole segments.
-int row_group(int64_t rows, int requested) {
+int row_group(int64_t rows, int64_t width, int requested) {
   if (requested == 1 || requested == ROW_SEG)
     return requested;
   TORCH_CHECK(requested == 0, "norms_sm100: row_group must be 0 (plan), 1 or ", ROW_SEG);
-  return rows <= kPerRowMax ? 1 : ROW_SEG;
+  return rows <= (bwd_lanes(width).L > 32 ? kPerRowMaxWide : kPerRowMaxNarrow) ? 1 : ROW_SEG;
 }
 
 int64_t row_units(int64_t rows, int rpg) { return (rows + rpg - 1) / rpg; }

@@ -102,7 +102,7 @@ std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const 
   Tensor dw;
   if (!m)
     return {dx.view(x.sizes()), w.defined() ? at::zeros_like(w) : Tensor()};
-  const int rpg = row_group(m, row_plan);
+  const int rpg = row_group(m, n, row_plan);
   Tensor dwp = at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat));
   launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode, rpg);
   if (w.defined()) {
@@ -143,7 +143,7 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   int64_t m = x2.size(0);
   GatedGrads g{at::empty({m, n}, x2.options()), at::empty({m, n}, x2.options()), Tensor()};
   if (m) {
-    const int rpg = row_group(m, row_plan);
+    const int rpg = row_group(m, n, row_plan);
     Tensor dwp = w.defined() ? at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat)) : Tensor();
     launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode, rpg);
     if (w.defined()) {

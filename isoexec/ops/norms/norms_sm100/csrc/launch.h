@@ -32,7 +32,7 @@ void launch_dw_fold(const at::Tensor &partials, const at::Tensor &dw, int rpg);
 int hidden_segment();
 int row_segment();
 // Execution plan of the weight gradient: rows per thread group (1 or the segment length) and the partial count.
-int row_group(int64_t rows, int requested);
+int row_group(int64_t rows, int64_t width, int requested);
 int64_t row_units(int64_t rows, int rpg);
 
 } // namespace norms_sm100
