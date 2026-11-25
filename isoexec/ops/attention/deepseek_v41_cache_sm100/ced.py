@@ -558,6 +558,7 @@ def query_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequant_f
         # the floor-free key: shared with the layers after b only when the batch carries no window floor
         main, extra = paged._per_step(batch, ("lists", window_key, ckey, gen, None), make_lists)
     o, _ = dualrail_attn(q.view(R, H, D), pools.window[index], main, D ** -0.5, sink=module.attn_sink,
-                         extra_kv=pools.comp[key], extra_lists=extra)
+                         extra_kv=pools.comp[key], extra_lists=extra,
+                         extra_topk_length=paged.selected_lengths(batch, pos, 1, cfg.index_topk))
     return ops.output_projection(module, o, cfg, table, ops.Pos(pos=pos, div=H), 1, R, linear_fn, dequant_fn,
                                  tp=tp).view(R, -1)

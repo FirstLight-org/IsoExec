@@ -184,6 +184,30 @@ def floor_window_lists(lists, pos, floor):
     return torch.where(j < n.unsqueeze(1), kept, -1).to(torch.int32).contiguous()
 
 
+#: Schedule port (design 7.1, rule 1: blocks of 64 list positions, one continued chain; a block that holds only empty
+#: positions is skipped by a step program). The selected part of a row's list holds its ``min(k, ke)`` selected keys
+#: first (``ke``: the row's visible compressed keys) and empty positions after; the leaf is told that length and does
+#: not run the blocks past it. Same bits as running every block (sparse_sm100/tests/test_domains_gpu.py; the paged ==
+#: contiguous relations of tests/test_paged_gpu.py compare this path with the contiguous one, which runs every block);
+#: False runs every block.
+TRIM_SELECTED = True
+
+
+def selected_lengths(batch, pos, ratio, k):
+    """int32 ``[rows]``: an upper bound, exact without a candidate filter, of the occupied prefix of each row's
+    selected list -- ``min(k, ke)``. One clamp per step and ratio (``ke`` is the step's index bound, shared with the
+    index scores and the top-k); every layer of the step reads it. None when ``TRIM_SELECTED`` is off."""
+    if not TRIM_SELECTED:
+        return None
+
+    def make_ke():
+        ke = torch.empty(pos.shape[0], dtype=torch.int32, device=pos.device)
+        extension().index_bounds(pos.to(torch.int32).contiguous(), batch.valid, ratio, ke)
+        return ke
+    ke = _per_step(batch, ("ke", ratio), make_ke)
+    return _per_step(batch, ("selected_len", ratio, k), lambda: ke.clamp(max=k).contiguous())
+
+
 def _per_step(batch, key, make):
     """Step metadata shared by every layer of one step (block-table rows, attention lists, index bounds):
     computed by the first layer that needs it, then read by the others (``batch.step`` is cleared per
@@ -770,6 +794,7 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
     from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
     o, _ = dualrail_attn(q.view(N, H, D), pools.window[index], main, D ** -0.5, sink=module.attn_sink,
                          extra_kv=pools.comp[cfg.source_layer(index, "kv")] if r else None, extra_lists=extra,
+                         extra_topk_length=selected_lengths(batch, pos, r, cfg.index_topk) if r else None,
                          rope=(cos, sin, pos) if leaf_rope else None, rope_q=leaf_rope, rope_o=rope_o)
     return ops.output_projection(module, o, cfg, table, ops.Pos(pos=pos, div=H), 1, N, linear_fn, dequant_fn,
                                  tp=tp, o_roped=rope_o).view(N, -1)
