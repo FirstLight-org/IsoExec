@@ -13,6 +13,7 @@ from vllm.distributed.weight_transfer.base import ParamMeta, WeightSource
 
 from isoexec.compiler.realization.tp import gather_weight, global_shape
 from isoexec.sync.pp_gather import broadcast_stage_stream, stage_schedule
+from isoexec.sync import identity
 from isoexec.sync.weights import gather_expert_stack
 from isoexec.nn import LMHead
 
@@ -22,7 +23,7 @@ class IsoExecWeightSource(WeightSource):
 
     ``metadata`` and ``iter_full()`` (vLLM 0.33's WeightSource contract) use the same logical names, order, dtypes and shapes.
     Tied parameters are emitted once. Every model-parallel rank must iterate in
-    the same order. Each EP-held expert role is streamed as every global expert, in order.
+    the same order. A model that states a program identity streams it first (``isoexec.sync.identity``). Each EP-held expert role is streamed as every global expert, in order.
     The caller must finish optimizer writes before transfer begins.
     """
 
@@ -43,6 +44,10 @@ class IsoExecWeightSource(WeightSource):
         self._head_name = next((str(node.target) for node in self._module.graph.nodes
                                 if node.op == "call_module"
                                 and isinstance(self._module.get_submodule(str(node.target)), LMHead)), None)
+        # The forward program's identity rides first in the stream (from the first PP stage); the engine
+        # compares it at every update (isoexec.sync.identity).
+        payload = identity.stage_identity(self._module) if self._pp_group.rank() == 0 else None
+        self._identity = None if payload is None else identity.encode(payload)
 
     def _parameters(self) -> Iterator[tuple[str, str, torch.nn.Parameter]]:
         prefix = self._head_name + "." if self._head_name is not None else None
@@ -59,16 +64,19 @@ class IsoExecWeightSource(WeightSource):
         ``(MoE path, role, global expert)`` row of the stack one gather over the EP group builds."""
         tp_size = self._tp_group.size()
         entries: list = []
+        stamp = getattr(self, "_identity", None)
+        if stamp is not None:
+            entries.append((identity.NAME, stamp.dtype, tuple(stamp.shape), stamp))
         roles = set()
         for name, logical_name, parameter in self._parameters():
-            # Megatron marks EP-held experts with allreduce=False.
-            if getattr(parameter, "allreduce", True):
+            # Megatron marks EP-held experts with allreduce=False; EP-summed replicas (the V4.1 router and shared
+            # expert under token-disjoint EP) carry it too but are whole on every rank (``ep_replicated``).
+            if getattr(parameter, "allreduce", True) or getattr(parameter, "ep_replicated", False):
                 entries.append((name, parameter.dtype,
                                 global_shape(self._module, logical_name, parameter, tp_size=tp_size, side="trainer"),
                                 logical_name))
                 continue
-            expert, _, role = logical_name.rpartition(".")
-            moe_path = expert.rpartition(".")[0].rpartition(".")[0]
+            moe_path, role = _expert_role(logical_name)
             if (moe_path, role) in roles:
                 continue
             roles.add((moe_path, role))
@@ -107,6 +115,9 @@ class IsoExecWeightSource(WeightSource):
         def local_stream() -> Iterator[tuple[str, torch.Tensor]]:
             stack, stack_role = None, None
             for name, _, _, source in entries:
+                if isinstance(source, torch.Tensor):
+                    yield name, source.to(device)
+                    continue
                 if isinstance(source, str):
                     parameter = self._module.get_parameter(source).detach()
                     yield name, gather_weight(self._module, source, parameter, tp_group=self._tp_group, side="trainer")
@@ -114,7 +125,7 @@ class IsoExecWeightSource(WeightSource):
                 moe_path, role, index = source
                 if stack_role != (moe_path, role):
                     # Each EP rank holds a contiguous ascending expert range, so one gather orders them globally.
-                    held = self._module.get_submodule(moe_path).held_experts()
+                    held = _held_experts(self._module.get_submodule(moe_path))
                     stack = gather_expert_stack([expert.get_parameter(role).detach() for expert in held],
                                                 self._groups.ep)
                     stack_role = (moe_path, role)
@@ -126,6 +137,26 @@ class IsoExecWeightSource(WeightSource):
         schedule = stage_schedule(self._stage_metadata(entries))
         for _, name, tensor in broadcast_stage_stream(schedule, local_stream(), group=self._pp_group, device=device):
             yield name, tensor
+
+
+def _expert_role(logical_name: str) -> tuple[str, str]:
+    """``(MoE path, role)`` of an EP-held expert tensor ``<moe>.experts.<e>.<role>``; the role may be a
+    nested name (``w1.weight``)."""
+    head, sep, tail = logical_name.rpartition(".experts.")
+    index, _, role = tail.partition(".")
+    if not sep or not index.isdigit() or not role:
+        raise ValueError(f"{logical_name}: an EP-held tensor must be named <moe>.experts.<index>.<role>")
+    return head, role
+
+
+def _held_experts(moe: torch.nn.Module) -> list[torch.nn.Module]:
+    """This rank's held expert modules in ascending global expert order. ``held_experts()`` returns the
+    modules (``nn.MoE``) or their global ids (a package's own holders, keyed by id under ``experts``)."""
+    held = list(moe.held_experts())
+    if held and isinstance(held[0], int):
+        experts = moe.get_submodule("experts")
+        return [experts.get_submodule(str(index)) for index in held]
+    return held
 
 
 __all__ = ["IsoExecWeightSource"]

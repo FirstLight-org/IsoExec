@@ -24,4 +24,7 @@ ROUTE_BOUNDARY_OUT_DTYPE = "fp32"
 __all__ = ("COMBINE_ACCUM", "COMBINE_ORDER", "IMPLS", "ROUTER_DTYPE", "ROUTE_BOUNDARY_OUT_DTYPE")
 
 
-__getattr__ = family_impls(__name__, "moe")
+from isoexec.ops.moe.deepseek_v41_sm100.spec import IMPLS as _DEEPSEEK_V41_IMPLS  # noqa: E402
+from isoexec.ops.moe.router_sm100.spec import IMPLS as _ROUTER_IMPLS  # noqa: E402
+
+__getattr__ = family_impls(__name__, "moe", own=_ROUTER_IMPLS + _DEEPSEEK_V41_IMPLS)

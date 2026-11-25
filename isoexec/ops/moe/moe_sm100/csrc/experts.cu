@@ -922,9 +922,13 @@ void fc2_cuda(const at::Tensor &h, const at::Tensor &down, const at::Tensor &til
   const c10::cuda::CUDAGuard guard(h.device());
   auto stream = at::cuda::getCurrentCUDAStream();
   const int64_t n = out.size(1), k = h.size(1), seg = k / leaves;
-  TORCH_CHECK(seg % kAtomK == 0, "sm100 MoE FC2 needs every K segment divisible by 64");
+  // One leaf may end inside a K atom: the TMA maps carry the true K extent, so the tail of the last
+  // atom is zero-filled for both operands (exact zero products at the end of the one chain: the bits
+  // of an explicitly zero-padded K). Several leaves keep whole atoms per leaf (the caller pads them).
+  TORCH_CHECK(leaves == 1 ? k % 8 == 0 : seg % kAtomK == 0,
+              "sm100 MoE FC2 needs every K segment divisible by 64 (one leaf: K divisible by 8)");
   TORCH_CHECK(n % 4 == 0, "sm100 MoE FC2 needs a hidden size divisible by 4");
-  const int64_t atoms = seg / kAtomK;
+  const int64_t atoms = (seg + kAtomK - 1) / kAtomK;
   const auto amaps = encode_a(h);
   const bool fc2_pack = 1 != 0;
 #define FC2_CASE(T, L, BN, ST)                                                          \

@@ -210,3 +210,24 @@ def test_region_outputs_copied_only_for_possible_in_place_users(external):
     y = module(x)
     y.sum().backward()
     assert torch.equal(x.grad, torch.full((4,), 2.0)) or external == "module"
+
+
+@pytest.mark.usefixtures("cpu_checkpoint_rng")
+def test_recompute_uses_each_microbatch_rollout_requests():
+    from isoexec.runtimes.megatron._recompute import _layer_forward
+    from isoexec.schema import rollout
+
+    def scale_by_prompt(x):
+        return (x * rollout.current().requests[0][0][0],)
+
+    region = _layer_forward(scale_by_prompt)
+    xs = [torch.ones(1, requires_grad=True) for _ in range(2)]
+    outputs = []
+    for x, prompt in zip(xs, (2, 5), strict=True):
+        with rollout.carry(rollout.RolloutRequests.single([prompt], [1], [0, prompt + 1])):
+            outputs.append(region(x)[0])
+
+    with rollout.carry(rollout.RolloutRequests.single([9], [1], [0, 10])) as other:
+        sum(outputs).sum().backward()
+        assert rollout.current() is other
+    assert [x.grad.item() for x in xs] == [2, 5]

@@ -254,3 +254,85 @@ def test_tp2_ep2_moe_binding_holds_whole_experts(monkeypatch, rank):
     assert held == [2 * rank, 2 * rank + 1]
     assert target.layer.slots.resolved()["combine"].impl in combine_twin_members()
     assert target.layer.slots.resolved()["expert_mlp"].inputs["dispatch_shard"] == 2
+
+
+def test_placement_bound_components_bind_themselves_on_the_trainer(tp_group):
+    from isoexec.runtimes.vllm.tests.test_definition_cpu import _Bound
+    from isoexec.schema import Axis, Placement
+
+    target = _graph_module(_Bound(), "x")
+    with pytest.raises(OpResolutionError, match="requires a placement"):
+        bind_trainer_ops(target, tp_group=tp_group)
+    one = Axis(1, 0, None)
+    placement = Placement(tp=Axis(1, 0, tp_group), ep=one, dp=one, pp=one, etp=one, cp=one, side="trainer", leaves=1)
+    target = _graph_module(_Bound(), "x")
+    bind_trainer_ops(target, tp_group=tp_group, placement=placement)
+    assert target.layer.placed_with is placement and target.layer.site == "layer"
+    assert target.layer.norm.site is None
+
+
+class _Own(inn.Component):
+    """A package's own (not placement-bound) component."""
+
+    def __init__(self):
+        super().__init__()
+        self.placed_with = None
+
+    def facts(self):
+        return {"kind": "own"}
+
+    def _place(self, placement):
+        self.placed_with = placement
+
+    def forward(self, x):
+        return x
+
+
+def _two(first, second):
+    root = nn.Module()
+    root.first, root.second = first, second
+    graph = fx.Graph()
+    x = graph.placeholder("x")
+    graph.output(graph.call_module("second", (graph.call_module("first", (x,)),)))
+    return fx.GraphModule(root, graph)
+
+
+@pytest.mark.parametrize("side", ["trainer", "engine"])
+def test_package_components_place_once_beside_a_release_moe(monkeypatch, side):
+    """Under a placement a package's own component places itself; the release MoE and its children bind
+    exactly as before (nothing placed twice, the same resolved ops)."""
+    from isoexec.runtimes.vllm import _binding as engine
+
+    monkeypatch.setattr(_dispatch, "ARCH", "sm90")
+    one = dist.ProcessGroup(0, 1)
+    placement = _binding.placement_from_groups(SimpleNamespace(tp=one, ep=one, dp=one, pp=one, cp=one, expt_tp=one))
+    if side == "engine":
+        placement = replace(placement, side="engine")
+    calls = []
+    original = inn.Component.apply_placement
+
+    def record(self, *args, **kwargs):
+        calls.append(id(self))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(inn.Component, "apply_placement", record)
+
+    def moe():
+        return inn.MoE(hidden=8, num_experts=4, top_k=2, intermediate=6, shared_intermediate=4)
+
+    def bind(target):
+        if side == "trainer":
+            _binding.bind_trainer_ops(target, tp_group=one, placement=placement)
+        else:
+            engine.bind_body_ops(target, tp_group=one, placement=placement)
+
+    alone = _graph_module(moe(), "x")
+    bind(alone)
+    calls.clear()
+    target = _two(moe(), _Own())
+    bind(target)
+    assert len(calls) == len(set(calls)) and target.second.placed_with is placement
+    want = {k: v.impl for k, v in alone.layer.slots.resolved().items()}
+    assert {k: v.impl for k, v in target.first.slots.resolved().items()} == want
+    if side == "trainer":      # without a placement the trainer still refuses an unknown kind
+        with pytest.raises(Exception, match="trainer binding does not support"):
+            _binding.bind_trainer_ops(_graph_module(_Own(), "x"), tp_group=one)

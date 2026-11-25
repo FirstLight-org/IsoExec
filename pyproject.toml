@@ -35,7 +35,7 @@ isoexec_skyrl = "isoexec.integrations.skyrl.weight_transfer:register"
 include = ["isoexec*"]
 
 [tool.setuptools.package-data]
-isoexec = ["**/*.cu", "**/*.cuh", "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.json", "**/*.yaml", "**/*.txt"]
+isoexec = ["**/*.cu", "**/*.cuh", "**/*.cpp", "**/*.h", "**/*.hpp", "**/*.json", "**/*.yaml", "**/*.txt", "**/PROVENANCE.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["isoexec"]

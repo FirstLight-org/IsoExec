@@ -255,7 +255,9 @@ def fc2(x, down, plan: GroupedPlan, *, leaves=8, out=None):
     if x.size(1) % (8 * leaves):
         raise ValueError("each logical K segment must be a positive multiple of 8")
     segment = x.size(1) // leaves
-    padding = -segment % SEGMENT_MULTIPLE
+    # One leaf: the kernel reads K's tail with zero-filled TMA boxes (the bits of an explicit zero pad), so
+    # nothing is copied per call. Several leaves: each declared leaf boundary stays a whole-atom boundary.
+    padding = -segment % SEGMENT_MULTIPLE if leaves > 1 else 0
     if padding:
         # Preserve the declared leaf boundaries. Padding the entire contraction
         # would move values between leaves and change their BF16 roundings.

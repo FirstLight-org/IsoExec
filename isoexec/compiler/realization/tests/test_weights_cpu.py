@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 from transformers import PretrainedConfig, Qwen3_5Config
-from transformers.core_model_loading import WeightRenaming
+from transformers.core_model_loading import ConversionOps, WeightRenaming
 
 from isoexec.compiler.realization import weights as weight_loading
 from isoexec.compiler.realization.graph import clone_graph_module
@@ -169,3 +169,49 @@ def test_load_weights_accepts_strided_inputs_and_records_both_shared_names(alloc
     assert loaded == {"weight", "alias"}
     assert torch.equal(model.weight, src.bfloat16())
     assert model.weight.data_ptr() == pointer and not src.is_contiguous()
+
+
+@pytest.mark.parametrize("dtype", [torch.float8_e4m3fn, torch.float8_e8m0fnu, torch.int8])
+def test_load_weights_copies_encoded_checkpoint_tensors_byte_for_byte(allocated, dtype):
+    model, config, mapping = allocated
+    model.weight = nn.Parameter(torch.zeros(2, 2, dtype=dtype), requires_grad=False)
+    model.alias = model.weight
+    codes = torch.tensor([[1, 2], [127, 200]], dtype=torch.uint8).view(dtype)
+    loaded = load_weights(model, [("hf.weight", codes), ("hf.alias", codes)], source=SOURCE, hf_config=config)
+    assert loaded == {"weight", "alias"}
+    assert torch.equal(model.weight.view(torch.uint8), codes.view(torch.uint8))
+    # An encoding is never converted: a float source or another encoding is refused.
+    for wrong in (torch.ones(2, 2), torch.zeros(2, 2, dtype=torch.uint8 if dtype != torch.uint8 else torch.int8)):
+        with pytest.raises(ValueError, match="encoded tensor"):
+            load_weights(model, [("hf.weight", wrong)], source=SOURCE, hf_config=config)
+    assert torch.equal(model.weight.view(torch.uint8), codes.view(torch.uint8))
+
+
+class _Scaled(ConversionOps):
+    def convert(self, input_dict, source_patterns, target_patterns, **kwargs):
+        codes, scale = (input_dict[pattern][0] for pattern in source_patterns)
+        return {target_patterns[0]: codes.float() * scale.float()}
+
+
+def test_many_to_one_converter_waits_for_every_source_and_package_ignores(monkeypatch):
+    from transformers.core_model_loading import WeightConverter
+
+    model = nn.Module()
+    model.weight = nn.Parameter(torch.zeros(2, 2, dtype=torch.bfloat16), requires_grad=False)
+
+    def checkpoint_conversion_mapping(config):
+        return [WeightConverter(source_patterns=[r"^proj\.weight$", r"^proj\.scale$"], target_patterns="weight",
+                                operations=[_Scaled()])]
+
+    mapping = SimpleNamespace(checkpoint_conversion_mapping=checkpoint_conversion_mapping,
+                              ignored_checkpoint_patterns=lambda config: (r"^tower\.",))
+    monkeypatch.setattr(ModelSource, "weight_module", lambda self: mapping)
+    codes, scale = torch.full((2, 2), 3.0), torch.full((2, 2), 0.5)
+    for order in ((("proj.scale", scale), ("proj.weight", codes)), (("proj.weight", codes), ("proj.scale", scale))):
+        model.weight.data.zero_()
+        loaded = load_weights(model, [*order, ("tower.x", torch.ones(1))], source=SOURCE, hf_config=PretrainedConfig())
+        assert loaded == {"weight"} and torch.equal(model.weight, torch.full((2, 2), 1.5, dtype=torch.bfloat16))
+    with pytest.raises(ValueError, match="sources incomplete"):
+        load_weights(model, [("proj.weight", codes)], source=SOURCE, hf_config=PretrainedConfig())
+    with pytest.raises(ValueError, match="Unknown HF weight name"):
+        load_weights(model, [("other.x", torch.ones(1))], source=SOURCE, hf_config=PretrainedConfig())

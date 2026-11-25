@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -46,7 +46,11 @@ def build_model(
     Raises:
         ValueError: The checkpoint does not cover every registered parameter.
     """
+    from isoexec.core import load_timers
+
+    lap = load_timers.Lap()
     author = source.build_meta(raw_config).train(training)
+    lap("model_init.build_meta")
     examples = text_inputs(author, device=torch.device("cuda", torch.cuda.current_device()),
                            max_tokens=max_tokens, profile="trainer")
     execution_graph = capture(author, examples.args, examples.kwargs, dynamic_shapes=examples.dynamic_shapes,
@@ -66,15 +70,26 @@ def build_model(
     assignments = tuple((offset, offset + get_num_layers_to_build(config, vp_stage=None, pp_rank=rank))
                         for rank, offset in enumerate(offsets))
     definition = define_stage(execution_graph, assignments, pp_rank=pg_collection.pp.rank())
+    lap("model_init.capture")
     model = MegatronModel(definition, source=source, hf_config=source.build_config(raw_config), config=config,
-                          pg_collection=pg_collection, cp_layout=cp_layout)
+                          pg_collection=pg_collection, cp_layout=cp_layout, checkpoint_path=checkpoint_path)
+    lap = load_timers.Lap()
     with closing(CheckpointStore(checkpoint_path)) as store:
         keys = store.keys()
         loaded = model.load_weights((name, store.reader(name)[:]) for name in keys)
-    loaded_parameters = {model.get_parameter(name) for name in loaded}
+    lap("trainer.load_weights")
+    # Checkpoint buffers (e.g. frozen tables loaded byte for byte) are loaded names too; coverage is of Parameters.
+    parameters = dict(model.named_parameters(remove_duplicate=False))
+    loaded_parameters = {parameters[name] for name in loaded if name in parameters}
     missing = {name for name, parameter in model.named_parameters() if parameter not in loaded_parameters}
     if missing:
         raise ValueError(f"Initial checkpoint is missing model parameters: {sorted(missing)}")
+    # A package whose components read host state after loading (a tokenizer map, mapped host tables)
+    # binds it through its model class.
+    bind_state = getattr(author, "bind_trainer_state", None)
+    if bind_state is not None:
+        model.trainer_state = bind_state(model.graph_module, checkpoint_path)
+    lap("trainer.bind_state")
     return model
 
 
@@ -83,6 +98,7 @@ def wrap_ddp_and_optimizer(
     *,
     ddp_config: DistributedDataParallelConfig,
     optimizer_config: OptimizerConfig,
+    optimizer_builder: Callable[..., MegatronOptimizer] | None = None,
 ) -> tuple[DistributedDataParallel, MegatronOptimizer]:
     """Return native DDP and optimizer objects using the model's registered parameters.
 
@@ -93,8 +109,15 @@ def wrap_ddp_and_optimizer(
     from megatron.core.distributed.finalize_model_grads import finalize_model_grads
     from megatron.core.optimizer import get_megatron_optimizer
 
-    from .optimizer import dtype_uniform_param_group_overrides, leaf_fp32_optimizer_shards
+    from .optimizer import (
+        dtype_uniform_param_group_overrides,
+        leaf_fp32_optimizer_shards,
+        require_uniform_cpu_capability,
+    )
 
+    from isoexec.core import load_timers
+
+    lap = load_timers.Lap()
     config, groups = model.config, model.pg_collection
     sites = _bucket_pack_modules(model)
     layout = None
@@ -118,13 +141,19 @@ def wrap_ddp_and_optimizer(
         from .grad_kernels import install_mixed_dtype_grad_kernels
 
         install_mixed_dtype_grad_kernels()
+    if optimizer_config.optimizer_cpu_offload:
+        require_uniform_cpu_capability()
     with leaf_fp32_optimizer_shards(optimizer_config.optimizer_cpu_offload):
-        optimizer = get_megatron_optimizer(
-            optimizer_config, [ddp], config_overrides=dtype_uniform_param_group_overrides(optimizer_config),
+        build_optimizer = optimizer_builder or get_megatron_optimizer
+        optimizer = build_optimizer(
+            config=optimizer_config, model_chunks=[ddp],
+            config_overrides=dtype_uniform_param_group_overrides(optimizer_config),
             use_gloo_process_groups=False, pg_collection=groups,
         )
     config.no_sync_func = ddp.no_sync
-    config.finalize_model_grads_func = partial(finalize_model_grads, pg_collection=groups)
+    config.finalize_model_grads_func = load_timers.first_call(
+        partial(finalize_model_grads, pg_collection=groups), "trainer.first_backward", emit_side="trainer")
+    lap("trainer.ddp_optimizer")
     return ddp, optimizer
 
 

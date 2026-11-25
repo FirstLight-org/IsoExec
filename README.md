@@ -12,6 +12,10 @@ execution. It eliminates training-inference mismatch by introducing:
 - **Bit-identical verification.** Trainer and inference compare full-vocabulary
   logprobs and ensure zero mismatch.
 
+DeepSeek-V4.1-Flash text training and inference on B200 are available in the
+[V4.1 model package](isoexec/models/deepseek_v4_1_flash/README.md). The
+[SkyRL GRPO example](examples/run_v41_gsm8k.py) accepts checkpoint and GSM8K data paths.
+
 ## Quickstart
 
 Install `isoexec` and its dependencies:

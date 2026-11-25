@@ -426,7 +426,6 @@ def test_constructor_accepts_a_keyword_hidden_input(vllm_config, hf_config):
 @pytest.mark.parametrize("section,field,value", [
     ("parallel_config", "tensor_parallel_size", 2),
     ("parallel_config", "pipeline_parallel_size", 2),
-    ("parallel_config", "enable_expert_parallel", True),
     ("model_config", "dtype", torch.float32),
     ("compilation_config", "cudagraph_mode", SimpleNamespace(name="PIECEWISE")),
     ("compilation_config", "mode", 3),
@@ -498,3 +497,76 @@ def test_constructor_accepts_decode_only_cuda_graphs(vllm_config, hf_config):
                       vllm_config=vllm_config)
 
     assert model.head is not None
+
+
+class _Bound(inn.Component):
+    """A placement-bound kind that binds its own child components."""
+
+    PLACEMENT_BOUND = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.norm = inn.RMSNorm(hidden=8, eps=1e-6, device="meta")
+        self.placed_with, self.engine_state = None, None
+
+    def facts(self):
+        return {"kind": "bound"}
+
+    def _place(self, placement):
+        self.placed_with = placement
+
+    def bind_engine_state(self, *, vllm_config, layer_prefix):
+        self.engine_state = (vllm_config, layer_prefix)
+
+
+def test_placement_bound_components_bind_themselves_and_attach_engine_state(tp_group):
+    body = nn.Module()
+    body.layer = _Bound()
+    assert _binding.has_placement_bound(body)
+    placement = _binding.placement_from_groups(tp_group=tp_group, pp_group=dist.ProcessGroup(0, 1))
+    _binding.bind_body_ops(body, tp_group=tp_group, placement=placement)
+    assert body.layer.placed_with is placement and body.layer.site == "body.layer"
+    # The child belongs to the placement-bound owner, so the runtime does not bind it.
+    assert body.layer.norm.site is None
+    with pytest.raises(Exception, match="requires a placement"):
+        _binding.bind_body_ops(_with(_Bound()), tp_group=tp_group)
+    config = object()
+    _binding.bind_engine_states(body, vllm_config=config, prefix="model")
+    assert body.layer.engine_state == (config, "model.body.layer")
+
+
+def _with(child):
+    body = nn.Module()
+    body.layer = child
+    return body
+
+
+def test_engine_expert_parallel_holds_whole_experts_and_follows_the_tp_ranks(monkeypatch, tp_group):
+    ep = dist.ProcessGroup(0, 1)
+    monkeypatch.setattr(sys.modules["vllm.distributed"], "get_ep_group",
+                        lambda: SimpleNamespace(device_group=ep), raising=False)
+    assert _binding.engine_expert_group(tp_group) is ep
+    monkeypatch.setattr(sys.modules["vllm.distributed"], "get_ep_group",
+                        lambda: SimpleNamespace(device_group=dist.ProcessGroup(0, 2)))
+    with pytest.raises(ValueError, match="order the TP ranks"):
+        _binding.engine_expert_group(tp_group)
+    monkeypatch.delattr(sys.modules["vllm.distributed"], "get_ep_group")
+    with pytest.raises(ValueError, match="expert-parallel group"):
+        _binding.engine_expert_group(tp_group)
+
+
+def test_decode_graphs_refuse_a_host_sized_expert_exchange():
+    moe = inn.MoE(hidden=8, num_experts=2, top_k=1, intermediate=4, routing="softmax_renorm", device="meta")
+    host_sized = BoundOp("moe.expert_mlp", "impl", 1, "test", {}, lambda *a, **k: None)
+    moe.slots.expert_mlp = host_sized
+    body = _with(moe)
+    _binding.refuse_uncapturable_expert_parallel(body, "NONE")
+    with pytest.raises(ValueError, match="CUDA-graph capturable"):
+        _binding.refuse_uncapturable_expert_parallel(body, "FULL_DECODE_ONLY")
+
+    def device_sized(*a, **k):
+        return None
+
+    device_sized.graph_capturable = True
+    moe.slots.expert_mlp = BoundOp("moe.expert_mlp", "impl", 1, "test", {}, device_sized)
+    _binding.refuse_uncapturable_expert_parallel(body, "FULL_DECODE_ONLY")

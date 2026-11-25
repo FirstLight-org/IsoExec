@@ -311,6 +311,20 @@ def axis_local_spec(
 # Validate placement against the resolved operator requirements.
 
 
+def package_component(module, site: str, bound_sites, placement) -> bool:
+    """Whether a binder should place ``module`` by itself: a package's own component (not a release
+    kind, not placement-bound), not yet placed, outside every subtree another binding owns, under a
+    placement. Engine and trainer binders share this rule."""
+    import isoexec.nn as inn
+    from isoexec.nn.component import Component
+
+    if placement is None or not isinstance(module, Component) or module.PLACEMENT_BOUND or module.placed:
+        return False
+    if isinstance(module, tuple(getattr(inn, name) for name in inn.COMPONENTS)):
+        return False
+    return not any(site.startswith(owner + ".") for owner in bound_sites)
+
+
 def combine_twin_members() -> frozenset[str]:
     """Read members of the qualified combine twin class from the registry. Reject an empty class
     rather than admitting unknown implementations.

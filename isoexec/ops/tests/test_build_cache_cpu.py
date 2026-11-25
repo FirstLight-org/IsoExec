@@ -164,3 +164,44 @@ def test_cutlass_override_without_headers_is_refused(tmp_path, monkeypatch):
     monkeypatch.setenv("ISOEXEC_MLA_SM90_CUTLASS", str(tmp_path))
     with pytest.raises(RuntimeError, match="does not hold a CUTLASS include tree"):
         build_cache.require_pinned_cutlass("mla", "SM90")
+
+
+def test_extra_sources_join_the_build_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORCH_EXTENSIONS_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("ISOEXEC_GDN_CPR_SM90_BUILD_DIR", raising=False)
+    source, shared = tmp_path / "source", tmp_path / "shared"
+    source.mkdir()
+    shared.mkdir()
+    (source / "kernel.cu").write_text('#include "../shared/pair.cuh"\n')
+    (shared / "pair.cuh").write_text("version one")
+
+    def key(**kw):
+        return sm90_build_dir("ISOEXEC_GDN_CPR_SM90_BUILD_DIR", "gdn_cpr-sm90", "tag", source, **kw)
+
+    # No extra trees keeps every existing key.
+    assert key(extra_sources=()) == key()
+    first = key(extra_sources=(shared,))
+    assert first != key()
+    (shared / "pair.cuh").write_text("version two")
+    assert key(extra_sources=(shared,)) != first
+    (shared / "notes.md").write_text("not a source")
+    assert key(extra_sources=(shared,)) == key(extra_sources=(shared,))
+
+
+def test_extra_sources_join_the_sm100_profile_digest(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_cache, "cutlass_identity", lambda family="": "cutlass-test")
+    source, shared = tmp_path / "source", tmp_path / "shared"
+    source.mkdir()
+    shared.mkdir()
+    (source / "kernel.cu").write_text("kernel")
+    (shared / "pair.cuh").write_text("version one")
+    plain = build_cache.sm100_profile_digest("fam", source)
+    first = build_cache.sm100_profile_digest("fam", source, extra_sources=(shared,))
+    assert first != plain
+    (shared / "pair.cuh").write_text("version two")
+    assert build_cache.sm100_profile_digest("fam", source, extra_sources=(shared,)) != first
+    assert build_cache.sm100_profile_digest("fam", source) == plain
+
+
+def test_shared_sm100_headers_are_in_the_package():
+    assert (build_cache.SM100_COMMON / "tmem_pair.cuh").is_file()

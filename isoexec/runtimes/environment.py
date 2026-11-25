@@ -18,6 +18,8 @@ def resolved_environment(model_path: str) -> dict[str, str]:
         "TORCHINDUCTOR_CACHE_DIR", "CUDA_CACHE_PATH", "TORCH_HOME", "PYTHONPYCACHEPREFIX",
         "PIK_CACHE", "FLASHINFER_WORKSPACE_BASE", "SGLANG_CACHE_DIR", "NVTE_FLASH_ATTN",
         "CPATH", "MAX_JOBS", "ISOEXEC_MOE_SM90_BUILD_DIR", "ISOEXEC_MM_SM90_BUILD_DIR", "WANDB_DIR",
+        # placed by ISOEXEC_PREBUILT_DIR / ISOEXEC_PREBUILT_ONLY (ops/prebuilt.activate), which the FLAGS carry
+        "TRITON_CACHE_MANAGER", "ISOEXEC_DG_JIT_NVCC_COMPILER", "CUTE_DSL_CACHE_DIR",
     ):
         if name in os.environ:
             env[name] = os.environ[name]

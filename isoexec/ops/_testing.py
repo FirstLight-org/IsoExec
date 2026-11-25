@@ -173,3 +173,42 @@ def run_gloo(target, world: int, *args, timeout: float = 180.0) -> dict:
                     if p.is_alive():
                         p.kill()
                         p.join(timeout=5)
+
+
+def kernel_sass(extension, *, family: str | None = None, cutlass: bool = False) -> dict[str, list]:
+    """``{kernel symbol: [SASS lines]}`` of a built SM100 extension, for the CPU SASS scans.
+
+    ``extension`` is the package's lazy ``extension`` function. Building needs a CUDA toolkit and, for
+    ``cutlass=True``, the pinned CUTLASS headers; a scan builds only into an explicit
+    ``TORCH_EXTENSIONS_DIR`` (a shared default cache is never written by a test run). When any of these
+    is missing the scan skips, naming what is missing.
+    """
+    import os
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    if not os.environ.get("TORCH_EXTENSIONS_DIR"):
+        pytest.skip("SASS scan: set TORCH_EXTENSIONS_DIR to an explicit extension build directory")
+    if shutil.which("cuobjdump") is None:
+        pytest.skip("SASS scan: cuobjdump (CUDA toolkit) is not on PATH")
+    if cutlass:
+        from isoexec.ops import build_cache
+
+        if build_cache.cutlass_include(family or "") is None:
+            pytest.skip("SASS scan: the pinned CUTLASS headers are not installed (make setup)")
+    out = subprocess.run(["cuobjdump", "-sass", str(Path(extension().__file__))], capture_output=True, text=True,
+                         check=True).stdout
+    funcs: dict[str, list] = {}
+    cur = None
+    for line in out.splitlines():
+        m = re.search(r"Function : (\S+)", line)
+        if m:
+            cur = m.group(1)
+            funcs[cur] = []
+        elif cur:
+            funcs[cur].append(line)
+    return funcs

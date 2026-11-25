@@ -25,13 +25,15 @@ def structured_outputs_refusal(vllm_config: VllmConfig) -> str | None:
     return None
 
 
-def kv_cache_refusal(vllm_config: VllmConfig) -> str | None:
-    """Return a refusal unless the model and KV cache use BF16."""
+def kv_cache_refusal(vllm_config: VllmConfig, *, model_kv_dtype: str | None = None) -> str | None:
+    """Return a refusal unless the model uses BF16 and the KV cache uses BF16 or the cache encoding the
+    model package declares (``engine_settings()['kv_cache_dtype']``) for the cache layers it owns."""
     cache_config = vllm_config.cache_config
     model_config = vllm_config.model_config
     kv_dtype = str(cache_config.cache_dtype)
     model_dtype = model_config.dtype
-    if kv_dtype not in ("auto", "bfloat16") or model_dtype != torch.bfloat16:
+    accepted = ("auto", "bfloat16") if model_kv_dtype is None else (model_kv_dtype,)
+    if kv_dtype not in accepted or model_dtype != torch.bfloat16:
         return (
             f"A36: attention.core kv_dtype is pinned {KV_DTYPE} (this refuses every fp8/nvfp4 KV cache); "
             f"cache_dtype={kv_dtype!r} model dtype={model_dtype}"

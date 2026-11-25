@@ -30,3 +30,9 @@ def test_an_explicit_grammar_backend_is_refused():
 @pytest.mark.parametrize("over", [{"cache_dtype": "fp8"}, {"cache_dtype": "nvfp4"}, {"dtype": torch.float16}])
 def test_non_bf16_model_or_kv_dtype_is_refused(over):
     assert "A36" in kv_cache_refusal(_config(**over))
+
+
+def test_kv_cache_accepts_only_the_encoding_the_model_declares():
+    assert kv_cache_refusal(_config(cache_dtype="fp8_ds_mla"), model_kv_dtype="fp8_ds_mla") is None
+    assert "A36" in kv_cache_refusal(_config(cache_dtype="auto"), model_kv_dtype="fp8_ds_mla")
+    assert "A36" in kv_cache_refusal(_config(cache_dtype="fp8"), model_kv_dtype="fp8_ds_mla")

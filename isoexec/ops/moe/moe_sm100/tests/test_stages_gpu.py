@@ -140,16 +140,26 @@ def test_refuses_a_non_power_of_two_top_k(ops):
         ops.route_mechanics(logits, 6)
 
 
-def test_refuses_a_segment_that_is_not_a_tma_atom(ops):
-    """A K segment must be a multiple of 64. The served geometries satisfy it; a shape that
-    does not is refused explicitly rather than quietly padded into a different program."""
+@pytest.mark.parametrize("leaves", [1, 2])
+def test_segment_that_is_not_a_tma_atom_is_the_zero_padded_program(ops, leaves):
+    """A K segment that is not a multiple of 64 is the program of the same segment zero-padded to the atom (exact zero
+    products at the end of each leaf chain): one leaf reads K's tail through zero-filled TMA boxes, several leaves pad
+    each declared leaf. K not a multiple of 8 per leaf is refused."""
     with torch.no_grad():
-        h = torch.randn(128, 96, device="cuda", dtype=torch.bfloat16)
-        dn = torch.randn(2, 128, 96, device="cuda", dtype=torch.bfloat16)
+        g = torch.Generator(device="cpu").manual_seed(96 + leaves)
+        h = torch.randn(128, 96, generator=g).to("cuda", torch.bfloat16)
+        dn = torch.randn(2, 128, 96, generator=g).to("cuda", torch.bfloat16)
         offsets = torch.tensor([0, 64, 128], device="cuda", dtype=torch.int32)
         plan = ops.make_plan(offsets, 128)
+        seg = 96 // leaves
+        pad = -seg % 64
+        hp = torch.nn.functional.pad(h.view(128, leaves, seg), (0, pad)).flatten(1)
+        dnp = torch.nn.functional.pad(dn.view(2, 128, leaves, seg), (0, pad)).flatten(2)
+        got = ops.fc2(h, dn, plan, leaves=leaves)
+        want = ops.fc2(hp, dnp, plan, leaves=leaves)
+        assert torch.equal(got.view(torch.int32), want.view(torch.int32))
         with pytest.raises(ValueError, match="multiple of"):
-            ops.fc2(h, dn, plan, leaves=2)
+            ops.fc2(h[:, :92], dn[:, :, :92], plan, leaves=1)
 
 
 @pytest.mark.parametrize("T,E,k", [(255, 289, 9), (2049, 289, 9), (999, 13, 3), (4097, 64, 6), (300, 7, 7)])

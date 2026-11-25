@@ -50,3 +50,28 @@ def allocate_tensors(module: nn.Module, *, device: torch.device) -> None:
                 tensor = torch.empty_like(buffer, device=device) if buffer.is_meta else buffer.to(device=device)
                 allocated[buffer] = tensor
             child._buffers[name] = tensor
+
+
+def take_host_resident_buffers(module: nn.Module) -> list[tuple[nn.Module, str, torch.Tensor]]:
+    """Detach the meta buffers a module keeps in host memory (``HOST_RESIDENT_BUFFERS``: tables too large
+    for the device that kernels read through mapped host memory) before ``allocate_tensors``."""
+    taken = []
+    for child in module.modules():
+        for name in getattr(child, "HOST_RESIDENT_BUFFERS", ()):
+            buffer = child._buffers.get(name)
+            if buffer is not None and buffer.is_meta:
+                taken.append((child, name, buffer))
+                child._buffers[name] = None
+    return taken
+
+
+def place_host_resident_buffers(taken: list[tuple[nn.Module, str, torch.Tensor]]) -> None:
+    """Allocate each taken buffer as page-aligned host memory (an anonymous mapping the loader fills)."""
+    import mmap
+
+    for child, name, meta in taken:
+        nbytes = meta.numel() * meta.element_size()
+        mapping = mmap.mmap(-1, max(nbytes, mmap.PAGESIZE), flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+        tensor = torch.frombuffer(mapping, dtype=torch.uint8, count=nbytes).view(meta.dtype).view(meta.shape)
+        child.__dict__.setdefault("_host_mappings", {})[name] = mapping
+        child._buffers[name] = tensor

@@ -28,13 +28,14 @@ from isoexec.core.bindings import BoundOp
 from isoexec.compiler.realization.tp import tensor_axis
 from isoexec.nn import GDN, MLP, Attention, Embedding, LMHead, MoE, RMSNorm
 from isoexec.nn._seams import Seams, _identity
+from isoexec.nn.head import head_selection
 from isoexec.nn.component import Component
 from isoexec.nn.gdn import CORE_FUSED_OPS
 from isoexec.nn.inspect import executed_modules
 from isoexec.ops.collectives.tp_bytes import bind_kv_gather, bind_tp_copy, bind_vocab_parallel_embed
 from isoexec.ops.collectives.tp_tree import bind_row_parallel
 from isoexec.ops.table import OpResolutionError, OpTable
-from isoexec.runtimes.parallel import validate_component_placement
+from isoexec.runtimes.parallel import package_component, validate_component_placement
 from isoexec.schema import Axis, Placement
 
 if TYPE_CHECKING:
@@ -89,14 +90,29 @@ def bind_trainer_ops(
     if placement is not None and placement.sp != sp:
         raise ValueError(f"Trainer binding has sp={sp} but its MoE placement has sp={placement.sp}")
     table = OpTable() if op_table is None else op_table
+    owners: list[str] = []
+    bound: list[str] = []
     for site, module in executed_modules(graph_module):
-        if isinstance(module, MoE):
+        if any(site.startswith(owner + ".") for owner in owners):
+            continue  # a placement-bound component binds its own children
+        if isinstance(module, Component) and module.PLACEMENT_BOUND:
+            if placement is None:
+                raise OpResolutionError(f"{site}: {type(module).__name__} trainer binding requires a placement")
+            module.apply_placement(placement, site=site, op_table=table)
+            owners.append(site)
+        elif isinstance(module, MoE):
             if placement is None:
                 raise OpResolutionError(f"{site}: MoE trainer binding requires a placement")
             module.apply_placement(placement, site=site, op_table=table)
+            bound.append(site)
+        elif package_component(module, site, bound, placement):
+            # A package's own component binds itself from the placement (its ``_place``), as on the engine.
+            module.apply_placement(placement, site=site, op_table=table)
+            bound.append(site)
         elif isinstance(module, Component):
             _bind_component(module, site, table, tp_group=tp_group, sp=sp, placement=placement, cp_group=cp_group,
                             cp_layout=cp_layout, cp_transport_factory=cp_transport_factory)
+            bound.append(site)
     if placement is not None:
         # Construction check: the leaf plan and, at EP>1, a combine in the korder_fp32 twin class.
         validate_component_placement(graph_module, placement)
@@ -143,7 +159,7 @@ def _bind_component(module: Component, site: str, table: OpTable, *, tp_group: d
         bind("act", facts={"activation": module.activation})
     elif isinstance(module, LMHead):
         module.tp_group = tp_group
-        bind("head", inputs={"tp": tp, "boundary_out_dtype": "fp32"})
+        bind("head", inputs={"tp": tp, "boundary_out_dtype": "fp32"}, **head_selection(module))
         bind("lm_head_slice")
         log_softmax = bind("log_softmax")
         if tp > 1:
@@ -285,9 +301,64 @@ def set_expert_parallel_attributes(graph_module: fx.GraphModule) -> None:
     """Mark held experts so Megatron DDP reduces them over the expert DP group.
 
     Megatron treats ``allreduce=False`` Parameters as expert-parallel; set it
-    only at EP>1, before DDP and optimizer construction.
+    only at EP>1, before DDP and optimizer construction. Experts are the
+    ``MoE`` components' and the tensors a placement-bound component's holders
+    declare ``kind="expert"`` (``tensor_plan_metadata``).
     """
     for module in graph_module.modules():
         if isinstance(module, MoE):
             for parameter in module.experts.parameters():
                 parameter.allreduce = False
+    for _, owner in _placement_bound(graph_module):
+        mark_declared_experts(owner)
+
+
+def mark_declared_experts(module: torch.nn.Module) -> int:
+    """Set ``allreduce=False`` on every tensor of ``module`` whose holder declares ``kind="expert"``."""
+    count = 0
+    for child in module.modules():
+        declare = getattr(child, "tensor_plan_metadata", None)
+        if declare is None:
+            continue
+        for role, metadata in declare().items():
+            parameter = child._parameters.get(role)
+            if parameter is not None and metadata.kind == "expert":
+                parameter.allreduce = False
+                count += 1
+    return count
+
+
+def _placement_bound(graph_module: fx.GraphModule) -> list[tuple[str, Component]]:
+    return [(site, module) for site, module in executed_modules(graph_module)
+            if isinstance(module, Component) and module.PLACEMENT_BOUND]
+
+
+def set_partial_gradient_sums(graph_module: fx.GraphModule, tp_group: dist.ProcessGroup) -> list[str]:
+    """Complete the per-rank partial gradients of placement-bound components' replicated tensors.
+
+    A placement-bound component binds its own collectives, so its replicated
+    tensors behind head-local derivatives (``replicated(reduce="sum_over_tp")``)
+    reach backward with this rank's partial gradient. Each trainable one gets a
+    gradient hook summing the TP ranks' partials in rank order
+    (``collectives.ordered_sum``), before DDP accumulates ``main_grad``; every
+    rank then holds the same complete gradient. Release components declaring
+    the axis reduce through their own bound seams and are left alone. Call after
+    allocation, before DDP. Returns the logical names hooked.
+    """
+    from isoexec.ops.collectives.ordered_sum import ordered_sum
+
+    if tp_group.size() == 1:
+        return []
+    hooked = []
+    for site, owner in _placement_bound(graph_module):
+        for name, parameter in owner.named_parameters():
+            logical = f"{site}.{name}"
+            axis = tensor_axis(graph_module, logical)
+            if axis.kind != "replicated" or axis.reduce != "sum_over_tp" or not parameter.requires_grad:
+                continue
+            if getattr(parameter, "_isoexec_tp_partial_sum", None) is not None:
+                raise ValueError(f"{logical}: partial-gradient TP sum is already installed")
+            parameter._isoexec_tp_partial_sum = parameter.register_hook(
+                lambda grad, group=tp_group: ordered_sum(grad, group))
+            hooked.append(logical)
+    return hooked

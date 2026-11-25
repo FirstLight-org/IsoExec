@@ -1330,6 +1330,141 @@ FLAGS: List[Flag] = [
         "make the pinned artifact a function of that step's shapes, which is exactly the "
         "run-to-run gradient drift the ledger exists to remove. record() raises in a reader.",
     ),
+    # SM100 DeepSeek-V4.1 kernels: launch placement, capacity and cache locations only. Each kernel's
+    # per-output program is fixed by its recipe, so none of these moves a bit.
+    Flag(
+        "ISOEXEC_MHC_OVERLAP_MAX_ROWS", "64", ("both",),
+        "row bound up to which the mHC coefficients run on a side stream beside their sublayer (0 disables)",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="residual/deepseek_mhc_sm100: the same coefficient kernels on the same inputs, joined before use.",
+    ),
+    Flag(
+        "ISOEXEC_DS_MULTI_STREAM_TOKENS", "1024", ("both",),
+        "token bound up to which the x-only V4.1 attention projections run on an auxiliary stream",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="attention/deepseek_v41_cache_sm100 paged step (vLLM's VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD "
+        "default): the same GEMMs on the same operands, joined before the attention lists.",
+    ),
+    Flag(
+        "ISOEXEC_DUALRAIL_PLAN", "", ("both",),
+        "force the dual-rail sparse-attention plan (\"one\" or \"tpc,nc\"); unset picks it from the launch shape",
+        DIAGNOSTIC, (TRAIN, ENGINE),
+        notes="attention/dsa_sm100: the split plan and the one-CTA plan are bitwise equal (ownership only).",
+    ),
+    Flag(
+        "ISOEXEC_SMALL_PDL", "1", ("both",),
+        "programmatic dependent launch of the V4.1 row kernels and the DSA indexer (0 launches them plainly)",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="Read by the extensions per launch. Every kernel waits on its predecessor before touching memory, "
+        "so the attribute moves launch latency only.",
+    ),
+    Flag(
+        "ISOEXEC_V41_WINDOW_GLUE", "1", ("engine",),
+        "V4.1 engine window rows / main lists: 1 = every layer's in one launch per step (and the decoder rows' in "
+        "one more), 0 = the per-layer torch index glue",
+        DEPLOYMENT, (ENGINE,),
+        notes="models/deepseek_v4_1_flash/engine.py EngineStep._bind_windows / decoder_windows; integer index math "
+        "only, the same rows and lists either way (tests/test_window_glue_gpu.py).",
+    ),
+    Flag(
+        "ISOEXEC_V41_PIECEWISE_BREAKS", "component", ("engine",),
+        "V4.1 breaks of vLLM's breakable PIECEWISE graphs: component = every V4.1 component one eager break, core = "
+        "breaks at the attention cores (mHC, norms, experts captured)",
+        DEPLOYMENT, (ENGINE,),
+        notes="models/deepseek_v4_1_flash/piecewise.py; agreed over the TP group at bind (core only when every rank "
+        "asks for it). Launch structure only: the same kernels on the same operands, rows independent.",
+    ),
+    Flag(
+        "ISOEXEC_QKV_POST_SPLIT_ROWS", "256", ("both",),
+        "row bound of the column-split qkv_post launch of the V4.1 paged step",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="Read by attention/deepseek_v41_cache_sm100/csrc/paged.cu; launch shape only.",
+    ),
+    Flag(
+        "ISOEXEC_DETREDUCE_TREE_LAMPORT_CAP", str(4 << 20), ("both",),
+        "FP32 words per parity half of the deterministic tree all-reduce workspace",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="collectives/detreduce_sm100: larger payloads reduce in consecutive elementwise chunks; capacity only.",
+    ),
+    Flag(
+        "ISOEXEC_DSA_BWD", "cudnn_det", ("trainer",),
+        "provider of the V4.1 trainer sparse-attention backward: cudnn_det (cuDNN deterministic, default), isoexec "
+        "(the atomics-free IsoExec kernel), cudnn (non-deterministic: refused unless ISOEXEC_DSA_BWD_ALLOW_NONDET=1 "
+        "and TP 1)",
+        FUNCTION, (TRAIN,),
+        notes="attention/deepseek_v41_cache_sm100/ops.py; each provider records its program tag. TRAIN-only like "
+        "ISOEXEC_BWD_COMPILE: a backward selector moves gradients, never the forward the gate compares; every TP "
+        "rank must use the same value (replicated parameters).",
+    ),
+    Flag(
+        "ISOEXEC_DS_FREEZE_ROUTED_EXPERTS", "0", ("trainer",),
+        "V4.1 trained set: 1 also freezes the routed experts (ffn.experts.*; the shared expert stays trainable), "
+        "the debug-layout setting of native's SKYRL_DSV41_FREEZE_ROUTED_EXPERTS; 0 (default) = the actor recipe",
+        FUNCTION, (TRAIN,),
+        notes="models/deepseek_v4_1_flash/training.py; reported beside the program identity as trained_set. "
+        "TRAIN-only like ISOEXEC_DSA_BWD: it changes which gradients exist, never the forward the gate compares; "
+        "every trainer rank must use the same value (DDP buffers and optimizer groups follow it).",
+    ),
+    Flag(
+        "ISOEXEC_DSA_BWD_ALLOW_NONDET", "0", ("trainer",),
+        "diagnostic override admitting cuDNN's non-deterministic sparse-attention backward at TP 1",
+        FUNCTION, (TRAIN,),
+        notes="attention/deepseek_v41_cache_sm100/ops.py; never set in a release run (repeat-run training bits).",
+    ),
+    Flag(
+        "ISOEXEC_DEEPGEMM_PDL", "1", ("both",),
+        "programmatic dependent launch of the DeepGEMM BF16 projection launches (0 launches them plainly)",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="mm/deepgemm_sm100: enabled for that launch only, the library default restored; launch latency only.",
+    ),
+    Flag(
+        "ISOEXEC_DS_ACTOR_MEGA_ROWS_PER_RANK", "8192", ("both",),
+        "rows per rank one BF16 MegaMoE workspace call serves without chunking (the workspace's per-rank capacity)",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="moe/deepseek_v41_sm100/mega.py: larger calls split into equal per-rank chunks; rows are independent, "
+        "so capacity never moves a bit. Every EP rank must use the same value (the workspace geometry).",
+    ),
+    Flag(
+        "ISOEXEC_DG_JIT_CACHE_DIR", "", ("both",),
+        "disk cache of the vendored DeepGEMM JIT kernels",
+        DEPLOYMENT, (TRAIN, ENGINE), default_dynamic=True,
+        notes="Path only: default ${XDG_CACHE_HOME:-~/.cache}/isoexec/deep_gemm_jit; the cache key folds the "
+        "vendored revision and include-tree digest.",
+    ),
+    Flag(
+        "ISOEXEC_PREBUILT_DIR", "", ("both",),
+        "root of the relocatable prebuilt cache: torch extensions (ext/), DeepGEMM JIT (dg-jit/), Triton (triton/)",
+        DEPLOYMENT, (TRAIN, ENGINE), default_dynamic=True,
+        notes="Path only (ops/prebuilt.py): default <TORCH_EXTENSIONS_DIR>/isoexec/prebuilt for extensions; when set it "
+        "also places ISOEXEC_DG_JIT_CACHE_DIR and TRITON_CACHE_DIR under it. Keys fold sources, flags and toolchain "
+        "versions, never a path, so a cache built at one checkout path is hit at another.",
+    ),
+    Flag(
+        "ISOEXEC_PREBUILT_ONLY", "0", ("both",),
+        "prebuilt-only mode: a missing torch extension, DeepGEMM JIT kernel or Triton kernel is a named refusal "
+        "(ISOEXEC_PREBUILT_MISSING) instead of a compile",
+        DEPLOYMENT, (TRAIN, ENGINE),
+        notes="Selects no kernel: a hit loads the same bytes either way; only whether a miss may compile changes.",
+    ),
+    Flag(
+        "ISOEXEC_PREBUILT_VERIFY", "0", ("both",),
+        "re-hash each prebuilt extension and the toolchain headers its build read at every load (off: size check)",
+        DIAGNOSTIC, (TRAIN, ENGINE),
+        notes="Selects no kernel: a failing entry is a miss (rebuild) or, in prebuilt-only mode, a named refusal.",
+    ),
+    Flag(
+        "ISOEXEC_LOAD_TIMERS", "1", ("both",),
+        "per-component cold-start timers (core/load_timers.py); 0 turns them off", DIAGNOSTIC, (TRAIN, ENGINE),
+    ),
+    Flag(
+        "ISOEXEC_LOAD_TIMERS_DIR", "", ("both",),
+        "directory each process writes its cold-start timer record to (<side>-<host>-<pid>.json)",
+        DIAGNOSTIC, (TRAIN, ENGINE),
+    ),
+    Flag(
+        "ISOEXEC_DEEPGEMM_BUILD_VERBOSE", "0", ("both",),
+        "vendored DeepGEMM host extension compiler log verbosity", DIAGNOSTIC, (TRAIN, ENGINE),
+    ),
 ]
 
 
@@ -1377,6 +1512,9 @@ NUMERICS_SWITCHES: Tuple[str, ...] = (
     "ISOEXEC_BWD_COMPILE",
     "ISOEXEC_BWD_COMPILE_LEDGER",
     "ISOEXEC_BWD_COMPILE_ROLE",
+    "ISOEXEC_DSA_BWD",
+    "ISOEXEC_DSA_BWD_ALLOW_NONDET",
+    "ISOEXEC_DS_FREEZE_ROUTED_EXPERTS",
     "ISOEXEC_FUSED_RESIDUAL_NORM",
     "ISOEXEC_FUSED_SAMPLER",
     "ISOEXEC_GDN",
@@ -1561,6 +1699,10 @@ SIDE_LOCAL_SWITCHES: Dict[str, str] = {
         "engine NCCL transport choice (runtimes/vllm/vllm_plugin.py defaults it off for memory); NCCL moves bytes "
         "only, every numerics-bearing reduction is pik's fixed tree, so it selects no reduction order"
     ),
+    "NCCL_GRAPH_REGISTER": (
+        "NCCL buffer registration of graph-captured collectives (runtimes/vllm/vllm_plugin.py defaults it off with "
+        "expandable segments and refuses both on); NCCL moves bytes only, so it selects no reduction order"
+    ),
     "PYTORCH_CUDA_ALLOC_CONF": "caching-allocator segment policy, checked only to respect a user setting; selects no kernel",
     "PYTORCH_ALLOC_CONF": "caching-allocator segment policy, checked only to respect a user setting; selects no kernel",
     "NCCL_MIN_NCHANNELS": "reported inside the nccl sub-map (not compared across sides)",
@@ -1569,6 +1711,67 @@ SIDE_LOCAL_SWITCHES: Dict[str, str] = {
     "ISOEXEC_AUTOFUSE_FAST_CFG": "how the pinned Inductor config is entered per compiled-region call (ops/compile/cfgpin.py); "
                                  "the fast pin is proven equal to the slow one before use, so it selects no kernel",
     "VLLM_ENABLE_V1_MULTIPROCESSING": "vLLM's process model; selects no kernel",
+    "ISOEXEC_V41_SIDE_STREAMS": "which V4.1 overlap streams run (mhc / aux / side; all or none): placement of the same "
+                                "kernels on the same operands",
+    "ISOEXEC_MHC_OVERLAP_MAX_ROWS": "side-stream placement of the mHC coefficients; the same kernels either way",
+    "ISOEXEC_DS_MULTI_STREAM_TOKENS": "auxiliary-stream placement of the x-only projections; the same GEMMs",
+    "ISOEXEC_DUALRAIL_PLAN": "dual-rail sparse-attention plan; plans are bitwise equal (ownership only)",
+    "ISOEXEC_V41_WINDOW_GLUE": "launch structure of the V4.1 engine window rows / lists; the same integers",
+    "ISOEXEC_V41_PIECEWISE_BREAKS": "graph-break structure of the V4.1 engine's PIECEWISE graphs; the same kernels on "
+                                    "the same operands either way",
+    "ISOEXEC_DETREDUCE_TREE_LAMPORT_CAP": "tree all-reduce workspace capacity; the reduction is elementwise",
+    "ISOEXEC_DEEPGEMM_PDL": "launch attribute of the DeepGEMM projection launches; the same kernels and bits",
+    "ISOEXEC_DEEPGEMM_EARLY": "early-launch mode of the DeepGEMM BF16 projection under PDL (trigger point, weight "
+                              "prefetch before the wait); activations, stores and MMAs unchanged: the same bits",
+    "ISOEXEC_DEEPGEMM_LEAF_REGS": "storage location of the leaf fold's counter partials (registers vs tensor memory); "
+                                  "the same tree nodes and bits",
+    "CUTE_DSL_ARCH": "vendored FlashInfer BI MoE CuTe-DSL compile-target override (family-portable sm_100f); the "
+                     "same kernel source and MMA program, as QUACK_ARCH for the vendored QuACK",
+    "ISOEXEC_REPLICA_CHECK_EVERY": "cadence of the trainer's replicated-parameter digest check (runtimes/megatron/"
+                                   "replicas.py): reads digests after the optimizer step, writes nothing",
+    "ISOEXEC_SYMM_SETUP_LOG": "diagnostics: a directory collectives/symm_setup appends one line per setup to",
+    "ISOEXEC_LAUNCH_ID": "marker of one multi-node engine launch (runtimes/vllm/multinode): process discovery for "
+                         "teardown and the receipt's launch check; selects nothing",
+    "ISOEXEC_LAUNCH_DRY_HOLD": "seconds the multi-node launcher's CPU dry-run workers stay alive (teardown tests); "
+                               "no engine runs in that mode",
+    "ISOEXEC_DS_TP_REDUCER": "transport of the V4.1 TP reducer (symmetric-memory tree vs rank-ordered all-gather + "
+                             "the same tree); same bits, agreed across the TP group",
+    "ISOEXEC_DS_EP_EXCHANGE": "transport of the V4.1 engine experts (MegaMoE EP over NVLink vs the fixed-order NCCL "
+                              "exchange); same bits, agreed across the EP group",
+    "ISOEXEC_DS_ACTOR_MEGA_ROWS_PER_RANK": "BF16 MegaMoE workspace capacity; larger calls run in equal chunks",
+    "ISOEXEC_DG_JIT_CACHE_DIR": "a filesystem cache location",
+    "ISOEXEC_PREBUILT_DIR": "a filesystem cache location (ops/prebuilt.py)",
+    "ISOEXEC_PREBUILT_ONLY": "whether a cache miss may compile; a hit loads the same bytes either way",
+    "ISOEXEC_LOAD_TIMERS": "diagnostics: cold-start timers on or off",
+    "ISOEXEC_PREBUILT_VERIFY": "whether a prebuilt hit is re-hashed at load; a passing entry loads the same bytes",
+    "NVCC_PREPEND_FLAGS": "folded into the prebuilt store's key (nvcc reads it)",
+    "NVCC_APPEND_FLAGS": "folded into the prebuilt store's key (nvcc reads it)",
+    "NVCC_CCBIN": "folded into the prebuilt store's key (nvcc's host compiler)",
+    "CC": "folded into the prebuilt store's key (torch passes it to nvcc as -ccbin)",
+    "PYTORCH_NVCC": "folded into the prebuilt store's key (torch's nvcc override)",
+    "GCC_EXEC_PREFIX": "folded into the prebuilt store's key (gcc driver search path)",
+    "COMPILER_PATH": "folded into the prebuilt store's key (gcc driver search path)",
+    "LIBRARY_PATH": "folded into the prebuilt store's key (link search path)",
+    "CPATH": "include directories folded into the prebuilt store's key by content",
+    "C_INCLUDE_PATH": "include directories folded into the prebuilt store's key by content",
+    "CPLUS_INCLUDE_PATH": "include directories folded into the prebuilt store's key by content",
+    "CUDA_INC_PATH": "include directories folded into the prebuilt store's key by content",
+    "CUDNN_HOME": "include directories folded into the prebuilt store's key by content",
+    "CUDNN_PATH": "include directories folded into the prebuilt store's key by content",
+    "ISOEXEC_LOAD_TIMERS_DIR": "diagnostics: where cold-start timer records are written",
+    "ISOEXEC_DG_JIT_NVCC_COMPILER": "the compiler the vendored DeepGEMM JIT runs; prebuilt-only mode points it at a "
+                                    "refusal that answers --version with the real nvcc, so every key is unchanged",
+    "TRITON_CACHE_DIR": "a filesystem cache location",
+    "TRITON_CACHE_MANAGER": "Triton's cache class; prebuilt-only mode refuses misses, a hit loads the same kernel",
+    "TORCH_CUDA_ARCH_LIST": "folded into the prebuilt store's key; each build sets its own arch list",
+    "TMPDIR": "a scratch location (prebuilt-only refusal script, DeepGEMM JIT scratch)",
+    "ISOEXEC_DEEPGEMM_BUILD_VERBOSE": "a logging level; selects no kernel",
+    "CXX": "the host compiler of the torch extensions; its version is folded into the prebuilt store's key",
+    "CUDA_MPS_PIPE_DIRECTORY": "vendored DeepGEMM MLOpart MPS daemon location; IsoExec calls no MLOpart path",
+    "MASTER_ADDR": "vendored DeepGEMM distributed test utility; IsoExec does not call it",
+    "MASTER_PORT": "vendored DeepGEMM distributed test utility; IsoExec does not call it",
+    "RANK": "vendored DeepGEMM distributed test utility; IsoExec does not call it",
+    "WORLD_SIZE": "vendored DeepGEMM distributed test utility; IsoExec does not call it",
 }
 
 

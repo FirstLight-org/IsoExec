@@ -8,9 +8,14 @@ from unittest.mock import patch
 
 
 def sm90_build_dir(
-    override: str, family: str, tag: str, source: Path, *, append_tag_to_override: bool = False
+    override: str, family: str, tag: str, source: Path, *, append_tag_to_override: bool = False,
+    extra_sources: Sequence[Path] = (),
 ) -> Path:
-    """Honor an explicit cache path, else use PyTorch's cache root and isolate sources."""
+    """Honor an explicit cache path, else use PyTorch's cache root and isolate sources.
+
+    ``extra_sources``: further source trees the build includes by relative path (another package's
+    csrc, :data:`SM100_COMMON`). Their bytes join the key so an edit there rebuilds this extension;
+    the default (none) leaves every existing key unchanged."""
     configured = os.environ.get(override)
     if configured:
         path = Path(configured).expanduser()
@@ -37,7 +42,19 @@ def sm90_build_dir(
         }:
             record(os.fsencode(path.relative_to(source)))
             record(path.read_bytes())
+    for extra in extra_sources:
+        extra = Path(extra).resolve()
+        for path in sorted(extra.rglob("*")):
+            if path.is_file() and path.suffix in _SOURCE_SUFFIXES:
+                record(os.fsencode(path.relative_to(extra)))
+                record(path.read_bytes())
     return cache / "isoexec" / family / f"{tag}-{digest.hexdigest()[:16]}"
+
+
+#: Headers shared by SM100 kernel packages (``tmem_pair.cuh``: the tensor-memory allocation and
+#: CTA-pair handshake of the tcgen05 kernels). Included by relative path; a package that includes
+#: it passes it as ``extra_sources`` so its build key and profile digest fold it.
+SM100_COMMON = Path(__file__).resolve().parent / "sm100_common" / "csrc"
 
 
 # Preserve subnormals and separate multiply/add rounding across both architectures.
@@ -64,7 +81,9 @@ def build_sm90_extension(
     is folded into the build directory so a different checkout never reuses another's objects.
     """
     import torch
-    from torch.utils.cpp_extension import CUDA_HOME, load
+    from torch.utils.cpp_extension import CUDA_HOME
+
+    from isoexec.ops.prebuilt import load_extension
 
     upper = family.upper()
     src = Path(module_file).resolve().parent / "csrc"
@@ -90,7 +109,7 @@ def build_sm90_extension(
             includes.append(str(cccl))
 
     with _BUILD_LOCK, patch.dict(os.environ, {"TORCH_CUDA_ARCH_LIST": "9.0a"}):
-        return load(
+        return load_extension(
             name=f"isoexec_{family}_sm90_cuda",
             sources=[str(src / f) for f in sources],
             build_directory=str(build),
@@ -216,15 +235,17 @@ def sm100_cuda_flags(standard: str = "c++20", extra: Sequence[str] = ()) -> tupl
     )
 
 
-def sm100_profile_digest(family: str, source: Path, *, extra_cuda_flags: Sequence[str] = ()) -> str:
+def sm100_profile_digest(family: str, source: Path, *, extra_cuda_flags: Sequence[str] = (),
+                         extra_sources: Sequence[Path] = ()) -> str:
     """Identity of one SM100 build: the flag profile, the CUTLASS headers and the kernel sources."""
     digest = hashlib.sha256()
     digest.update(" ".join(sm100_cuda_flags(extra=extra_cuda_flags)).encode())
     digest.update(cutlass_identity(family).encode())
-    for path in sorted(Path(source).resolve().rglob("*")):
-        if path.is_file() and path.suffix in _SOURCE_SUFFIXES:
-            digest.update(os.fsencode(path.name))
-            digest.update(path.read_bytes())
+    for root in (source, *extra_sources):
+        for path in sorted(Path(root).resolve().rglob("*")):
+            if path.is_file() and path.suffix in _SOURCE_SUFFIXES:
+                digest.update(os.fsencode(path.name))
+                digest.update(path.read_bytes())
     return digest.hexdigest()[:16]
 
 
@@ -237,15 +258,22 @@ def build_sm100_extension(
     include_cccl: bool = False,
     include_cutlass: bool = False,
     extra_cuda_flags: Sequence[str] = (),
+    extra_sources: Sequence[Path] = (),
 ):
-    """Build and load sources from the caller's sibling ``csrc`` directory with the SM100 profile."""
+    """Build and load sources from the caller's sibling ``csrc`` directory with the SM100 profile.
+
+    ``extra_sources`` names other source trees the build includes by relative path; they join the
+    build key."""
     import torch
-    from torch.utils.cpp_extension import CUDA_HOME, load
+    from torch.utils.cpp_extension import CUDA_HOME
+
+    from isoexec.ops.prebuilt import load_extension
 
     upper = family.upper()
     src = Path(module_file).resolve().parent / "csrc"
     tag = f"torch-{torch.__version__}-py{sys.version_info.major}{sys.version_info.minor}"
-    build = arch_build_dir(f"ISOEXEC_{upper}_SM100_BUILD_DIR", f"{family}-sm100", tag, src)
+    build = arch_build_dir(f"ISOEXEC_{upper}_SM100_BUILD_DIR", f"{family}-sm100", tag, src,
+                           extra_sources=extra_sources)
     build.mkdir(parents=True, exist_ok=True)
     version = tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2])
     standard = "c++20" if version >= (2, 11) else "c++17"
@@ -268,7 +296,9 @@ def build_sm100_extension(
         includes += [str(cutlass), str(cutlass.parent / "tools" / "util" / "include")]
 
     with _BUILD_LOCK, patch.dict(os.environ, {"TORCH_CUDA_ARCH_LIST": "10.0a"}):
-        return load(
+        # Through the content-keyed prebuilt store (``ops/prebuilt.py``): a hit loads the stored object, a miss
+        # builds exactly this command and publishes it.
+        return load_extension(
             name=f"isoexec_{family}_sm100_cuda",
             sources=[str(src / f) for f in sources],
             build_directory=str(build),
@@ -277,6 +307,7 @@ def build_sm100_extension(
             extra_ldflags=["-lcuda"],
             extra_cuda_cflags=list(sm100_cuda_flags(standard, extra_cuda_flags)),
             verbose=os.environ.get(f"ISOEXEC_{upper}_SM100_BUILD_VERBOSE") == "1",
+            extra_trees=[str(p) for p in extra_sources],
         )
 
 

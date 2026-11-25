@@ -54,7 +54,8 @@ def test_driver_resolves_bound_and_refuses_checkpoint_without_metadata_capture(m
     monkeypatch.setattr("isoexec.integrations.skyrl.config.dependencies.check", lambda **kwargs: [])
     monkeypatch.setattr("isoexec.integrations.skyrl.config.prepare_checkpoints", lambda _trainer: None)
     source = ModelSource("isoexec.models.qwen2_moe")
-    monkeypatch.setattr("isoexec.integrations.skyrl.config.source_config", lambda *_args: (source, {}))
+    monkeypatch.setattr("isoexec.integrations.skyrl.config.source_config",
+                        lambda *_args: (source, {"model_type": "qwen2_moe", "architectures": ["Qwen2MoeForCausalLM"]}))
     result = resolve(cfg)
     assert result is not None and result.trainer_capture_max_tokens == 1536
     assert cfg.trainer._isoexec_config is result

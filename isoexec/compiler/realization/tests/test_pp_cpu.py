@@ -94,3 +94,52 @@ def test_stage_loading_skips_other_stages_and_resolves_the_tied_head(stages, ran
     assert torch.equal(shared, weights["model.language_model.embed_tokens.weight"].to(shared.dtype))
     with pytest.raises(ValueError, match="not registered"):
         load_weights(target, weights.items(), source=ModelSource("isoexec.models.qwen3_5"), hf_config=config)
+
+
+FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+
+
+def test_single_tensor_cuts_keep_the_plan_they_had_before_named_carries(stages):
+    """A single-tensor cut never takes the named-carry form, and its prepared stage code is byte for byte the
+    code the realization produced before named carries existed (fixtures written by that version)."""
+    from isoexec.compiler.realization.pp import crosses_several_tensors
+    _, definitions = stages
+    for rank, definition in enumerate(definitions):
+        target = clone_graph_module(definition.module)
+        assert not crosses_several_tensors(target)
+        assert prepare_pipeline_graph(target) is None
+        assert target.code == (FIXTURES / f"pp_single_tensor_qwen_stage{rank}.txt").read_text()
+
+
+def test_the_ced_cut_crosses_named_token_leading_carries_in_one_order():
+    """DeepSeek V4.1 at the CED cut: five tensors cross (the last encoder block's carry x, pre, out, post,
+    comb). Stage 0 sends them token-leading in the cut's order under ``carry_names``; stage 1 takes the same
+    keys with the same per-token shapes and dtypes and restores the captured layout (pure moves)."""
+    import json
+    from pathlib import Path
+
+    from isoexec.compiler.realization.pp import carry_names, crosses_several_tensors
+    package = Path(__file__).parents[3] / "models" / "deepseek_v4_1_flash" / "tests" / "fixtures"
+    raw = json.loads((package / "debug_config.json").read_text())
+    model = ModelSource("isoexec.models.deepseek_v4_1_flash").build_meta(raw)
+    b, S, H = model.cfg.boundary, model.cfg.hc_mult, model.cfg.hidden_size
+    inputs = text_inputs(model, device="cpu", max_tokens=16, profile="trainer")
+    captured = capture(model, inputs.args, inputs.kwargs, dynamic_shapes=inputs.dynamic_shapes,
+                       root_layouts=inputs.root_layouts, seq=inputs.seq)
+    n = len(captured.layers)
+    first = clone_graph_module(define_stage(captured, ((0, b), (b, n)), pp_rank=0).module)
+    last = clone_graph_module(define_stage(captured, ((0, b), (b, n)), pp_rank=1).module)
+    assert crosses_several_tensors(first) and crosses_several_tensors(last)
+    in0, out0 = prepare_pipeline_graph(first, named_carries=True, final=False)
+    in1, out1 = prepare_pipeline_graph(last, named_carries=True, final=True)
+    assert in0 == () and out1 == ()
+    assert [c.key for c in out0] == list(carry_names(5)) == [c.key for c in in1]
+    assert [(c.tail, c.dtype, c.lead) for c in out0] == [(c.tail, c.dtype, c.lead) for c in in1] == [
+        ((S, H), torch.bfloat16, 1), ((S,), torch.float32, 1), ((H,), torch.bfloat16, 1),
+        ((S,), torch.float32, 1), ((S, S), torch.float32, 1)]
+    assert [node.name for node in last.graph.nodes if node.op == "placeholder"] == ["input_ids", "seq",
+                                                                                    *carry_names(5)]
+    out = next(node for node in first.graph.nodes if node.op == "output").args[0]
+    assert len(out) == 5 and all(node.target == torch.ops.aten.squeeze.dim for node in out)
+    # wire bytes per token: the raw carry, a byte move (native sends the settled streams + pre_mix)
+    assert sum(torch.empty(c.tail, dtype=c.dtype).nbytes for c in out0) == 2 * (S * H + H) + 4 * (S + S + S * S)

@@ -120,6 +120,12 @@ BATTERIES: tuple[Battery, ...] = (
         "every Blackwell autotune config of pik's leaf-partial kernel is bitwise-equal to the cuBLASLt "
         "leaf at the shipped models' leaf widths (skips past the arch self-check off sm100).",
     ),
+    Battery(
+        "isoexec/ops/moe/router_sm100/tests/router_relations_gpu.py",
+        "SM100 fused routers: select-only and fused tables equal the torch program bit for bit, invariant "
+        "to batch, ownership point and graph replay; the backward equals its reference op for op.",
+        timeout_s=1800,
+    ),
 )
 
 NOT_RUN_HERE: dict[str, str] = {
@@ -168,6 +174,9 @@ NOT_RUN_HERE: dict[str, str] = {
     ),
     "isoexec/ops/collectives/tests/pik_overlap_gpu.py": (
         "spawns --world NCCL ranks itself (optionally one visible GPU per rank, --ray-sim) or --sim on one GPU"
+    ),
+    "isoexec/ops/collectives/tests/symm_setup_groups_gpu.py": (
+        "spawns --world NCCL ranks itself (2 or 4, one GPU each) and needs that many visible GPUs"
     ),
     "isoexec/ops/collectives/tests/pik_p2p_groups_gpu.py": (
         "spawns --world NCCL ranks itself (one GPU each) and needs that many visible GPUs"

@@ -44,6 +44,12 @@ IMPLS: tuple[ImplSpec, ...] = (
         supported_archs=_SM100,
     ),
     ImplSpec(
+        op="logprobs.head",
+        impl_id="fp32_root",
+        version=1,
+        supported_archs=_SM100,
+    ),
+    ImplSpec(
         op="logprobs.lm_head_slice",
         impl_id="identity",
         version=1,

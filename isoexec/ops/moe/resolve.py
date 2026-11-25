@@ -32,7 +32,12 @@ _NO_FUSED_ROUTER = "sigmoid_noaux_bias_select"
 
 def resolve(op: str, *, site: str, routing: str | None = None, side: str | None = None,
             weight_after_fc2: bool = False, **unused: Any):
-    """The mixture kernel serving ``op`` on the live arch, for this ``routing`` and this ``side``."""
+    """The mixture kernel serving ``op`` on the live arch, for this ``routing`` and this ``side``.
+    ``moe.route`` / ``moe.route.backward`` are the SM100 fused routers, selected by routing name."""
+    if op in ("moe.route", "moe.route.backward"):
+        from isoexec.ops.moe.router_sm100.resolve import resolve as router
+
+        return router(op, site=site, routing=routing, **unused)
     if unused:
         raise refuse(op, site=site, asked=unused, on_offer=("routing", "side"),
                      why="the mixture selects on the router mechanics and on the side, and on nothing else.")
