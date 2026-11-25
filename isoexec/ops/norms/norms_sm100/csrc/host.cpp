@@ -62,6 +62,14 @@ Tensor gate(const Tensor &z, int64_t n) {
   return z;
 }
 
+Bands override_bands(Lanes l, int64_t rows, int64_t max_bands) {
+  int64_t rpi = l.L <= 32 ? 128 / l.L : 1;
+  int64_t units = (rows + rpi - 1) / rpi;
+  int64_t bands = units < max_bands ? units : max_bands;
+  int64_t iters = (units + bands - 1) / bands;
+  return {(units + iters - 1) / iters, int(iters)};
+}
+
 struct FwdOut {
   Tensor out, h, rstd;
 };
@@ -89,7 +97,7 @@ FwdOut rms_forward(const Tensor &x, const std::optional<Tensor> &r, const std::o
 
 std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const Tensor &rstd,
                                        const Tensor &w, const Tensor &dres, int mode,
-                                       int row_plan) {
+                                       int64_t max_bands) {
   int64_t n = x.size(-1);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -102,12 +110,14 @@ std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const 
   Tensor dw;
   if (!m)
     return {dx.view(x.sizes()), w.defined() ? at::zeros_like(w) : Tensor()};
-  const int rpg = row_group(m, n, row_plan);
-  Tensor dwp = at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat));
-  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode, rpg);
+  Bands b = bwd_bands(bwd_lanes(n), m, n, false);
+  if (max_bands > 0)
+    b = override_bands(bwd_lanes(n), m, max_bands);
+  Tensor dwp = at::empty({b.bands, n}, x2.options().dtype(at::kFloat));
+  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode, b.bands, b.iters);
   if (w.defined()) {
     Tensor folded = at::empty({n}, dwp.options());
-    launch_dw_fold(dwp, folded, rpg);
+    launch_dw_fold(dwp, folded);
     dw = w.scalar_type() == at::kFloat ? folded : folded.to(w.scalar_type());
   }
   return {dx.view(x.sizes()), dw};
@@ -133,7 +143,7 @@ struct GatedGrads {
 };
 
 GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, const Tensor &rstd,
-                          const Tensor &w, int mode, int row_plan) {
+                          const Tensor &w, int mode, int64_t max_bands) {
   int64_t n = x.size(2);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -143,12 +153,14 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   int64_t m = x2.size(0);
   GatedGrads g{at::empty({m, n}, x2.options()), at::empty({m, n}, x2.options()), Tensor()};
   if (m) {
-    const int rpg = row_group(m, n, row_plan);
-    Tensor dwp = w.defined() ? at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat)) : Tensor();
-    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode, rpg);
+    Bands b = bwd_bands(bwd_lanes(n), m, n, true);
+    if (max_bands > 0)
+      b = override_bands(bwd_lanes(n), m, max_bands);
+    Tensor dwp = w.defined() ? at::empty({b.bands, n}, x2.options().dtype(at::kFloat)) : Tensor();
+    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode, b.bands, b.iters);
     if (w.defined()) {
       Tensor folded = at::empty({n}, dwp.options());
-      launch_dw_fold(dwp, folded, rpg);
+      launch_dw_fold(dwp, folded);
       g.dw = w.scalar_type() == at::kFloat ? folded : folded.to(w.scalar_type());
     }
   } else if (w.defined()) {
@@ -158,6 +170,8 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   g.dz = g.dz.view(x.sizes());
   return g;
 }
+
+constexpr int64_t kMaxBands = 0; // 0: use the measured plan (plan.h)
 
 struct RMSNormFn : public torch::autograd::Function<RMSNormFn> {
   static variable_list forward(AutogradContext *ctx, Tensor x, Tensor w, double eps, int64_t mode) {
@@ -171,7 +185,7 @@ struct RMSNormFn : public torch::autograd::Function<RMSNormFn> {
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor()};
     auto [dx, dw] =
-        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()), 0);
+        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()), kMaxBands);
     return {dx, dw, Tensor(), Tensor()};
   }
 };
@@ -189,7 +203,7 @@ struct AddRMSNormFn : public torch::autograd::Function<AddRMSNormFn> {
     Tensor dy = grads[0], dh = grads[1], dtot, dw;
     if (dy.defined()) {
       std::tie(dtot, dw) =
-          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()), 0);
+          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()), kMaxBands);
     } else {
       dtot = dh;
     }
@@ -209,7 +223,7 @@ struct GatedNormFn : public torch::autograd::Function<GatedNormFn> {
     auto s = ctx->get_saved_variables();
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor(), Tensor()};
-    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()), 0);
+    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()), kMaxBands);
     return {g.dx, g.dz, g.dw, Tensor(), Tensor()};
   }
 };
@@ -278,8 +292,9 @@ std::tuple<Tensor, Tensor, Tensor> raw_rms_fwd(const Tensor &x, const std::optio
 std::tuple<Tensor, Tensor> raw_rms_bwd(const Tensor &dy, const Tensor &x, const Tensor &rstd,
                                        const std::optional<Tensor> &w,
                                        const std::optional<Tensor> &dres, bool zero_centered,
-                                       int row_plan) {
-  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1, row_plan);
+                                       int64_t max_bands) {
+  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1,
+                               max_bands);
   return {dx, dw};
 }
 
@@ -292,20 +307,26 @@ std::tuple<Tensor, Tensor> raw_gated_fwd(const Tensor &x, const Tensor &z,
 
 std::tuple<Tensor, Tensor, Tensor> raw_gated_bwd(const Tensor &dy, const Tensor &x, const Tensor &z,
                                                  const Tensor &rstd, const std::optional<Tensor> &w,
-                                                 bool zero_centered, int row_plan) {
-  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1, row_plan);
+                                                 bool zero_centered, int64_t max_bands) {
+  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1,
+                                max_bands);
   return {g.dx, g.dz, g.dw};
 }
 
-// (hidden-axis segment length, row segment length) the kernels were compiled with.
-std::tuple<int, int> schedule() { return {hidden_segment(), row_segment()}; }
+std::tuple<int, int, int, int> recipe(int64_t n) {
+  Lanes f = fwd_lanes(n), b = bwd_lanes(n);
+  return {f.L, f.K, b.L, b.K};
+}
 
-// Execution geometry, none of it numerical: (forward threads per row, forward loads per thread, backward threads per
-// row, backward loads per thread, forward CTA threads, forward register plan, backward load plan) at `rows` rows.
-std::tuple<int, int, int, int, int, int, int> plan(int64_t n, int64_t rows) {
-  Lanes fl = fwd_lanes(n), bl = bwd_lanes(n);
-  FwdPlan f = fwd_plan(fl, rows);
-  return {fl.L, fl.K, bl.L, bl.K, f.threads, f.var, bwd_var(bl, rows)};
+// The forward segment length the kernels were compiled with.
+int schedule() { return hidden_segment(); }
+
+std::tuple<int, int, int, int64_t, int, int, int, int, int> plan(int64_t n, int64_t rows) {
+  FwdPlan f = fwd_plan(fwd_lanes(n), rows);
+  Bands b = bwd_bands(bwd_lanes(n), rows, n, false);
+  FoldPlan fo = fold_plan(b.bands, n);
+  return {f.threads, f.var, bwd_var(bwd_lanes(n), rows), b.bands, b.iters,
+          fo.threads, fo.cpt, fo.unroll, fo.mode};
 }
 
 } // namespace norms_sm100
@@ -319,13 +340,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("gated_rms_norm", &gated_rms_norm, py::arg("x"), py::arg("z"), py::arg("weight"), py::arg("eps"),
         py::arg("zero_centered"));
   m.def("raw_rms_fwd", &raw_rms_fwd);
-  // row_plan: 0 = the plan (plan by row count), 1 = one row per thread group, 8 = one segment per group. Execution
-  // only: every value gives the same bits (tests hold them equal).
-  m.def("raw_rms_bwd", &raw_rms_bwd, py::arg("dy"), py::arg("x"), py::arg("rstd"), py::arg("weight"), py::arg("dres"),
-        py::arg("zero_centered"), py::arg("row_plan") = 0);
+  m.def("raw_rms_bwd", &raw_rms_bwd);
   m.def("raw_gated_fwd", &raw_gated_fwd);
-  m.def("raw_gated_bwd", &raw_gated_bwd, py::arg("dy"), py::arg("x"), py::arg("z"), py::arg("rstd"), py::arg("weight"),
-        py::arg("zero_centered"), py::arg("row_plan") = 0);
+  m.def("raw_gated_bwd", &raw_gated_bwd);
+  m.def("recipe", &recipe);
   m.def("schedule", &schedule);
   m.def("fwd_supported", &fwd_supported);
   m.def("plan", &plan, py::arg("n"), py::arg("rows"));

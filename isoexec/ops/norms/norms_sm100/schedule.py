@@ -1,6 +1,10 @@
 """The numerical schedule of the norms_sm100 sums: what the policy gives, and how it reaches the kernels.
 
-Every reduction in this package is a plain fp32 sum (one ``add.rn`` per term from ``+0``, merge ``add.rn``):
+The backward is outside the policy: its row dot and weight gradient are the tree's existing deterministic program
+(``csrc/bwd.cuh``), because only the trainer runs it, the weight gradient reduces over the batch (which the design
+does not cover) and the investigation validated forward schedules only. What follows is the FORWARD.
+
+Every forward reduction in this package is a plain fp32 sum (one ``add.rn`` per term from ``+0``, merge ``add.rn``):
 
     hidden axis   the sum of squares of a row (RMSNorm, fused add + RMSNorm, gated out-norm) and the backward's
                   row dot ``sum_h xhat * gy``
@@ -26,11 +30,6 @@ def hidden_sum(width: int) -> policy.Segments:
     return policy.reduce(width, b=1, L=SUM_SHORTEST_SEGMENT)
 
 
-def row_sum(rows: int) -> policy.Segments:
-    """Segments of the weight gradient's sum over ``rows`` rows."""
-    return policy.reduce(rows, b=1, L=SUM_SHORTEST_SEGMENT)
-
-
 def cuda_defines() -> tuple[str, ...]:
     """The segment lengths as compiler definitions: the only place the kernels get them from.
 
@@ -39,8 +38,7 @@ def cuda_defines() -> tuple[str, ...]:
     """
     return (
         f"-DNORMS_SM100_HIDDEN_SEGMENT={hidden_sum(SUM_SHORTEST_SEGMENT).S}",
-        f"-DNORMS_SM100_ROW_SEGMENT={row_sum(SUM_SHORTEST_SEGMENT).S}",
     )
 
 
-__all__ = ["SUM_SHORTEST_SEGMENT", "cuda_defines", "hidden_sum", "row_sum"]
+__all__ = ["SUM_SHORTEST_SEGMENT", "cuda_defines", "hidden_sum"]

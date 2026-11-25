@@ -8,75 +8,85 @@
 namespace norms_sm100 {
 namespace {
 
-// Adjacent tree over up to N values at stride `step` of p (N = 4 or 8), `count` of them present: a node with no
-// right neighbour moves up unchanged.
-template <int N> __device__ __forceinline__ float tree_present(const float *p, int step, int count) {
-  float t[N];
-#pragma unroll
-  for (int i = 0; i < N; ++i)
-    t[i] = p[i * step];
-#pragma unroll
-  for (int s = 1; s < N; s <<= 1)
-#pragma unroll
-    for (int q = 0; q < N; q += 2 * s)
-      if (q + s < count)
-        t[q] = __fadd_rn(t[q], t[q + s]);
-  return t[0];
-}
-
-// The weight gradient: one level of the adjacent tree over the row segments' partials. CTA (x, y) owns 32 columns
-// and the aligned block of 256 consecutive partials [256 y, 256 y + 256) (fewer in the last block): a subtree. All
-// threads stage the block in shared memory; its eight levels then run as three rounds (subtrees of 8, of 64, then
-// 4 of those), every (column, subtree) on its own thread. The root goes to row y of `out`; the host applies the
-// kernel again to the roots until one row is left, which is the same tree: node j of level k covers partials
-// [j 2^k, (j + 1) 2^k), and a node with no right neighbour moves up unchanged at every level.
-// ROWS: the staged values are single rows' terms (the backward's rpg == 1 plan). The first round is then each
-// segment's chain from +0 over its ROW_SEG rows (the last segment short), and a block is 256 / ROW_SEG segments.
-template <bool ROWS>
+template <int CPT, int UNROLL>
 __global__ __launch_bounds__(256, 1) void
-fold_dw_tree(const float *__restrict__ partials, float *__restrict__ out, int64_t count, int64_t width) {
-  constexpr int COLS = 32, BLOCK = 256, TPB = 256, PER = BLOCK * COLS / TPB;
-  __shared__ float st[BLOCK * COLS];
-  const int64_t col0 = int64_t(blockIdx.x) * COLS, b0 = int64_t(blockIdx.y) * BLOCK;
-  const int tid = threadIdx.x, col = tid % COLS;
-  const int n = int(count - b0 < BLOCK ? count - b0 : BLOCK);
-  for (int u = 0; u * TPB + tid < n * COLS; ++u) { // only the staged values that exist are read
-    int idx = u * TPB + tid, sb = idx / COLS, c = idx % COLS;
-    st[idx] = col0 + c < width ? partials[(b0 + sb) * width + col0 + c] : 0.f;
-  }
-  __syncthreads();
+fold_dw_bands(const float *__restrict__ partials, float *__restrict__ dw, int64_t bands,
+              int64_t width) {
+  int64_t col = (int64_t(blockIdx.x) * blockDim.x + threadIdx.x) * CPT;
+  if (col >= width)
+    return;
+  float sum[CPT];
 #pragma unroll
-  for (int u = 0; u < 4; ++u) { // 32 groups of 8 staged values per column
-    int g = tid / COLS + 8 * u;
-    if (8 * g < n) {
-      if constexpr (ROWS) { // one segment: its rows ascending, from +0
-        static_assert(ROW_SEG == 8, "the per-row plan stages one segment per group of 8 rows");
-        float acc = 0.f;
+  for (int c = 0; c < CPT; ++c)
+    sum[c] = 0.f;
+  int64_t band = 0;
+  for (; band + UNROLL <= bands; band += UNROLL) {
+    float t[UNROLL][CPT];
 #pragma unroll
-        for (int i = 0; i < 8; ++i)
-          if (8 * g + i < n)
-            acc = __fadd_rn(acc, st[(8 * g + i) * COLS + col]);
-        st[8 * g * COLS + col] = acc;
-      } else { // a subtree of 8 partials
-        st[8 * g * COLS + col] = tree_present<8>(st + 8 * g * COLS + col, COLS, n - 8 * g);
+    for (int u = 0; u < UNROLL; ++u) {
+      const float *p = partials + (band + u) * width + col;
+      if constexpr (CPT == 4) {
+        float4 q = *reinterpret_cast<const float4 *>(p);
+        t[u][0] = q.x; t[u][1] = q.y; t[u][2] = q.z; t[u][3] = q.w;
+      } else if constexpr (CPT == 2) {
+        float2 q = *reinterpret_cast<const float2 *>(p);
+        t[u][0] = q.x; t[u][1] = q.y;
+      } else {
+#pragma unroll
+        for (int c = 0; c < CPT; ++c)
+          t[u][c] = p[c];
       }
     }
+#pragma unroll
+    for (int u = 0; u < UNROLL; ++u)
+#pragma unroll
+      for (int c = 0; c < CPT; ++c)
+        sum[c] = __fadd_rn(sum[c], t[u][c]);
   }
-  __syncthreads();
-  const int n8 = (n + 7) / 8;
-  if (tid < 4 * COLS) { // subtrees of 8 of those: 4 per column
-    int h = tid / COLS;
-    if (8 * h < n8)
-      st[64 * h * COLS + col] = tree_present<8>(st + 64 * h * COLS + col, 8 * COLS, n8 - 8 * h);
+  for (; band < bands; ++band) {
+    const float *p = partials + band * width + col;
+#pragma unroll
+    for (int c = 0; c < CPT; ++c)
+      sum[c] = __fadd_rn(sum[c], p[c]);
   }
-  __syncthreads();
-  if (tid < COLS && col0 + col < width)
-    out[int64_t(blockIdx.y) * width + col0 + col] = tree_present<4>(st + col, 64 * COLS, (n + 63) / 64);
+#pragma unroll
+  for (int c = 0; c < CPT; ++c)
+    if (col + c < width)
+      dw[col + c] = sum[c];
 }
 
-// Largest row count at which one row per thread group is the faster plan, by threads per row: measured
-// (policy_validation/port/seq/logs/rms_release_bwd_plans.log).
-constexpr int64_t kPerRowMaxWide = 256, kPerRowMaxNarrow = 1024;
+template <int TPB, int STAGE>
+__global__ __launch_bounds__(TPB, 1) void
+fold_dw_staged(const float *__restrict__ partials, float *__restrict__ dw, int64_t bands,
+               int64_t width) {
+  constexpr int COLS = 32, PER = STAGE * COLS / TPB;
+  __shared__ float st[STAGE * COLS];
+  int64_t col0 = int64_t(blockIdx.x) * COLS;
+  int tid = threadIdx.x;
+  int live = tid < COLS && col0 + tid < width;
+  float sum = 0.f;
+  for (int64_t b0 = 0; b0 < bands; b0 += STAGE) {
+    int n = int(bands - b0 < STAGE ? bands - b0 : STAGE);
+    float v[PER];
+#pragma unroll
+    for (int u = 0; u < PER; ++u) {
+      int idx = u * TPB + tid, sb = idx / COLS, c = idx % COLS;
+      v[u] = (idx < n * COLS && col0 + c < width) ? partials[(b0 + sb) * width + col0 + c] : 0.f;
+    }
+    __syncthreads(); // the previous stage's reads are done before this stage overwrites the buffer
+#pragma unroll
+    for (int u = 0; u < PER; ++u)
+      st[u * TPB + tid] = v[u];
+    __syncthreads();
+    if (live) {
+#pragma unroll 8
+      for (int sb = 0; sb < n; ++sb)
+        sum = __fadd_rn(sum, st[sb * COLS + tid]);
+    }
+  }
+  if (live)
+    dw[col0 + tid] = sum;
+}
 
 struct RmsBwdArgs {
   const __nv_bfloat16 *dy, *x, *dres;
@@ -85,37 +95,30 @@ struct RmsBwdArgs {
   const void *w;
   __nv_bfloat16 *dx;
   float *dwp;
-  int64_t M, nseg;
-  int rpg;
+  int64_t M, bands;
+  int iters;
 };
-
-// CTAs: one per 128 / L thread groups (L <= 64), else one per group.
-template <int L> int64_t bwd_blocks(int64_t nseg) {
-  constexpr int RPI = L <= 64 ? 128 / L : 1;
-  return (nseg + RPI - 1) / RPI;
-}
 
 template <int K, int L, int MODE, bool WF, bool RES>
 void run_rms_bwd(const RmsBwdArgs &a) {
   auto stream = at::cuda::getCurrentCUDAStream();
   const int var = bwd_var({L, K}, a.M);
-  const int64_t blocks = bwd_blocks<L>(a.nseg);
   if constexpr (8 * K >= 16) {
     if (var == BWD_STREAM) {
-      rms_bwd<K, L, MODE, WF, RES, BWD_STREAM><<<dim3(blocks), 128, 0, stream>>>(
-          a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.nseg, a.rpg);
+      rms_bwd<K, L, MODE, WF, RES, BWD_STREAM><<<dim3(a.bands), 128, 0, stream>>>(
+          a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.iters);
       return;
     }
   }
   if constexpr (L == 128 && K <= 5) {
     if (var == BWD_RING) {
-      rms_bwd<K, L, MODE, WF, RES, BWD_RING><<<dim3(blocks), 128, 0, stream>>>(
-          a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.nseg, a.rpg);
+      rms_bwd<K, L, MODE, WF, RES, BWD_RING><<<dim3(a.bands), 128, 0, stream>>>(
+          a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.iters);
       return;
     }
   }
-  rms_bwd<K, L, MODE, WF, RES, BWD_KEEP><<<dim3(blocks), 128, 0, stream>>>(
-      a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.nseg, a.rpg);
+  rms_bwd<K, L, MODE, WF, RES, BWD_KEEP><<<dim3(a.bands), 128, 0, stream>>>(
+      a.dy, a.sdy, a.x, a.sx, a.rstd, a.w, a.dres, a.sdres, a.dx, a.dwp, a.M, a.iters);
 }
 
 struct GatedBwdArgs {
@@ -125,21 +128,20 @@ struct GatedBwdArgs {
   const void *w;
   __nv_bfloat16 *dx, *dz;
   float *dwp;
-  int64_t M, nseg;
-  int hv, rpg;
+  int64_t M, bands;
+  int hv, iters;
   bool zaligned;
 };
 
 template <int K, int L, int MODE, bool WF>
 void run_gated_bwd(const GatedBwdArgs &a) {
   auto stream = at::cuda::getCurrentCUDAStream();
-  const int64_t blocks = bwd_blocks<L>(a.nseg);
   if (a.zaligned)
-    gated_bwd<K, L, MODE, WF, true><<<dim3(blocks), 128, 0, stream>>>(
-        a.dy, a.sdy, a.x, a.sx, a.z, a.szt, a.szh, a.rstd, a.w, a.dx, a.dz, a.dwp, a.M, a.hv, a.nseg, a.rpg);
+    gated_bwd<K, L, MODE, WF, true><<<dim3(a.bands), 128, 0, stream>>>(
+        a.dy, a.sdy, a.x, a.sx, a.z, a.szt, a.szh, a.rstd, a.w, a.dx, a.dz, a.dwp, a.M, a.hv, a.iters);
   else
-    gated_bwd<K, L, MODE, WF, false><<<dim3(blocks), 128, 0, stream>>>(
-        a.dy, a.sdy, a.x, a.sx, a.z, a.szt, a.szh, a.rstd, a.w, a.dx, a.dz, a.dwp, a.M, a.hv, a.nseg, a.rpg);
+    gated_bwd<K, L, MODE, WF, false><<<dim3(a.bands), 128, 0, stream>>>(
+        a.dy, a.sdy, a.x, a.sx, a.z, a.szt, a.szh, a.rstd, a.w, a.dx, a.dz, a.dwp, a.M, a.hv, a.iters);
 }
 
 #define BWD_WIDTHS(X)                                                                              \
@@ -149,45 +151,51 @@ void run_gated_bwd(const GatedBwdArgs &a) {
 
 } // namespace
 
-int row_segment() { return ROW_SEG; }
-
-// Rows per thread group (execution only; see bwd.cuh): single rows while the row count is small enough that one
-// row per group keeps more CTAs in flight than a segment per group, else whole segments.
-int row_group(int64_t rows, int64_t width, int requested) {
-  if (requested == 1 || requested == ROW_SEG)
-    return requested;
-  TORCH_CHECK(requested == 0, "norms_sm100: row_group must be 0 (plan), 1 or ", ROW_SEG);
-  return rows <= (bwd_lanes(width).L > 32 ? kPerRowMaxWide : kPerRowMaxNarrow) ? 1 : ROW_SEG;
-}
-
-int64_t row_units(int64_t rows, int rpg) { return (rows + rpg - 1) / rpg; }
-
-void launch_dw_fold(const at::Tensor &partials, const at::Tensor &dw, int rpg) {
-  int64_t width = dw.numel(), count = partials.size(0);
+void launch_dw_fold(const at::Tensor &partials, const at::Tensor &dw) {
+  int64_t width = dw.numel(), bands = partials.size(0);
+  FoldPlan p = fold_plan(bands, width);
   auto stream = at::cuda::getCurrentCUDAStream();
-  at::Tensor in = partials;
-  bool rows = rpg == 1;
-  while (true) { // one launch per eight tree levels
-    int64_t roots = (count + 255) / 256;
-    at::Tensor out = roots == 1 ? dw : at::empty({roots, width}, partials.options());
-    if (rows)
-      fold_dw_tree<true><<<dim3((width + 31) / 32, roots), 256, 0, stream>>>(in.data_ptr<float>(), out.data_ptr<float>(),
-                                                                            count, width);
-    else
-      fold_dw_tree<false><<<dim3((width + 31) / 32, roots), 256, 0, stream>>>(in.data_ptr<float>(), out.data_ptr<float>(),
-                                                                             count, width);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-    if (roots == 1)
-      return;
-    in = out;
-    count = roots;
-    rows = false; // the roots of 256 / ROW_SEG segments are subtrees: the remaining levels are the tree's
+  const float *pp = partials.data_ptr<float>();
+  float *dp = dw.data_ptr<float>();
+  if (p.mode == FOLD_SHARED) {
+    int64_t sblocks = (width + 31) / 32; // 32 columns per CTA, whatever its thread count
+#define STAGED(TPB, STAGE)                                                                         \
+  fold_dw_staged<TPB, STAGE><<<dim3(sblocks), TPB, 0, stream>>>(pp, dp, bands, width);             \
+  C10_CUDA_KERNEL_LAUNCH_CHECK();                                                                  \
+  return;
+    if (p.threads >= 256) {
+      if (p.unroll >= 256) { STAGED(256, 256) }
+      if (p.unroll >= 128) { STAGED(256, 128) }
+      STAGED(256, 64)
+    }
+    if (p.unroll >= 256) { STAGED(128, 256) }
+    if (p.unroll >= 128) { STAGED(128, 128) }
+    STAGED(128, 64)
+#undef STAGED
   }
+  int64_t lanes = (width + p.cpt - 1) / p.cpt;
+  int64_t blocks = (lanes + p.threads - 1) / p.threads;
+#define FOLD(CPT, UNROLL)                                                                          \
+  fold_dw_bands<CPT, UNROLL><<<dim3(blocks), p.threads, 0, stream>>>(pp, dp, bands, width);        \
+  C10_CUDA_KERNEL_LAUNCH_CHECK();                                                                  \
+  return;
+#define FOLD_U(CPT)                                                                                \
+  if (p.unroll >= 64 && CPT == 1) { FOLD(CPT, 64) }                                                \
+  if (p.unroll >= 32) { FOLD(CPT, 32) }                                                            \
+  if (p.unroll >= 16) { FOLD(CPT, 16) }                                                            \
+  if (p.unroll >= 8) { FOLD(CPT, 8) }                                                              \
+  if (p.unroll >= 4) { FOLD(CPT, 4) }                                                              \
+  FOLD(CPT, 1)
+  if (p.cpt == 4 && width % 4 == 0) { FOLD_U(4) }
+  if (p.cpt == 2 && width % 2 == 0) { FOLD_U(2) }
+  FOLD_U(1)
+#undef FOLD_U
+#undef FOLD
 }
 
 void launch_rms_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor &rstd,
                     const at::Tensor &w, const at::Tensor &dres, const at::Tensor &dx,
-                    const at::Tensor &dwp, int mode, int rpg) {
+                    const at::Tensor &dwp, int mode, int64_t bands, int iters) {
   Lanes l = bwd_lanes(x.size(1));
   RmsBwdArgs a{bf16_ptr(dy),
                bf16_ptr(x),
@@ -200,8 +208,8 @@ void launch_rms_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor 
                bf16_mut(dx),
                dwp.defined() ? dwp.data_ptr<float>() : nullptr,
                x.size(0),
-               row_units(x.size(0), rpg),
-               rpg};
+               bands,
+               iters};
   bool wf = w.defined() && w.scalar_type() == at::kFloat, res = dres.defined();
   TORCH_CHECK(mode == 1 || mode == 2, "norms_sm100: rms mode must be 1 (plain) or 2 (1+w)");
 #define X(KK, LL)                                                                                  \
@@ -223,7 +231,8 @@ void launch_rms_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor 
 
 void launch_gated_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor &z,
                       const at::Tensor &rstd, const at::Tensor &w, const at::Tensor &dx,
-                      const at::Tensor &dz, const at::Tensor &dwp, int mode, int rpg) {
+                      const at::Tensor &dz, const at::Tensor &dwp, int mode, int64_t bands,
+                      int iters) {
   Lanes l = bwd_lanes(x.size(1));
   GatedBwdArgs a{bf16_ptr(dy),
                  bf16_ptr(x),
@@ -238,9 +247,9 @@ void launch_gated_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tenso
                  bf16_mut(dz),
                  dwp.defined() ? dwp.data_ptr<float>() : nullptr,
                  x.size(0),
-                 row_units(x.size(0), rpg),
+                 bands,
                  int(z.size(1)),
-                 rpg,
+                 iters,
                  aligned16(z)};
   bool wf = w.defined() && w.scalar_type() == at::kFloat;
 #define X(KK, LL)                                                                                  \

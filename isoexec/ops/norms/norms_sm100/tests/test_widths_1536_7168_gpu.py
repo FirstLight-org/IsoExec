@@ -30,7 +30,7 @@ def _ref_rms(x, w, zc):
 def test_execution_geometry_is_as_documented(n):
     """Threads per row and loads per thread, forward and backward. Not numerical: the schedule does not read them."""
     want = {1536: ((64, 3), (32, 6)), 7168: ((128, 7), (128, 7))}[n]
-    fl, fk, bl, bk = O.plan(n, 1)[:4]
+    fl, fk, bl, bk = O.recipe(n)
     assert ((fl, fk), (bl, bk)) == want
     assert O.supported_width(n)
 
@@ -240,9 +240,53 @@ def _fwd_rstd(x, n):
     return R.inv_rms(R.row_sum_of_squares(x), n, EPS)
 
 
-def bwd_reference(dy, x, w, zero_centered, dres=None):
-    """The backward's statement: ``reference.rms_backward`` (row dot and dW on the policy's segments)."""
-    return R.rms_backward(dy, x, w, EPS, zero_centered, dres)
+def bwd_reference(dy, x, w, zero_centered, dres=None, bands_override=0):
+    """The backward's statement: the base tree's program (outside the policy), on the ported forward's rstd."""
+    m, n = x.shape
+    _, _, L, K = O.recipe(n)
+    ext = extension()
+    bands, iters = ext.plan(n, m)[3:5]
+    if bands_override:
+        raise NotImplementedError
+    rs = _fwd_rstd(x, n)
+    h = x.float() * rs[:, None]
+    g = None if w is None else (1.0 + w.float() if zero_centered else w.float())
+    gj = dy.float() if g is None else dy.float() * g
+    kk = torch.arange(K, device=x.device).view(K, 1, 1)
+    ll = torch.arange(L, device=x.device).view(1, L, 1)
+    jj = torch.arange(8, device=x.device).view(1, 1, 8)
+    idx = (kk * 8 * L + 8 * ll + jj).permute(1, 0, 2).reshape(L, K * 8)
+    prod = (h * gj)[:, idx]  # (M, L, C)
+    acc = torch.zeros(m, L, device=x.device, dtype=torch.float32)
+    for t in range(prod.shape[2]):
+        acc = acc + prod[:, :, t]
+    s, lane = L >> 1, torch.arange(L, device=x.device)
+    while s:
+        acc = acc + acc[:, lane ^ s]
+        s >>= 1
+    dn = acc[:, 0] / torch.full((m,), float(n), device=x.device)
+    o = rs[:, None] * (gj - h * dn[:, None])
+    if dres is not None:
+        o = o + dres.float()
+    dx = o.bfloat16()
+    if w is None:
+        return dx, None
+    rpi = 128 // L if L <= 64 else 1
+    total = bands * iters * rpi
+    pad = total - m
+    contrib = dy.float() * h  # fl32(d * h), one rounding
+    contrib = torch.cat([contrib, torch.zeros(pad, n, device=x.device)]) if pad else contrib
+    contrib = contrib.view(bands, iters, rpi, n)  # row = (b*iters + it)*rpi + g
+    part = torch.zeros(bands, rpi, n, device=x.device)
+    for it in range(iters):
+        part = part + contrib[:, it]
+    band_part = part[:, 0]
+    for q in range(1, rpi):
+        band_part = band_part + part[:, q]
+    dw = torch.zeros(n, device=x.device)
+    for b in range(bands):
+        dw = dw + band_part[b]
+    return dx, dw
 
 
 def _check_bwd(n, m, zero_centered, with_res):
@@ -252,12 +296,12 @@ def _check_bwd(n, m, zero_centered, with_res):
     ext = extension()
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, zero_centered)
     assert bitwise_equal(rstd, _fwd_rstd(x, n))  # the forward's rstd IS the recipe's
-    dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, dres, zero_centered)
+    dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, dres, zero_centered, 0)
     rdx, rdw = bwd_reference(dy, x, w, zero_centered, dres)
     assert bitwise_equal(dx, rdx), f"{n} m={m}: dx differs from the backward's statement"
     assert bitwise_equal(dw, rdw), f"{n} m={m}: dW differs from the backward's statement"
     wb = w.bfloat16()
-    dxb, dwb = ext.raw_rms_bwd(dy, x, rstd, wb, dres, zero_centered)
+    dxb, dwb = ext.raw_rms_bwd(dy, x, rstd, wb, dres, zero_centered, 0)
     rdxb, rdwb = bwd_reference(dy, x, wb, zero_centered, dres)
     assert dwb.dtype == torch.bfloat16  # the kernel's dW is fp32 until the autograd cast
     assert bitwise_equal(dxb, rdxb) and bitwise_equal(dwb, rdwb.bfloat16())
@@ -286,11 +330,11 @@ def test_backward_dx_is_invariant_to_batch_composition(n, m):
     dy = rows(m, n, seed=94)
     ext = extension()
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
-    dx, _ = ext.raw_rms_bwd(dy, x, rstd, w, None, True)
+    dx, _ = ext.raw_rms_bwd(dy, x, rstd, w, None, True, 0)
     for t in (1, 7, 100):
         for start in (0, m - t):
             sl = slice(start, start + t)
-            d1, _ = ext.raw_rms_bwd(dy[sl].clone(), x[sl].clone(), rstd[sl].clone(), w, None, True)
+            d1, _ = ext.raw_rms_bwd(dy[sl].clone(), x[sl].clone(), rstd[sl].clone(), w, None, True, 0)
             assert bitwise_equal(d1, dx[sl]), (m, t, start)
 
 
@@ -326,7 +370,7 @@ def test_backward_execution_plans_with_residual_gradient(n, m):
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
     rdx, rdw = bwd_reference(dy, x, w, True, dres)
     for _ in range(3):
-        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, dres, True)
+        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, dres, True, 0)
         assert bitwise_equal(dx, rdx) and bitwise_equal(dw, rdw), (n, m)
 
 
@@ -355,7 +399,7 @@ def test_backward_dx_is_repeatable_across_many_launches(n):
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
     first = None
     for _ in range(200):
-        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True)
+        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, 0)
         if first is None:
             first = (dx.clone(), dw.clone())
         else:
@@ -365,10 +409,9 @@ def test_backward_dx_is_repeatable_across_many_launches(n):
 def test_row_fold_is_double_buffered():
     import pathlib
 
-    src = (pathlib.Path(__file__).resolve().parents[1] / "csrc" / "common.cuh").read_text()
-    assert "__shared__ float top[2][W];" in src and "float *t = top[buf & 1];" in src
-    bwd = (pathlib.Path(__file__).resolve().parents[1] / "csrc" / "bwd.cuh").read_text()
-    assert bwd.count("(part, it)") == 2  # both backward kernels alternate the buffer per row
+    src = (pathlib.Path(__file__).resolve().parents[1] / "csrc" / "bwd.cuh").read_text()
+    assert "__shared__ float sh[2][128];" in src and "float *b = sh[buf & 1];" in src
+    assert "row_fold<L>(acc, it)" in src
     launch = (pathlib.Path(__file__).resolve().parents[1] / "csrc" / "launch_bwd.cu").read_text()
     assert "X(7, 128)" in launch and "X(6, 32)" in launch
     fwd = (pathlib.Path(__file__).resolve().parents[1] / "csrc" / "fwd.cuh").read_text()

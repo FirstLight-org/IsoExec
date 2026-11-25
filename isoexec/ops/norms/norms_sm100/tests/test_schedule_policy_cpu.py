@@ -35,29 +35,23 @@ def test_hidden_axis_segments_are_the_policy_output(n):
     assert f"-DNORMS_SM100_HIDDEN_SEGMENT={want.S}" in schedule.cuda_defines()
 
 
-@pytest.mark.parametrize("m", ROWS)
-def test_row_axis_segments_are_the_policy_output(m):
-    want = policy.reduce(m, b=1, L=schedule.SUM_SHORTEST_SEGMENT)
-    assert schedule.row_sum(m) == want == policy.Segments(schedule.SUM_SHORTEST_SEGMENT, None, "tree")
-    assert f"-DNORMS_SM100_ROW_SEGMENT={want.S}" in schedule.cuda_defines()
-
-
 def test_the_published_constant_has_one_definition():
     """L_r is stated once (schedule.py); the kernels receive S from the build and define it nowhere."""
     assert schedule.SUM_SHORTEST_SEGMENT == 8
     text = "\n".join(p.read_text() for p in sorted(CSRC.iterdir()))
-    assert not re.search(r"#\s*define\s+NORMS_SM100_(HIDDEN|ROW)_SEGMENT", text)
+    assert not re.search(r"#\s*define\s+NORMS_SM100_HIDDEN_SEGMENT", text)
     common = (CSRC / "common.cuh").read_text()
-    assert "#error" in common and "NORMS_SM100_HIDDEN_SEGMENT" in common and "NORMS_SM100_ROW_SEGMENT" in common
+    assert "#error" in common and "NORMS_SM100_HIDDEN_SEGMENT" in common
     ext = (CSRC.parent / "_extension.py").read_text()
     assert "*cuda_defines()" in ext
 
 
 def test_no_width_keyed_schedule_table_remains():
-    """The strided-lane recipes (v1 / v2 per width) and the weight-gradient band plan are gone."""
+    """The forward's strided-lane recipes (v1 / v2 per width) are gone; the backward is the base tree's."""
     text = "\n".join(p.read_text() for p in sorted(CSRC.iterdir()))
-    for gone in ("fwd_recipe", "fwd_lanes_v2", "fwd_v2_lmax", "bwd_bands", "fold_plan", "shfl_xor_sync(0xffffffffu, acc"):
+    for gone in ("fwd_recipe", "fwd_lanes_v2", "fwd_v2_lmax", "wide_fold", "lane_fold"):
         assert gone not in text, gone
+    assert "row_fold" not in (CSRC / "fwd.cuh").read_text()  # the base fold survives in the backward only
     assert not (CSRC.parent / "reference_v2.py").exists()
 
 

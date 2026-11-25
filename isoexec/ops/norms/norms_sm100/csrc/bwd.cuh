@@ -5,13 +5,32 @@
 
 namespace norms_sm100 {
 
+// THE BACKWARD IS OUTSIDE THE POLICY. The row dot and the weight gradient below are this tree's existing deterministic
+// program (strided lanes and the descending-XOR fold; bands by row count), unchanged. Only the trainer runs the
+// backward; the design's guarantee is that engine and trainer return the same bits on what both compute; the weight
+// gradient reduces over the batch, which the design does not cover (no data parallelism over a reduction); and the
+// investigation validated forward schedules only. The forward, the fused add and the gated out-norm run the policy's
+// schedule (common.cuh::segment_tree).
 
-// The weight gradient. A CTA thread group owns `rpg` consecutive rows, rows rpg g .. rpg g + rpg - 1 of group g, and
-// writes one partial per column: the chain from +0 over its rows, ascending. A row past the end adds +0 (which
-// leaves a chain that started at +0 unchanged). Two execution plans, the same bits:
-//   rpg == ROW_SEG  a group is one segment of the sum over rows; launch_bwd.cu::fold_dw_tree combines the segments.
-//   rpg == 1        a group is one row (more CTAs in flight at small row counts); the partial is that row's term and
-//                   the fold kernel forms each segment's chain before the tree.
+
+// Alternate buffers so the next row cannot overwrite a slower warp's current fold.
+template <int L> __device__ __forceinline__ float row_fold(float acc, int buf) {
+  if constexpr (L <= 32) {
+    return warp_fold(acc, L);
+  } else {
+    __shared__ float sh[2][128];
+    float *b = sh[buf & 1];
+    int t = threadIdx.x;
+    b[t] = acc;
+    __syncthreads();
+    if constexpr (L == 64)
+      acc = __fadd_rn(b[t], b[t ^ 32]);
+    else
+      acc = __fadd_rn(__fadd_rn(b[t], b[t ^ 64]), __fadd_rn(b[t ^ 32], b[t ^ 96]));
+    return warp_fold(acc, 32);
+  }
+}
+
 template <class T> __device__ __forceinline__ T select0(int live, T v) { return live ? v : T(0); }
 
 template <int K, int L, int MODE, bool WF, bool RES, int VAR = 0>
@@ -20,14 +39,14 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
                         const float *__restrict__ rstd, const void *__restrict__ w,
                         const __nv_bfloat16 *__restrict__ dres, int64_t sdres,
                         __nv_bfloat16 *__restrict__ dx, float *__restrict__ dwp, int64_t M,
-                        int64_t nseg, int rpg) {
+                        int iters) {
   constexpr int C = 8 * K, N = 8 * L * K, RPI = L <= 64 ? 128 / L : 1;
   constexpr bool STREAM = VAR == BWD_STREAM;
   constexpr bool RING = VAR == BWD_RING && L == 128 && K <= 5;
   constexpr int TPB = 128;
   __shared__ uint4 ring[RING ? 2 * 2 * K * TPB : 1];
   int lane = threadIdx.x % L;
-  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group
+  int64_t band = blockIdx.x;
   float dwa[C];
 #pragma unroll
   for (int c = 0; c < C; ++c)
@@ -57,7 +76,7 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
         g[j] = __fadd_rn(1.f, g[j]);
   };
   auto issue = [&](int it, int stage) {
-    int64_t raw = seg * rpg + it;
+    int64_t raw = (band * iters + it) * RPI + threadIdx.x / L;
     int64_t row = raw < M ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
 #pragma unroll
@@ -67,17 +86,16 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
     }
   };
   auto step = [&](int it, int stage) {
-    int64_t raw = seg * rpg + it;
+    int64_t raw = (band * iters + it) * RPI + threadIdx.x / L;
     int live = raw < M;
     int64_t row = live ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
     float rs = rstd[row];
     float xh[STREAM ? 1 : C], gy[STREAM ? 1 : C];
-    float part[K]; // the row dot's partial of hidden segment k * L + lane
+    float acc = 0.f;
 #pragma unroll
     for (int k = 0; k < K; ++k) {
       float a[8], d[8], gc[8];
-      float acc = 0.f;
       if constexpr (RING) {
         split8(a, ring[((stage * 2 + 0) * K + k) * TPB + threadIdx.x]);
         split8(d, ring[((stage * 2 + 1) * K + k) * TPB + threadIdx.x]);
@@ -103,9 +121,8 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
         if constexpr (MODE != 0)
           dwa[8 * k + j] = __fadd_rn(dwa[8 * k + j], select0(live, __fmul_rn(d[j], h)));
       }
-      part[k] = acc;
     }
-    float dn = __fdiv_rn(segment_tree<K, L, 128 * K>(part, it), float(N));
+    float dn = __fdiv_rn(row_fold<L>(acc, it), float(N));
     __nv_bfloat16 *dxr = dx + row * N;
 #pragma unroll
     for (int k = 0; k < K; ++k) {
@@ -142,22 +159,37 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
   if constexpr (RING) {
     issue(0, 0);
     cp_async_commit();
-    for (int it = 0; it < rpg; ++it) {
-      if (it + 1 < rpg)
+    for (int it = 0; it < iters; ++it) {
+      if (it + 1 < iters)
         issue(it + 1, (it + 1) & 1);
       cp_async_commit();
       cp_async_wait<1>();
       step(it, it & 1);
     }
   } else {
-    for (int it = 0; it < rpg; ++it)
+    for (int it = 0; it < iters; ++it)
       step(it, 0);
   }
+  if constexpr (MODE != 0 && RPI > 1) {
+    __shared__ float shdw[128 * C];
+#pragma unroll
+    for (int c = 0; c < C; ++c)
+      shdw[threadIdx.x * C + c] = dwa[c];
+    __syncthreads();
+    if (threadIdx.x < L) {
+#pragma unroll
+      for (int q = 1; q < RPI; ++q) {
+#pragma unroll
+        for (int c = 0; c < C; ++c)
+          dwa[c] = __fadd_rn(dwa[c], shdw[(q * L + lane) * C + c]);
+      }
+    }
+  }
   if constexpr (MODE != 0) {
-    if (seg < nseg) {
+    if (RPI == 1 || threadIdx.x < L) {
 #pragma unroll
       for (int k = 0; k < K; ++k) {
-        float4 *p = reinterpret_cast<float4 *>(dwp + seg * N + k * 8 * L + 8 * lane);
+        float4 *p = reinterpret_cast<float4 *>(dwp + band * N + k * 8 * L + 8 * lane);
         *p = make_float4(dwa[8 * k], dwa[8 * k + 1], dwa[8 * k + 2], dwa[8 * k + 3]);
         *(p + 1) = make_float4(dwa[8 * k + 4], dwa[8 * k + 5], dwa[8 * k + 6], dwa[8 * k + 7]);
       }
@@ -171,10 +203,10 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
                           const __nv_bfloat16 *__restrict__ z, int64_t szt, int64_t szh,
                           const float *__restrict__ rstd, const void *__restrict__ w,
                           __nv_bfloat16 *__restrict__ dx, __nv_bfloat16 *__restrict__ dz,
-                          float *__restrict__ dwp, int64_t M, int hv, int64_t nseg, int rpg) {
+                          float *__restrict__ dwp, int64_t M, int hv, int iters) {
   constexpr int C = 8 * K, N = 8 * L * K, RPI = L <= 64 ? 128 / L : 1;
   int lane = threadIdx.x % L;
-  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group
+  int64_t band = blockIdx.x;
   float dwa[C];
 #pragma unroll
   for (int c = 0; c < C; ++c)
@@ -194,19 +226,18 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
     }
   }
   auto step = [&](int it) {
-    int64_t raw = seg * rpg + it;
+    int64_t raw = (band * iters + it) * RPI + threadIdx.x / L;
     int live = raw < M;
     int64_t row = live ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
     const __nv_bfloat16 *zr = z + (row / hv) * szt + (row % hv) * szh;
     float rs = rstd[row];
     float xh[C], gy[C];
-    float part[K];
+    float acc = 0.f;
     __nv_bfloat16 *dzr = dz + row * N;
 #pragma unroll
     for (int k = 0; k < K; ++k) {
       float a[8], d[8], zz[8], o[8];
-      float acc = 0.f;
       load8(a, xr, k, L, lane);
       load8(d, dyr, k, L, lane);
       if constexpr (ZAL)
@@ -232,9 +263,8 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
           dwa[8 * k + j] = __fadd_rn(dwa[8 * k + j], select0(live, __fmul_rn(dya, h)));
       }
       store8(dzr, k, L, lane, o);
-      part[k] = acc;
     }
-    float dn = __fdiv_rn(segment_tree<K, L, 128 * K>(part, it), float(N));
+    float dn = __fdiv_rn(row_fold<L>(acc, it), float(N));
     __nv_bfloat16 *dxr = dx + row * N;
 #pragma unroll
     for (int k = 0; k < K; ++k) {
@@ -245,13 +275,28 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
       store8(dxr, k, L, lane, o);
     }
   };
-  for (int it = 0; it < rpg; ++it)
+  for (int it = 0; it < iters; ++it)
     step(it);
+  if constexpr (MODE != 0 && RPI > 1) {
+    __shared__ float shdw[128 * C];
+#pragma unroll
+    for (int c = 0; c < C; ++c)
+      shdw[threadIdx.x * C + c] = dwa[c];
+    __syncthreads();
+    if (threadIdx.x < L) {
+#pragma unroll
+      for (int q = 1; q < RPI; ++q) {
+#pragma unroll
+        for (int c = 0; c < C; ++c)
+          dwa[c] = __fadd_rn(dwa[c], shdw[(q * L + lane) * C + c]);
+      }
+    }
+  }
   if constexpr (MODE != 0) {
-    if (seg < nseg) {
+    if (RPI == 1 || threadIdx.x < L) {
 #pragma unroll
       for (int k = 0; k < K; ++k) {
-        float4 *p = reinterpret_cast<float4 *>(dwp + seg * N + k * 8 * L + 8 * lane);
+        float4 *p = reinterpret_cast<float4 *>(dwp + band * N + k * 8 * L + 8 * lane);
         *p = make_float4(dwa[8 * k], dwa[8 * k + 1], dwa[8 * k + 2], dwa[8 * k + 3]);
         *(p + 1) = make_float4(dwa[8 * k + 4], dwa[8 * k + 5], dwa[8 * k + 6], dwa[8 * k + 7]);
       }

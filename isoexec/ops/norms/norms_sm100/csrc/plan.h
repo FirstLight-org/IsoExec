@@ -112,12 +112,54 @@ inline bool aligned16(const at::Tensor &z) {
   return uintptr_t(z.data_ptr()) % 16 == 0 && (z.stride(0) * 2) % 16 == 0 && (z.stride(1) * 2) % 16 == 0;
 }
 
+// Backward plans (outside the policy; the band count is numerical, as in the base tree).
+struct Bands {
+  int64_t bands;
+  int iters;
+};
+
+inline Bands bwd_bands(Lanes l, int64_t rows, int64_t n, bool gated) {
+  int64_t rpi = l.L <= 32 ? 128 / l.L : 1;
+  int64_t units = (rows + rpi - 1) / rpi;
+  int64_t target = rows * n / (gated ? 16384 : 65536), p2 = 256;
+  while (p2 < 1024 && p2 * 3 / 2 < target)
+    p2 *= 2;
+  int64_t bands = units < p2 ? units : p2;
+  int64_t iters = (units + bands - 1) / bands;
+  bands = (units + iters - 1) / iters;
+  return {bands, int(iters)};
+}
+
 enum BwdVar { BWD_KEEP = 0, BWD_STREAM = 1, BWD_RING = 2 };
 
 inline bool bwd_ring_legal(Lanes l) { return l.L == 128 && l.K <= 5; }
 
 inline int bwd_var(Lanes l, int64_t rows) {
   return (bwd_ring_legal(l) && rows >= 1024) ? BWD_RING : BWD_KEEP;
+}
+
+enum FoldMode { FOLD_REGISTERS = 0, FOLD_SHARED = 1 };
+
+struct FoldPlan {
+  int threads, cpt, unroll, mode;
+};
+
+inline FoldPlan fold_plan(int64_t bands, int64_t width) {
+  int threads, cpt = 1, unroll, mode;
+  if (bands >= 128) {
+    mode = FOLD_SHARED;
+    threads = 256;                        // 8 loading warps per 1 summing warp
+    unroll = bands >= 256 ? 256 : 128;    // staged bands; 256 * 32 * 4 = 32 KiB of shared memory
+  } else {
+    mode = FOLD_REGISTERS;
+    threads = 128;
+    unroll = 1;
+    while (unroll < 64 && unroll * 2 <= bands)
+      unroll *= 2; // past the band count the unrolled body never runs and the tail does the work
+  }
+  if (width % cpt)
+    cpt = 1;
+  return {threads, cpt, unroll, mode};
 }
 
 } // namespace norms_sm100

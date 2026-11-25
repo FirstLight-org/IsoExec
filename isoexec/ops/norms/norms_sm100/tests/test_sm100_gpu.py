@@ -313,6 +313,23 @@ def test_backward_gated_matches_float64():
     assert _rel(dx, dxd) < 5e-3 and _rel(dz, dzd) < 5e-3 and _rel(dw, dwd) < 5e-3
 
 
+@pytest.mark.parametrize("bands", (1, 4, 64, 4096))
+def test_backward_plan_does_not_change_correctness(bands):
+    """The backward's band count is an execution choice: every plan stays inside tolerance."""
+    from isoexec.ops.norms.norms_sm100._extension import extension
+
+    n, m = 2048, 3000
+    x, w = rows(m, n), weight(n, zero_centered=True)
+    _, _, rstd = extension().raw_rms_fwd(x, None, w, EPS, True)
+    gout = rows(m, n, seed=22)
+    dx, dw = extension().raw_rms_bwd(gout, x, rstd, w, None, True, bands)
+    xd = x.double().requires_grad_(True)
+    wd = w.double().requires_grad_(True)
+    yd = xd * torch.rsqrt(xd.pow(2).mean(-1, keepdim=True) + EPS) * (1.0 + wd)
+    dxd, dwd = torch.autograd.grad(yd, (xd, wd), gout.double())
+    assert _rel(dx, dxd) < 5e-3 and _rel(dw, dwd) < 5e-3
+
+
 def test_no_grad_forward_does_not_build_a_graph():
     n = 2048
     x = rows(64, n).requires_grad_(True)
@@ -351,7 +368,7 @@ def test_backward_gated_without_weight():
     from isoexec.ops.norms.norms_sm100._extension import extension
 
     _, rstd = extension().raw_gated_fwd(x, z, None, EPS, True)
-    dx, dz, dw = extension().raw_gated_bwd(dy, x, z, rstd, None, True)
+    dx, dz, dw = extension().raw_gated_bwd(dy, x, z, rstd, None, True, 0)
     assert dw is None
     xd, zd = x.detach().double().requires_grad_(True), z.detach().double().requires_grad_(True)
     yd = (xd * torch.rsqrt(xd.square().mean(-1, keepdim=True) + EPS)
@@ -416,24 +433,22 @@ def test_backward_execution_plans_are_bitwise_identical(n, m, plan_reset):
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
     ref_dx, ref_dw = bwd_reference(dy, x, w, True, None)
     for _ in range(3):
-        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True)
+        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, 0)
         assert bitwise_equal(dx, ref_dx), (n, m, "dx")
         assert bitwise_equal(dw, ref_dw), (n, m, "dW")
 
 
-@pytest.mark.parametrize("m", (1, 7, 8, 9, 63, 64, 65, 3000))
-def test_weight_gradient_is_the_row_segment_tree(m, plan_reset):
-    """dW is the policy's schedule over rows (segments of consecutive rows, adjacent tree), at every row count
-    around a segment boundary; no execution plan enters it."""
-    from isoexec.ops.norms.norms_sm100 import schedule
-
+def test_band_plan_is_numerical(plan_reset):
     ext = plan_reset
-    n = 2048
+    n, m = 2048, 3000
     x, w = rows(m, n, seed=43), weight(n, zero_centered=True, dtype=torch.float32)
     dy = rows(m, n, seed=44)
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
-    dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True)[1]
-    assert bitwise_equal(dw, R.rms_backward(dy, x, w, EPS, True)[1]), m
-    seg = schedule.row_sum(m)
-    contrib = (dy.float() * (x.float() * rstd[:, None])).t()
-    assert bitwise_equal(dw, R.segment_sum(contrib, seg)), (m, seg)
+    grads = {b: ext.raw_rms_bwd(dy, x, rstd, w, None, True, b)[1] for b in (0, 1, 4, 64, 4096)}
+    for b, dw in grads.items():
+        assert torch.isfinite(dw).all()
+        assert bitwise_equal(dw, ext.raw_rms_bwd(dy, x, rstd, w, None, True, b)[1])
+    assert not bitwise_equal(grads[1], grads[64]), (
+        "one accumulator over all 3000 rows and 64 accumulators folded in ascending order agreed bit "
+        "for bit; if that is now true the band count could be swept, so re-read plan.h::bwd_bands"
+    )

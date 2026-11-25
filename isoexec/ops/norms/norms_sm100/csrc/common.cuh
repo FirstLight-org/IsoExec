@@ -83,18 +83,16 @@ __device__ __forceinline__ void store_if(float *p, float v, int cond) {
                :: "l"((uint64_t)__cvta_generic_to_global(p)), "f"(v), "r"(cond) : "memory");
 }
 
-// ---- The numerical schedule of every sum in this package -------------------------------------------------------
+// ---- The numerical schedule of the FORWARD sums of this package -------------------------------------------------------
 // Segments of S consecutive positions, each a chain from +0 in ascending order, combined by the adjacent tree
 // (pair (0,1), (2,3), ...; an unpaired last partial moves up). S comes from isoexec/ops/schedule_policy.py through
 // norms_sm100/schedule.py, which passes it to the compiler; no segment length is written in this directory.
-#if !defined(NORMS_SM100_HIDDEN_SEGMENT) || !defined(NORMS_SM100_ROW_SEGMENT)
+#if !defined(NORMS_SM100_HIDDEN_SEGMENT)
 #error "norms_sm100: build through _extension.py; schedule.py supplies the segment lengths from schedule_policy"
 #endif
-constexpr int HIDDEN_SEG = NORMS_SM100_HIDDEN_SEGMENT; // sums over the hidden axis: sum of squares, backward row dot
-constexpr int ROW_SEG = NORMS_SM100_ROW_SEGMENT;       // the weight gradient's sum over rows
+constexpr int HIDDEN_SEG = NORMS_SM100_HIDDEN_SEGMENT; // the forward sum of squares over the hidden axis
 // This realisation forms one hidden-axis segment per 128-bit load of eight BF16 values.
 static_assert(HIDDEN_SEG == 8, "norms_sm100 kernels realise hidden-axis segments of one 16-byte BF16 load");
-static_assert(ROW_SEG >= 1 && ROW_SEG <= 64, "norms_sm100: row segment length outside what the backward loop unrolls");
 
 constexpr int pow2ceil(int k) {
   int m = 1;
@@ -186,6 +184,13 @@ template <int K, int L, int CAP> __device__ __forceinline__ float segment_tree(c
       tv[b] = t[b];
     return tree_local<NB>(tv);
   }
+}
+
+// The backward's fold (outside the policy; see bwd.cuh).
+__device__ __forceinline__ float warp_fold(float acc, int L) {
+  for (int s = L >> 1; s > 0; s >>= 1)
+    acc = __fadd_rn(acc, __shfl_xor_sync(0xffffffffu, acc, s));
+  return acc;
 }
 
 __device__ __forceinline__ float inv_rms(float ssq, int n, float eps) {

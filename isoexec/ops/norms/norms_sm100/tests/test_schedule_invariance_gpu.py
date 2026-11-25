@@ -1,8 +1,7 @@
 """Bitwise invariance of the ported norms_sm100 kernels (the policy's schedule) against themselves.
 
 What is varied: repeated runs; batch size and row position; batch composition; storage (fresh clone, view);
-engine (no_grad) against trainer (autograd) calls; fused add against the unfused pair; row counts around every
-row-segment boundary for the weight gradient; padding rows. Equality is on raw bits (NaN payloads included).
+engine (no_grad) against trainer (autograd) calls; fused add against the unfused pair; padding rows. Equality is on raw bits (NaN payloads included).
 """
 
 from __future__ import annotations
@@ -24,16 +23,11 @@ pytestmark = pytest.mark.skipif(
 WIDTHS = (128, 384, 256, 512, 768, 1024, 2048, 6144, 8192, 1536, 4096, 5120, 7168)
 BATCHES = (1, 2, 3, 7, 8, 9, 31, 32, 33, 64, 127, 128, 129, 255, 256, 257, 1023, 1024, 1025, 2048)
 S = schedule.SUM_SHORTEST_SEGMENT
-ROW_COUNTS = (1, S - 1, S, S + 1, 2 * S - 1, 2 * S, 2 * S + 1, 3 * S, 5 * S + 3, 127, 128, 129, 255, 256, 257,
-              511, 512, 513, 1023, 1024, 1025, 2047, 2048, 2049, 4099)
-
 
 def test_the_compiled_segment_lengths_are_the_policy_output():
-    hidden, row = extension().schedule()
+    hidden = extension().schedule()
     for n in WIDTHS:
         assert hidden == schedule.hidden_sum(n).S, n
-    for m in ROW_COUNTS:
-        assert row == schedule.row_sum(m).S, m
 
 
 @pytest.mark.parametrize("n", WIDTHS)
@@ -110,22 +104,6 @@ def test_gated_out_norm_rows_and_head_shards(n, hv):
         assert bitwise_equal(torch.cat(parts, dim=1), full), (n, hv, degree)
 
 
-@pytest.mark.parametrize("n", (128, 384, 768, 2048, 1536, 4096, 5120, 7168))
-@pytest.mark.parametrize("m", ROW_COUNTS)
-def test_backward_is_the_schedule_at_every_row_count(n, m):
-    """dx (row dot on hidden segments) and dW (row segments, short last segment) against the statement, twice."""
-    ext = extension()
-    x, w = rows(m, n, seed=m), weight(n, zero_centered=True, dtype=torch.float32)
-    dy, dres = rows(m, n, seed=m + 1), rows(m, n, seed=m + 2, scale=0.5)
-    rstd = ext.raw_rms_fwd(x, None, w, EPS, True)[2]
-    for res in (None, dres):
-        rdx, rdw = R.rms_backward(dy, x, w, EPS, True, res)
-        for _ in range(2):
-            dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, res, True)
-            assert bitwise_equal(dx, rdx), (n, m, "dx")
-            assert bitwise_equal(dw, rdw), (n, m, "dW")
-
-
 @pytest.mark.parametrize("n", (128, 2048, 1536, 4096, 5120))
 def test_backward_dx_of_a_row_does_not_depend_on_its_batch(n):
     ext = extension()
@@ -133,9 +111,9 @@ def test_backward_dx_of_a_row_does_not_depend_on_its_batch(n):
     x, w = rows(m, n, seed=21), weight(n, zero_centered=False, dtype=torch.float32)
     dy = rows(m, n, seed=22)
     rstd = ext.raw_rms_fwd(x, None, w, EPS, False)[2]
-    dx = ext.raw_rms_bwd(dy, x, rstd, w, None, False)[0]
+    dx = ext.raw_rms_bwd(dy, x, rstd, w, None, False, 0)[0]
     for a, b in ((0, 1), (5, 6), (7, 9), (8, 16), (3, 260), (1026, 1027), (500, 1027)):
-        part = ext.raw_rms_bwd(dy[a:b].clone(), x[a:b].clone(), rstd[a:b].clone(), w, None, False)[0]
+        part = ext.raw_rms_bwd(dy[a:b].clone(), x[a:b].clone(), rstd[a:b].clone(), w, None, False, 0)[0]
         assert bitwise_equal(part, dx[a:b]), (n, a, b)
 
 
@@ -147,39 +125,10 @@ def test_gated_backward_repeats_and_rows_are_independent(n):
     w = weight(n, zero_centered=True, dtype=torch.float32)
     dy = rows(t, hv * n, seed=33)
     rstd = ext.raw_gated_fwd(x, z, w, EPS, True)[1]
-    dx, dz, dw = ext.raw_gated_bwd(dy, x, z, rstd, w, True)
-    dx2, dz2, dw2 = ext.raw_gated_bwd(dy, x, z, rstd, w, True)
+    dx, dz, dw = ext.raw_gated_bwd(dy, x, z, rstd, w, True, 0)
+    dx2, dz2, dw2 = ext.raw_gated_bwd(dy, x, z, rstd, w, True, 0)
     assert bitwise_equal(dx, dx2) and bitwise_equal(dz, dz2) and bitwise_equal(dw, dw2)
     for a, b in ((0, 1), (1, 3), (3, 37)):
         px, pz, _ = ext.raw_gated_bwd(dy[a:b].clone(), x[a:b].clone(), z[a:b].clone(),
-                                      rstd.view(t, hv)[a:b].reshape(-1).clone(), w, True)
+                                      rstd.view(t, hv)[a:b].reshape(-1).clone(), w, True, 0)
         assert bitwise_equal(px, dx[a:b]) and bitwise_equal(pz, dz[a:b]), (a, b)
-
-
-@pytest.mark.parametrize("n", (128, 384, 2048, 1536, 4096, 5120))
-@pytest.mark.parametrize("m", (1, 7, 8, 9, 63, 64, 65, 255, 256, 257, 1023, 1024, 1025, 2049, 4099))
-def test_weight_gradient_execution_plans_are_bitwise_identical(n, m):
-    """One row per thread group and one segment per thread group are the same schedule: equal dx and dW bits, and
-    equal to the plan the row count selects (row_plan 0)."""
-    ext = extension()
-    x, w = rows(m, n, seed=m + 5), weight(n, zero_centered=True, dtype=torch.float32)
-    dy = rows(m, n, seed=m + 6)
-    rstd = ext.raw_rms_fwd(x, None, w, EPS, True)[2]
-    want = R.rms_backward(dy, x, w, EPS, True)
-    for plan in (0, 1, S):
-        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, plan)
-        assert bitwise_equal(dx, want[0]) and bitwise_equal(dw, want[1]), (n, m, plan)
-
-
-def test_gated_weight_gradient_execution_plans_are_bitwise_identical():
-    ext = extension()
-    n, hv = 128, 8
-    for t in (1, 3, 33, 300):
-        x, z = rows(t * hv, n, seed=t).view(t, hv, n), rows(t * hv, n, seed=t + 1, scale=6.0).view(t, hv, n)
-        w = weight(n, zero_centered=True, dtype=torch.float32)
-        dy = rows(t, hv * n, seed=t + 2)
-        rstd = ext.raw_gated_fwd(x, z, w, EPS, True)[1]
-        a = ext.raw_gated_bwd(dy, x, z, rstd, w, True, 1)
-        b = ext.raw_gated_bwd(dy, x, z, rstd, w, True, S)
-        c = ext.raw_gated_bwd(dy, x, z, rstd, w, True)
-        assert all(bitwise_equal(p, q) and bitwise_equal(p, r) for p, q, r in zip(a, b, c)), t

@@ -56,7 +56,7 @@ class _AddRMSNorm:
                     h, weight, rstd = ctx.saved_tensors
                     dw = None
                     if dy is not None:
-                        dx, dw = extension().raw_rms_bwd(dy, h, rstd, weight, None, ctx.zero_centered)
+                        dx, dw = extension().raw_rms_bwd(dy, h, rstd, weight, None, ctx.zero_centered, 0)
                         dsum = dx if dh is None else dx + dh
                     else:
                         dsum = dh
@@ -94,14 +94,14 @@ def gated_rms_norm(x, z, weight, eps: float, zero_centered: bool = True):
 
 
 def schedule():
-    """``(hidden-axis segment length, row segment length)`` the loaded kernels were compiled with."""
+    """The forward segment length the loaded kernels were compiled with."""
     return extension().schedule()
 
 
 def recipe(n: int):
     """``(fwd_lanes, fwd_chunks, bwd_lanes, bwd_chunks)`` for width ``n``: threads per row and 16-byte loads per
     thread. Execution geometry only; the numerical schedule (``schedule.py``) does not read it."""
-    return tuple(extension().plan(n, 1)[:4])
+    return extension().recipe(n)
 
 
 def plan(n: int, rows: int):

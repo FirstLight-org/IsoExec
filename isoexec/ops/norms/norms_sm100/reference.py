@@ -12,10 +12,7 @@ segment short, combined by the adjacent tree (pair (0, 1), (2, 3), ...; an unpai
     rstd    = rn32(1 / sqrt(rn32(rn32(ssq / N) + eps)))                                       (correctly rounded)
     y       = rn_bf16( fl32( fl32(v * rstd) * g ) ),  g = w | fl32(1 + w)
     gated   y = rn_bf16( fl32( fl32(fl32(v * rstd) * g) * silu(z) ) ),  silu(z) = z / (1 + exp(-z))
-    backward  xhat = fl32(x * rstd), gy = fl32(dy * g) (dy when there is no weight)
-              dn   = rn32( tree over hidden segments of chain fl32(acc + fl32(xhat * gy)) / N )
-              dx   = rn_bf16( fl32(rstd * fl32(gy - fl32(xhat * dn))) [+ dres] )
-              dW[h] = tree over ROW segments of chain_{rows ascending} fl32(acc + fl32(dy * xhat))
+The backward is outside the policy (csrc/bwd.cuh): its statement is ``tests/test_widths_1536_7168_gpu.py::bwd_reference``.
 
 ``v`` is the exact fp32 value of the bf16 input; for the fused add form ``v`` is the bf16-rounded residual sum
 ``rn_bf16(x + r)``, which is also what the kernel stores. This schedule is not norms_sm90's (strided lanes and a
@@ -102,24 +99,5 @@ def gated_rms_norm(x: torch.Tensor, z: torch.Tensor, w: torch.Tensor | None, eps
     return (y * silu(z.reshape(-1, n))).bfloat16().view(t, hv * n)
 
 
-def rms_backward(dy: torch.Tensor, x: torch.Tensor, w: torch.Tensor | None, eps: float, zero_centered: bool,
-                 dres: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """``(dx bf16 [M, N], dW fp32 [N] or None)`` of RMSNorm for rows ``x`` [M, N] and upstream ``dy``."""
-    m, n = x.shape
-    rs = inv_rms(row_sum_of_squares(x), n, eps)
-    h = x.float() * rs[:, None]
-    g = _gamma(w, zero_centered)
-    gy = dy.float() if g is None else dy.float() * g
-    dn = segment_sum(h * gy, schedule.hidden_sum(n)) / torch.full((m,), float(n), device=x.device, dtype=torch.float32)
-    o = rs[:, None] * (gy - h * dn[:, None])
-    if dres is not None:
-        o = o + dres.float()
-    dx = o.bfloat16()
-    if w is None:
-        return dx, None
-    contrib = dy.float() * h  # fl32(dy * xhat), one rounding
-    return dx, segment_sum(contrib.t(), schedule.row_sum(m))
-
-
-__all__ = ["add_rms_norm", "adjacent_tree", "gated_rms_norm", "inv_rms", "rms_backward", "rms_norm",
+__all__ = ["add_rms_norm", "adjacent_tree", "gated_rms_norm", "inv_rms", "rms_norm",
            "rms_norm_round_scale", "row_sum_of_squares", "segment_sum", "silu"]
