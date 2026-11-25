@@ -1,8 +1,8 @@
 name: Package
-# Push to main or run manually to build, check, and upload a package.
+# Push to master or run manually to build, check, and upload a package.
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
     inputs:
       ref:

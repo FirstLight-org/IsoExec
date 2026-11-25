@@ -1,18 +1,18 @@
-"""Setuptools hook: bundle the managed-runtime installer into the package.
+"""Setuptools hook: bundle the managed-runtime installer into built wheels.
 
-All metadata lives in pyproject.toml. This file only copies scripts/setup_env.py and
-environments/default.toml into isoexec/_runtime/ of the build, so `pip install isoexec` provides the
-`isoexec-setup` command. A wheel never runs this file at install time; the pinned SkyRL lock and the
-`--no-deps` [overrides] are applied by `isoexec-setup`, because package metadata cannot override
-another distribution's requirements and PyPI refuses Git (direct URL) dependencies.
+All metadata lives in pyproject.toml. build_py replaces the source-tree stand-in
+isoexec/_runtime/setup_env.py with scripts/setup_env.py and adds environments/default.toml beside
+it, so an installed wheel provides the isoexec-setup command. An editable install keeps the
+stand-in, which runs the checkout's scripts/setup_env.py.
 """
 from pathlib import Path
+import shutil
 
 from setuptools import setup
 from setuptools.command.build_py import build_py
 
 ROOT = Path(__file__).resolve().parent
-#: Source file -> path inside the isoexec package.
+#: Source file -> path inside the isoexec package of a built wheel.
 BUNDLED = {
     'scripts/setup_env.py': '_runtime/setup_env.py',
     'environments/default.toml': '_runtime/default.toml',
@@ -22,13 +22,13 @@ BUNDLED = {
 class BuildPyWithRuntime(build_py):
     def run(self):
         super().run()
-        if self.editable_mode:
-            return  # An editable checkout runs scripts/setup_env.py through make.
+        if self.editable_mode or self.dry_run:
+            return
         package = Path(self.build_lib) / 'isoexec'
-        (package / '_runtime').mkdir(parents=True, exist_ok=True)
-        (package / '_runtime/__init__.py').write_text('"""Bundled copy of scripts/setup_env.py and its manifest."""\n')
         for source, target in BUNDLED.items():
-            self.copy_file(str(ROOT / source), str(package / target), preserve_mode=False)
+            # Unconditional: copy_file skips a target that is not older than its source, and a git
+            # archive gives the stand-in and scripts/setup_env.py the same mtime.
+            shutil.copyfile(ROOT / source, package / target)
 
 
 setup(cmdclass={'build_py': BuildPyWithRuntime})

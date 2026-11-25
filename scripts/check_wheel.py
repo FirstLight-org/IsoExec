@@ -24,6 +24,13 @@ import isoexec
 assert Path(isoexec.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve()), isoexec.__file__
 assert isoexec.__version__ == importlib.metadata.version('isoexec')
 assert 'torch' not in sys.modules
+# isoexec-setup loads the bundled installer and finds its manifest without a runtime dependency.
+entry, = importlib.metadata.distribution('isoexec').entry_points.select(
+    group='console_scripts', name='isoexec-setup')
+installer = sys.modules[entry.load().__module__]
+assert installer.__name__ == 'isoexec._runtime.setup_env' and installer.INSTALLED, installer.__file__
+assert installer.MANIFEST.is_file(), installer.MANIFEST
+assert 'torch' not in sys.modules
 '''
 
 PUBLIC_API_CHECK = '''
@@ -52,7 +59,7 @@ assert not torch.cuda.is_initialized()
 '''
 
 
-#: Files setup.py copies into the package from outside isoexec/ (its generated __init__.py is skipped).
+#: Files setup.py writes into the wheel's isoexec/_runtime, and their sources; both are required.
 BUNDLED = {'isoexec/_runtime/setup_env.py': 'scripts/setup_env.py',
            'isoexec/_runtime/default.toml': 'environments/default.toml'}
 
@@ -60,12 +67,10 @@ BUNDLED = {'isoexec/_runtime/setup_env.py': 'scripts/setup_env.py',
 def compare_with_source(wheel: Path, source: Path) -> int:
     expected = {p.relative_to(source).as_posix(): p.read_bytes() for p in (source / 'isoexec').rglob('*')
                 if p.is_file() and p.suffix in SUFFIXES}
-    expected |= {name: (source / origin).read_bytes() for name, origin in BUNDLED.items()
-                 if (source / origin).is_file()}
+    expected |= {name: (source / origin).read_bytes() for name, origin in BUNDLED.items()}
     with zipfile.ZipFile(wheel) as archive:
         actual = {name: archive.read(name) for name in archive.namelist()
-                  if name.startswith('isoexec/') and (Path(name).suffix in SUFFIXES or name in BUNDLED)
-                  and name != 'isoexec/_runtime/__init__.py'}
+                  if name.startswith('isoexec/') and (Path(name).suffix in SUFFIXES or name in BUNDLED)}
     if not expected or expected.keys() != actual.keys():
         raise ValueError(f'wheel/source file lists differ: {sorted(expected.keys() ^ actual.keys())}')
     stale = sorted(name for name in expected if expected[name] != actual[name])

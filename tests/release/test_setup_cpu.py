@@ -1,7 +1,10 @@
 """Managed setup refusals and the dependency conflict check, without a GPU runtime."""
 import json
+from pathlib import Path
+import runpy
 import tomllib
 from types import SimpleNamespace
+import zipfile
 
 import pytest
 
@@ -43,6 +46,47 @@ def test_failed_check_removes_the_receipt(tmp_path, manifest):
     write_receipt(tmp_path / 'root', manifest)
     assert setup_env.main(['--root', str(tmp_path / 'root'), '--check-only']) == 1
     assert not (tmp_path / 'root/receipt.json').exists()
+
+
+def test_failed_download_leaves_the_root_retryable(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('CUDA_HOME', str(tmp_path / 'cuda'))
+    monkeypatch.setattr(setup_env, 'check_host', lambda manifest: {})
+
+    def offline(directory):
+        raise setup_env.SetupError('isoexec 0.1.0 is not on PyPI')
+    monkeypatch.setattr(setup_env, 'download_release_wheel', offline)
+    assert setup_env.main(['--root', str(tmp_path / 'root')]) == 1
+    assert 'not on PyPI' in capsys.readouterr().err
+    assert not (tmp_path / 'root').exists()
+
+
+def test_reuse_refuses_a_root_built_for_another_version(tmp_path, monkeypatch, manifest, capsys):
+    monkeypatch.setenv('CUDA_HOME', str(tmp_path / 'cuda'))
+    root = tmp_path / 'root'
+    receipt = write_receipt(root, manifest)
+    old = 'isoexec-0.0.9-py3-none-any.whl'
+    with zipfile.ZipFile(root / old, 'w') as archive:
+        archive.writestr('isoexec-0.0.9.dist-info/METADATA',
+                         'Metadata-Version: 2.4\nName: isoexec\nVersion: 0.0.9\n\nVersion: 0.1.0 in the README body\n')
+    receipt |= {'dev': False, 'wheel': old, 'wheel_sha256': setup_env.sha256(root / old)}
+    (root / 'receipt.json').write_text(json.dumps(receipt))
+    assert setup_env.main(['--root', str(root)]) == 1
+    assert 'holds isoexec 0.0.9, not 0.1.0' in capsys.readouterr().err
+    assert json.loads((root / 'receipt.json').read_text()) == receipt
+
+
+def test_installed_installer_refuses_dev(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(setup_env, 'INSTALLED', True)
+    assert setup_env.main(['--root', str(tmp_path / 'root'), '--dev']) == 1
+    assert 'source checkout' in capsys.readouterr().err
+    assert not (tmp_path / 'root').exists()
+
+
+def test_source_stand_in_runs_the_checkout_installer(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv('CUDA_HOME', str(tmp_path / 'cuda'))
+    stand_in = runpy.run_path(str(Path(__file__).resolve().parents[2] / 'isoexec/_runtime/setup_env.py'))
+    assert stand_in['main'](['--root', str(tmp_path / 'root'), '--check-only']) == 1
+    assert 'receipt.json is missing' in capsys.readouterr().err
 
 
 def test_only_conflicts_listed_in_the_manifest_pass(manifest):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes.util
+from email.parser import BytesHeaderParser
 import hashlib
 import json
 import os
@@ -29,8 +30,8 @@ import urllib.request
 import zipfile
 
 HERE = Path(__file__).resolve().parent
-#: Installed as isoexec/_runtime/setup_env.py (setup.py bundles it with its manifest), or run from a checkout.
-INSTALLED = (HERE / 'default.toml').is_file()
+#: Imported from a built wheel, where setup.py bundles this file with its manifest; otherwise a checkout.
+INSTALLED = __package__ == 'isoexec._runtime'
 REPO = None if INSTALLED else HERE.parent
 MANIFEST = HERE / 'default.toml' if INSTALLED else REPO / 'environments/default.toml'
 PYPI_API = 'https://pypi.org/pypi/isoexec'
@@ -163,15 +164,20 @@ def project_version() -> str:
     return tomllib.loads((REPO / 'pyproject.toml').read_text())['project']['version']
 
 
-def check_wheel_version(path: Path, version: str) -> None:
+def wheel_metadata(path: Path) -> tuple[str | None, str | None]:
+    """Name and Version from the wheel's METADATA headers (the README body follows them)."""
     with zipfile.ZipFile(path) as archive:
         metadata_files = [name for name in archive.namelist() if name.endswith('.dist-info/METADATA')]
         if len(metadata_files) != 1:
             raise SetupError('wheel must contain exactly one METADATA file')
-        fields = dict(line.split(': ', 1) for line in archive.read(metadata_files[0]).decode().splitlines()
-                      if ': ' in line)
-    if fields.get('Name') != 'isoexec' or fields.get('Version') != version:
-        raise SetupError(f"expected isoexec {version}, got {fields.get('Name')} {fields.get('Version')}")
+        headers = BytesHeaderParser().parsebytes(archive.read(metadata_files[0]))
+    return headers.get('Name'), headers.get('Version')
+
+
+def check_wheel_version(path: Path, version: str) -> None:
+    name, found = wheel_metadata(path)
+    if name != 'isoexec' or found != version:
+        raise SetupError(f'expected isoexec {version}, got {name} {found}')
 
 
 def download_release_wheel(directory: Path) -> Path:
@@ -183,7 +189,9 @@ def download_release_wheel(directory: Path) -> Path:
             release = json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise SetupError(f'isoexec {version} is not on PyPI; pass WHEEL=/path/to/candidate.whl') from error
+            retry = ('isoexec-setup --wheel /path/to/candidate.whl' if INSTALLED
+                     else 'make setup WHEEL=/path/to/candidate.whl')
+            raise SetupError(f'isoexec {version} is not on PyPI; run {retry}') from error
         raise SetupError(f'PyPI lookup failed: HTTP {error.code}') from error
     except (urllib.error.URLError, json.JSONDecodeError) as error:
         raise SetupError(f'PyPI lookup failed: {error}') from error
@@ -362,6 +370,13 @@ def setup(args, manifest: dict) -> None:
                 different |= built['skyrl'] != str(args.skyrl_source.expanduser().resolve())
             if different:
                 raise SetupError(f'{root} holds a different install; choose a new ISOEXEC_ROOT')
+            # The manifest can stay the same across releases, e.g. after pip install -U isoexec.
+            recorded = root / built['wheel'] if built['wheel'] else None
+            if recorded is not None and recorded.is_file():
+                found = wheel_metadata(recorded)[1]
+                if found != project_version():
+                    raise SetupError(f'{root} holds isoexec {found}, not {project_version()}; '
+                                     'choose a new ISOEXEC_ROOT')
         try:
             check_host(manifest)
             skyrl_checkout(manifest, Path(built['skyrl']), env, clone=False)
@@ -383,14 +398,17 @@ def setup(args, manifest: dict) -> None:
             raise SetupError(f'{wheel} does not exist')
         check_wheel_version(wheel, version)
     facts = check_host(manifest)
-    for relative in manifest['caches'].values():
-        (root / relative).mkdir(parents=True, exist_ok=True)
+    # Nothing is written to the root before the wheel is in hand, so a failed download can be retried.
     if not args.dev and wheel is None:
         with tempfile.TemporaryDirectory(prefix='isoexec-release-') as temporary:
-            wheel = download_release_wheel(Path(temporary))
-            wheel = Path(shutil.copy(wheel, root))
+            downloaded = download_release_wheel(Path(temporary))
+            root.mkdir(parents=True, exist_ok=True)
+            wheel = Path(shutil.copy(downloaded, root))
     elif wheel:
+        root.mkdir(parents=True, exist_ok=True)
         wheel = Path(shutil.copy(wheel, root))
+    for relative in manifest['caches'].values():
+        (root / relative).mkdir(parents=True, exist_ok=True)
     if args.skyrl_source:
         skyrl = skyrl_checkout(manifest, args.skyrl_source.expanduser().resolve(), env, clone=False)
     else:

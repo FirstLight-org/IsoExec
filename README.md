@@ -130,7 +130,7 @@ With a preinstalled environment, start the API with
 `uv run --isolated --no-project -- /path/to/python -m skyrl.tinker.api ...`; the engine subprocess
 uses that same interpreter.
 
-See [STATUS](./STATUS.md) for what is natively qualified.
+See [STATUS](https://github.com/FirstLight-org/IsoExec/blob/HEAD/STATUS.md) for what is natively qualified.
 
 ## Host Requirements
 
@@ -151,10 +151,10 @@ this check.
 
 ## Documentation
 
-- [Support a new model](./docs/support-new-model.md)
-- [GDN modes: CPR and recurrent](./docs/gdn-modes.md)
-- [Compiler design](./isoexec/compiler/DESIGN.md)
-- [Status and limits](./STATUS.md)
+- [Support a new model](https://github.com/FirstLight-org/IsoExec/blob/HEAD/docs/support-new-model.md)
+- [GDN modes: CPR and recurrent](https://github.com/FirstLight-org/IsoExec/blob/HEAD/docs/gdn-modes.md)
+- [Compiler design](https://github.com/FirstLight-org/IsoExec/blob/HEAD/isoexec/compiler/DESIGN.md)
+- [Status and limits](https://github.com/FirstLight-org/IsoExec/blob/HEAD/STATUS.md)
 
 ## Acknowledgements
 
@@ -185,5 +185,5 @@ IsoExec builds on the work of these projects:
 
 ## License
 
-[Apache-2.0](LICENSE). Third-party code included in this repository keeps its own license; see
-[NOTICE](NOTICE) for the files, copyright holders and full license texts.
+[Apache-2.0](https://github.com/FirstLight-org/IsoExec/blob/HEAD/LICENSE). Third-party code included in this repository keeps its own license; see
+[NOTICE](https://github.com/FirstLight-org/IsoExec/blob/HEAD/NOTICE) for the files, copyright holders and full license texts.

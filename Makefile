@@ -13,7 +13,8 @@ DIST_DIR ?= dist
 BUILD_DIR ?= build
 RELEASE_TAG ?=
 
-CHECK_PYTHON ?= python3
+# Empty: check-wheel uses uv's Python 3.12 (the supported version) and check-public-api uses python3.
+CHECK_PYTHON ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help build check-wheel check-public-api setup setup-dev check-env run-tiny
@@ -27,10 +28,11 @@ build: ## Build committed HEAD into new directories; no GPU/Torch required
 	python3 scripts/build_package.py --out "$(DIST_DIR)" --source "$(BUILD_DIR)/src" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",)
 
 check-wheel: ## Check package files, installation and import isoexec (no Torch needed)
-	"$(CHECK_PYTHON)" scripts/check_wheel.py $(DIST_DIR)/isoexec-*.whl --source "$(BUILD_DIR)/src"
+	$(if $(CHECK_PYTHON),"$(CHECK_PYTHON)",uv run --no-project --python 3.12 python) scripts/check_wheel.py \
+		$(DIST_DIR)/isoexec-*.whl --source "$(BUILD_DIR)/src"
 
 check-public-api: ## Test the exported API and meta model construction (requires Torch)
-	"$(CHECK_PYTHON)" scripts/check_wheel.py $(DIST_DIR)/isoexec-*.whl --public-api
+	"$(or $(CHECK_PYTHON),python3)" scripts/check_wheel.py $(DIST_DIR)/isoexec-*.whl --public-api
 
 setup: ## Download the release wheel and create or reuse the managed runtime
 	$(SETUP) $(if $(WHEEL),--wheel "$(WHEEL)",)
