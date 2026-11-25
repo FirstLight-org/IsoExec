@@ -345,6 +345,8 @@ def check_metadata_conflicts(manifest: dict, root: Path, env: dict) -> None:
 
 
 def setup(args, manifest: dict) -> None:
+    if args.dev and INSTALLED:
+        raise SetupError('--dev needs a source checkout: clone the repository and run make setup-dev')
     root = args.root.expanduser().resolve()
     env = process_env(manifest, root, root / 'venv')
     receipt = root / 'receipt.json'
@@ -373,8 +375,6 @@ def setup(args, manifest: dict) -> None:
         return
     if args.check_only:
         raise SetupError(f'{receipt} is missing; run make setup (or isoexec-setup) first')
-    if args.dev and INSTALLED:
-        raise SetupError('--dev needs a source checkout: clone the repository and run make setup-dev')
     if root.exists() and any(root.iterdir()):
         raise SetupError(f'{root} is nonempty without a receipt; choose a new ISOEXEC_ROOT')
     version = project_version()
