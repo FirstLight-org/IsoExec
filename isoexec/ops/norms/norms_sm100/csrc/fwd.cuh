@@ -46,41 +46,38 @@ rms_fwd_body(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat1
     for (int k = 0; k < K; ++k)
       prefetch_l2(wb + int64_t(k * 8 * L + 8 * lane) * esz);
   }
-  float acc = 0.f;
+  float a[K]; // the partial of segment k * L + lane (columns 8 (k L + lane) .. + 7)
   if constexpr (RES) {
     const __nv_bfloat16 *rr = r + row * sr;
     __nv_bfloat16 *hr = hout + row * N;
 #pragma unroll
     for (int k = 0; k < K; ++k) {
-      float a[8], b[8];
-      load8(a, xr, k, L, lane);
+      float x8[8], b[8];
+      load8(x8, xr, k, L, lane);
       load8(b, rr, k, L, lane);
 #pragma unroll
       for (int j = 0; j < 8; ++j)
-        a[j] = __fadd_rn(a[j], b[j]);
-      uint4 q = make_uint4(pack2(a[0], a[1]), pack2(a[2], a[3]), pack2(a[4], a[5]), pack2(a[6], a[7]));
+        x8[j] = __fadd_rn(x8[j], b[j]);
+      uint4 q = make_uint4(pack2(x8[0], x8[1]), pack2(x8[2], x8[3]), pack2(x8[4], x8[5]), pack2(x8[6], x8[7]));
       reinterpret_cast<uint4 *>(hr + k * 8 * L + 8 * lane)[0] = q;
       split8(v + 8 * k, q);
+      a[k] = segment_sq(v + 8 * k);
     }
   } else if constexpr (STREAM) {
 #pragma unroll
     for (int k = 0; k < K; ++k) {
       load8(v, xr, k, L, lane);
-#pragma unroll
-      for (int j = 0; j < 8; ++j)
-        acc = __fadd_rn(acc, __fmul_rn(v[j], v[j]));
+      a[k] = segment_sq(v);
     }
   } else {
 #pragma unroll
     for (int k = 0; k < K; ++k)
       load8(v + 8 * k, xr, k, L, lane);
-  }
-  if constexpr (!STREAM) {
 #pragma unroll
-    for (int c = 0; c < C; ++c)
-      acc = __fadd_rn(acc, __fmul_rn(v[c], v[c]));
+    for (int k = 0; k < K; ++k)
+      a[k] = segment_sq(v + 8 * k);
   }
-  acc = lane_fold<L>(acc);
+  float acc = segment_tree<K, L, (K * L > 256 ? K * L : 256)>(a, 0);
   float rs = inv_rms(acc, N, eps);
   if constexpr (SAVE)
     store_if(rstd + row, rs, lane == 0);
@@ -124,16 +121,8 @@ rms_fwd(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat16 *__
 }
 
 template <int K, int L, int MODE, bool WF, bool RES, bool SAVE, int VAR = 0>
-__global__ void
-rms_fwd_v2(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat16 *__restrict__ r,
-           int64_t sr, const void *__restrict__ w, __nv_bfloat16 *__restrict__ hout,
-           __nv_bfloat16 *__restrict__ out, float *__restrict__ rstd, int64_t M, int rpb, float eps) {
-  rms_fwd_body<K, L, MODE, WF, RES, SAVE, VAR>(x, sx, r, sr, w, hout, out, rstd, M, rpb, eps);
-}
-
-template <int K, int L, int MODE, bool WF, bool RES, bool SAVE, int VAR = 0>
 __global__ void __launch_bounds__(L, 7)
-rms_fwd_v2_occ(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat16 *__restrict__ r,
+rms_fwd_occ(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat16 *__restrict__ r,
                int64_t sr, const void *__restrict__ w, __nv_bfloat16 *__restrict__ hout,
                __nv_bfloat16 *__restrict__ out, float *__restrict__ rstd, int64_t M, int rpb,
                float eps) {
@@ -155,11 +144,11 @@ gated_fwd(const __nv_bfloat16 *__restrict__ x, int64_t sx, const __nv_bfloat16 *
 #pragma unroll
   for (int k = 0; k < K; ++k)
     load8(v + 8 * k, xr, k, L, lane);
-  float acc = 0.f;
+  float a[K];
 #pragma unroll
-  for (int c = 0; c < C; ++c)
-    acc = __fadd_rn(acc, __fmul_rn(v[c], v[c]));
-  acc = lane_fold<L>(acc);
+  for (int k = 0; k < K; ++k)
+    a[k] = segment_sq(v + 8 * k);
+  float acc = segment_tree<K, L, (K * L > 256 ? K * L : 256)>(a, 0);
   float rs = inv_rms(acc, N, eps);
   if constexpr (SAVE)
     store_if(rstd + row, rs, lane == 0);

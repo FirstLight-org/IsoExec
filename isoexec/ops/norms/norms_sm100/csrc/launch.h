@@ -21,12 +21,16 @@ void launch_gated_fwd(const at::Tensor &x, const at::Tensor &z, const at::Tensor
 
 void launch_rms_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor &rstd,
                     const at::Tensor &w, const at::Tensor &dres, const at::Tensor &dx,
-                    const at::Tensor &dwp, int mode, int64_t bands, int iters);
+                    const at::Tensor &dwp, int mode);
 void launch_gated_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor &z,
                       const at::Tensor &rstd, const at::Tensor &w, const at::Tensor &dx,
-                      const at::Tensor &dz, const at::Tensor &dwp, int mode, int64_t bands,
-                      int iters);
+                      const at::Tensor &dz, const at::Tensor &dwp, int mode);
 
 void launch_dw_fold(const at::Tensor &partials, const at::Tensor &dw);
+
+// The segment lengths the kernels were compiled with (schedule.py passes them from schedule_policy).
+int hidden_segment();
+int row_segment();
+int64_t row_segments(int64_t rows);
 
 } // namespace norms_sm100

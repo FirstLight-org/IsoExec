@@ -6,18 +6,15 @@ from isoexec.core.registry import ImplSpec, OneOf
 
 ARCH = "sm100"
 
-RECIPE_VERSION = 1
-RMS_IMPL = "sm100_rms_v1"
-GATED_IMPL = "sm100_gated_v1"
-
-RECIPE_VERSION_V2 = 2
-RMS_IMPL_V2 = "sm100_rms_v2"
-RECIPE_VERSIONS = (RECIPE_VERSION, RECIPE_VERSION_V2)
-#: The fused residual join + RMSNorm: ``h = rn_bf16(x + r)`` stored, then the width's RMS recipe on
-#: ``h``. Bit-identical to the bf16 ``aten.add`` followed by that recipe's RMS impl, so it is declared
-#: under the same RMS op ids, one identity per recipe, and records the join it absorbs in ``owns``.
-ADD_RMS_IMPL = "sm100_add_rms_v1"
-ADD_RMS_IMPL_V2 = "sm100_add_rms_v2"
+#: One numerical schedule for every width (``schedule.py``; isoexec/ops/schedule_policy.py, design version 7.1).
+#: Versions 1 and 2 were the strided-lane recipes keyed on the width; their identities are retired.
+RECIPE_VERSION = 3
+RMS_IMPL = "sm100_rms_v3"
+GATED_IMPL = "sm100_gated_v3"
+#: The fused residual join + RMSNorm: ``h = rn_bf16(x + r)`` stored, then the RMS schedule on ``h``.
+#: Bit-identical to the bf16 ``aten.add`` followed by the RMS impl, so it is declared under the same RMS
+#: op ids and records the join it absorbs in ``owns``.
+ADD_RMS_IMPL = "sm100_add_rms_v3"
 _SM100 = frozenset({"sm100"})
 
 RMS_STAGES = ("norms.rms.pre_attn", "norms.rms.pre_mlp", "norms.rms.final")
@@ -51,29 +48,11 @@ IMPLS: tuple[ImplSpec, ...] = (
     *(
         ImplSpec(
             op=stage,
-            impl_id=RMS_IMPL_V2,
-            version=RECIPE_VERSION_V2,
+            impl_id=ADD_RMS_IMPL,
+            version=RECIPE_VERSION,
             supported_archs=_SM100,
             inputs={"convention": OneOf("rms", "rms_zero_centered")},
         )
         for stage in RMS_STAGES
-    ),
-    *(
-        ImplSpec(
-            op=stage,
-            impl_id=impl,
-            version=version,
-            supported_archs=_SM100,
-            inputs={"convention": OneOf("rms", "rms_zero_centered")},
-        )
-        for stage in RMS_STAGES
-        for impl, version in ((ADD_RMS_IMPL, RECIPE_VERSION), (ADD_RMS_IMPL_V2, RECIPE_VERSION_V2))
-    ),
-    ImplSpec(
-        op="norms.mla",
-        impl_id=RMS_IMPL_V2,
-        version=RECIPE_VERSION_V2,
-        supported_archs=_SM100,
-        inputs={"convention": OneOf("rms")},
     ),
 )

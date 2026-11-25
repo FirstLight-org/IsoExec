@@ -83,37 +83,109 @@ __device__ __forceinline__ void store_if(float *p, float v, int cond) {
                :: "l"((uint64_t)__cvta_generic_to_global(p)), "f"(v), "r"(cond) : "memory");
 }
 
-__device__ __forceinline__ float warp_fold(float acc, int L) {
-  for (int s = L >> 1; s > 0; s >>= 1)
-    acc = __fadd_rn(acc, __shfl_xor_sync(0xffffffffu, acc, s));
-  return acc;
+// ---- The numerical schedule of every sum in this package -------------------------------------------------------
+// Segments of S consecutive positions, each a chain from +0 in ascending order, combined by the adjacent tree
+// (pair (0,1), (2,3), ...; an unpaired last partial moves up). S comes from isoexec/ops/schedule_policy.py through
+// norms_sm100/schedule.py, which passes it to the compiler; no segment length is written in this directory.
+#if !defined(NORMS_SM100_HIDDEN_SEGMENT) || !defined(NORMS_SM100_ROW_SEGMENT)
+#error "norms_sm100: build through _extension.py; schedule.py supplies the segment lengths from schedule_policy"
+#endif
+constexpr int HIDDEN_SEG = NORMS_SM100_HIDDEN_SEGMENT; // sums over the hidden axis: sum of squares, backward row dot
+constexpr int ROW_SEG = NORMS_SM100_ROW_SEGMENT;       // the weight gradient's sum over rows
+// This realisation forms one hidden-axis segment per 128-bit load of eight BF16 values.
+static_assert(HIDDEN_SEG == 8, "norms_sm100 kernels realise hidden-axis segments of one 16-byte BF16 load");
+static_assert(ROW_SEG >= 1 && ROW_SEG <= 64, "norms_sm100: row segment length outside what the backward loop unrolls");
+
+constexpr int pow2ceil(int k) {
+  int m = 1;
+  while (m < k)
+    m *= 2;
+  return m;
 }
 
-// One `__syncthreads` per call and no reuse of the buffer: forward folds each row once.
-template <int L> __device__ __forceinline__ float wide_fold(float acc) {
-  constexpr int W = L / 32;
-  __shared__ float sh[L];
-  int t = threadIdx.x;
-  sh[t] = acc;
-  __syncthreads();
-  int j = t & 31;
-  float v[W];
+// One hidden-axis segment of the sum of squares: columns ascending, from +0.
+__device__ __forceinline__ float segment_sq(const float *v) {
+  float s = 0.f;
 #pragma unroll
-  for (int w = 0; w < W; ++w)
-    v[w] = sh[w * 32 + j];
-#pragma unroll
-  for (int s = W >> 1; s > 0; s >>= 1)
-#pragma unroll
-    for (int q = 0; q < s; ++q)
-      v[q] = __fadd_rn(v[q], v[q + s]);
-  return warp_fold(v[0], 32);
+  for (int j = 0; j < HIDDEN_SEG; ++j)
+    s = __fadd_rn(s, __fmul_rn(v[j], v[j]));
+  return s;
 }
 
-template <int L> __device__ __forceinline__ float lane_fold(float acc) {
-  if constexpr (L <= 32)
-    return warp_fold(acc, L);
-  else
-    return wide_fold<L>(acc);
+// Adjacent tree over NV values one thread holds (NV is a compile-time count).
+template <int NV> __device__ __forceinline__ float tree_local(float *t) {
+  int n = NV;
+  while (n > 1) {
+    int h = n / 2;
+    for (int i = 0; i < h; ++i)
+      t[i] = __fadd_rn(t[2 * i], t[2 * i + 1]);
+    if (n & 1)
+      t[h] = t[n - 1];
+    n = (n + 1) / 2;
+  }
+  return t[0];
+}
+
+// Adjacent tree over the K * L segment partials of one row. Thread `lane` of the row's L threads holds the partials
+// of segments k * L + lane, k < K (a[k]). Realisation, all of it the same tree:
+//   1. the partials go to shared memory; thread t reads the M consecutive segments [M t, M t + M), M = the power of
+//      two >= K, and forms their (full) subtree;
+//   2. shuffle levels pair neighbouring subtrees inside a warp, the lower one on the left; a subtree with no right
+//      neighbour moves up unchanged;
+//   3. with more than one warp per row, the warps' roots meet through shared memory.
+// CAP: floats of shared memory for step 1, at least (row slots per CTA) * K * L. `buf` alternates the step-3 buffer
+// between consecutive calls of one CTA so a fast warp's next row cannot overwrite a value a slow warp still reads.
+// Every thread of the row returns the root.
+template <int K, int L, int CAP> __device__ __forceinline__ float segment_tree(const float *a, int buf) {
+  constexpr int M = pow2ceil(K);
+  static_assert(M <= L && (K * L) % M == 0, "norms_sm100: segment_tree needs pow2ceil(K) <= L");
+  constexpr int NODES = K * L / M;
+  constexpr int WL = L < 32 ? L : 32;
+  const int lane = threadIdx.x % L;
+  float nv = a[0];
+  if constexpr (K > 1) {
+    __shared__ float leaf[CAP];
+    float *row = leaf + (threadIdx.x / L) * (K * L);
+#pragma unroll
+    for (int k = 0; k < K; ++k)
+      row[k * L + lane] = a[k];
+    if constexpr (L > 32)
+      __syncthreads();
+    else
+      __syncwarp();
+    const int first = lane < NODES ? M * lane : 0; // threads past the last subtree read a valid slot; unused
+    float u[M];
+#pragma unroll
+    for (int i = 0; i < M; ++i)
+      u[i] = row[first + i];
+#pragma unroll
+    for (int s = 1; s < M; s <<= 1)
+#pragma unroll
+      for (int q = 0; q < M; q += 2 * s)
+        u[q] = __fadd_rn(u[q], u[q + s]);
+    nv = u[0];
+  }
+#pragma unroll
+  for (int s = 1; s < WL; s <<= 1) {
+    float o = __shfl_xor_sync(0xffffffffu, nv, s);
+    if (lane + s < NODES) // read at lanes that are multiples of 2s: the right neighbour exists
+      nv = __fadd_rn(nv, o);
+  }
+  if constexpr (L <= 32) {
+    return __shfl_sync(0xffffffffu, nv, int(threadIdx.x & 31) - lane); // the row's first lane holds the root
+  } else {
+    constexpr int W = L / 32, NB = (NODES + 31) / 32;
+    __shared__ float top[2][W];
+    float *t = top[buf & 1];
+    if ((lane & 31) == 0)
+      t[lane >> 5] = nv;
+    __syncthreads();
+    float tv[NB];
+#pragma unroll
+    for (int b = 0; b < NB; ++b)
+      tv[b] = t[b];
+    return tree_local<NB>(tv);
+  }
 }
 
 __device__ __forceinline__ float inv_rms(float ssq, int n, float eps) {

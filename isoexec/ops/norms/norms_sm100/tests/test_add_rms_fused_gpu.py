@@ -1,4 +1,4 @@
-"""Fused residual join + RMSNorm (``sm100_add_rms_v1 / sm100_add_rms_v2``) is the unfused program, bit for bit, forward and backward.
+"""Fused residual join + RMSNorm (``sm100_add_rms_v3``) is the unfused program, bit for bit, forward and backward.
 
 The unfused program is what the captured graph runs without the fusion pass: ``h = residual + x``
 (``aten.add`` on two bf16 tensors) and then the bound sm100 RMS recipe for the width (``ops.rms_norm``, with its
@@ -103,7 +103,7 @@ def test_bound_through_the_fusion_pass_resolution():
 
     b = resolve("norms.rms.pre_mlp", site="t", convention="rms_zero_centered", width=4096,
                 residual="residual.add.attn")
-    assert b.impl == "sm100_add_rms_v2" and b.owns == {"residual.add.attn": "sm100_add_rms_v2"}
+    assert b.impl == "sm100_add_rms_v3" and b.owns == {"residual.add.attn": "sm100_add_rms_v3"}
     x, r = _pair(7, 4096, seed=4)
     w = weight(4096, zero_centered=True)
     with torch.no_grad():

@@ -8,11 +8,6 @@ import torch
 from isoexec.ops._testing import assert_hazard_exercised, bitwise_equal
 from isoexec.ops.norms.norms_sm100 import ops as O
 from isoexec.ops.norms.norms_sm100 import reference as R
-from isoexec.ops.norms.norms_sm100 import reference_v2 as R2
-
-
-def shipped_reference(n):
-    return R2 if n in R2.DEFAULT_V2 else R
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (10, 0), reason="requires B200/SM100"
@@ -23,16 +18,6 @@ WIDTHS = (2048, 4096, 5120, 768, 512, 128, 384, 1536, 7168)
 
 
 
-
-
-def test_every_width_is_covered_by_its_own_battery():
-    from isoexec.ops.norms.norms_sm100 import ops as _O
-    from isoexec.ops.norms.norms_sm100.tests import test_recipe_v2_gpu as V2
-
-    for n in WIDTHS:
-        version = _O.recipe_default(n)
-        assert version in (1, 2), n
-        assert n in (WIDTHS if version == 1 else V2.V2_WIDTHS), (n, version)
 
 
 def rows(m, n, *, scale=3.0, seed=0, device="cuda"):
@@ -72,7 +57,7 @@ def test_matches_the_declared_recipe(n, zero_centered):
     h = hazards(x)
     assert_hazard_exercised("signed_zero", h["signed_zero"] > 0)
     assert_hazard_exercised("subnormal", h["subnormal"] > 0)
-    assert bitwise_equal(O.rms_norm(x, w, EPS, zero_centered), shipped_reference(n).rms_norm(x, w, EPS, zero_centered))
+    assert bitwise_equal(O.rms_norm(x, w, EPS, zero_centered), R.rms_norm(x, w, EPS, zero_centered))
 
 
 def test_matches_the_declared_recipe_gated():
@@ -120,7 +105,7 @@ def test_zero_row_is_defined_and_invariant():
     x[7] = 0.0
     x[8] = -0.0
     y = O.rms_norm(x, w, EPS, True)
-    assert bitwise_equal(y, shipped_reference(x.shape[-1]).rms_norm(x, w, EPS, True))
+    assert bitwise_equal(y, R.rms_norm(x, w, EPS, True))
     alone = O.rms_norm(x[7:9].clone(), w, EPS, True)
     assert bitwise_equal(alone, y[7:9])
 
@@ -328,23 +313,6 @@ def test_backward_gated_matches_float64():
     assert _rel(dx, dxd) < 5e-3 and _rel(dz, dzd) < 5e-3 and _rel(dw, dwd) < 5e-3
 
 
-@pytest.mark.parametrize("bands", (1, 4, 64, 4096))
-def test_backward_plan_does_not_change_correctness(bands):
-    """The backward's band count is an execution choice: every plan stays inside tolerance."""
-    from isoexec.ops.norms.norms_sm100._extension import extension
-
-    n, m = 2048, 3000
-    x, w = rows(m, n), weight(n, zero_centered=True)
-    _, _, rstd = extension().raw_rms_fwd(x, None, w, EPS, True)
-    gout = rows(m, n, seed=22)
-    dx, dw = extension().raw_rms_bwd(gout, x, rstd, w, None, True, bands)
-    xd = x.double().requires_grad_(True)
-    wd = w.double().requires_grad_(True)
-    yd = xd * torch.rsqrt(xd.pow(2).mean(-1, keepdim=True) + EPS) * (1.0 + wd)
-    dxd, dwd = torch.autograd.grad(yd, (xd, wd), gout.double())
-    assert _rel(dx, dxd) < 5e-3 and _rel(dw, dwd) < 5e-3
-
-
 def test_no_grad_forward_does_not_build_a_graph():
     n = 2048
     x = rows(64, n).requires_grad_(True)
@@ -383,7 +351,7 @@ def test_backward_gated_without_weight():
     from isoexec.ops.norms.norms_sm100._extension import extension
 
     _, rstd = extension().raw_gated_fwd(x, z, None, EPS, True)
-    dx, dz, dw = extension().raw_gated_bwd(dy, x, z, rstd, None, True, 0)
+    dx, dz, dw = extension().raw_gated_bwd(dy, x, z, rstd, None, True)
     assert dw is None
     xd, zd = x.detach().double().requires_grad_(True), z.detach().double().requires_grad_(True)
     yd = (xd * torch.rsqrt(xd.square().mean(-1, keepdim=True) + EPS)
@@ -408,7 +376,7 @@ def test_forward_execution_plans_are_bitwise_identical(n, plan_reset):
     x, w = rows(2048, n, seed=40), weight(n, zero_centered=True)
     r = None
     ref_y, ref_h, ref_rstd = ext.raw_rms_fwd(x, r, w, EPS, True)
-    oracle = shipped_reference(n)
+    oracle = R
     ry = oracle.rms_norm(x, w, EPS, True)
     assert bitwise_equal(ref_y, ry)
 
@@ -426,7 +394,7 @@ def test_fused_add_forward_execution_plans_are_bitwise_identical(n, plan_reset):
     x, w = rows(2048, n, seed=40), weight(n, zero_centered=True)
     r = rows(2048, n, seed=44)
     ref_y, ref_h, ref_rstd = ext.raw_rms_fwd(x, r, w, EPS, True)
-    oracle = shipped_reference(n)
+    oracle = R
     ry, rh = oracle.add_rms_norm(x, r, w, EPS, True)
     assert bitwise_equal(ref_y, ry)
     assert bitwise_equal(ref_h, rh)
@@ -446,24 +414,26 @@ def test_backward_execution_plans_are_bitwise_identical(n, m, plan_reset):
     x, w = rows(m, n, seed=41), weight(n, zero_centered=True, dtype=torch.float32)
     dy = rows(m, n, seed=42)
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
-    ref_dx, ref_dw = bwd_reference(dy, x, w, True, None, O.recipe_default(n))
+    ref_dx, ref_dw = bwd_reference(dy, x, w, True, None)
     for _ in range(3):
-        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, 0)
+        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True)
         assert bitwise_equal(dx, ref_dx), (n, m, "dx")
         assert bitwise_equal(dw, ref_dw), (n, m, "dW")
 
 
-def test_band_plan_is_numerical(plan_reset):
+@pytest.mark.parametrize("m", (1, 7, 8, 9, 63, 64, 65, 3000))
+def test_weight_gradient_is_the_row_segment_tree(m, plan_reset):
+    """dW is the policy's schedule over rows (segments of consecutive rows, adjacent tree), at every row count
+    around a segment boundary; no execution plan enters it."""
+    from isoexec.ops.norms.norms_sm100 import schedule
+
     ext = plan_reset
-    n, m = 2048, 3000
+    n = 2048
     x, w = rows(m, n, seed=43), weight(n, zero_centered=True, dtype=torch.float32)
     dy = rows(m, n, seed=44)
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
-    grads = {b: ext.raw_rms_bwd(dy, x, rstd, w, None, True, b)[1] for b in (0, 1, 4, 64, 4096)}
-    for b, dw in grads.items():
-        assert torch.isfinite(dw).all()
-        assert bitwise_equal(dw, ext.raw_rms_bwd(dy, x, rstd, w, None, True, b)[1])
-    assert not bitwise_equal(grads[1], grads[64]), (
-        "one accumulator over all 3000 rows and 64 accumulators folded in ascending order agreed bit "
-        "for bit; if that is now true the band count could be swept, so re-read plan.h::bwd_bands"
-    )
+    dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True)[1]
+    assert bitwise_equal(dw, R.rms_backward(dy, x, w, EPS, True)[1]), m
+    seg = schedule.row_sum(m)
+    contrib = (dy.float() * (x.float() * rstd[:, None])).t()
+    assert bitwise_equal(dw, R.segment_sum(contrib, seg)), (m, seg)

@@ -62,14 +62,6 @@ Tensor gate(const Tensor &z, int64_t n) {
   return z;
 }
 
-Bands override_bands(Lanes l, int64_t rows, int64_t max_bands) {
-  int64_t rpi = l.L <= 32 ? 128 / l.L : 1;
-  int64_t units = (rows + rpi - 1) / rpi;
-  int64_t bands = units < max_bands ? units : max_bands;
-  int64_t iters = (units + bands - 1) / bands;
-  return {(units + iters - 1) / iters, int(iters)};
-}
-
 struct FwdOut {
   Tensor out, h, rstd;
 };
@@ -96,8 +88,7 @@ FwdOut rms_forward(const Tensor &x, const std::optional<Tensor> &r, const std::o
 }
 
 std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const Tensor &rstd,
-                                       const Tensor &w, const Tensor &dres, int mode,
-                                       int64_t max_bands) {
+                                       const Tensor &w, const Tensor &dres, int mode) {
   int64_t n = x.size(-1);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -110,11 +101,8 @@ std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const 
   Tensor dw;
   if (!m)
     return {dx.view(x.sizes()), w.defined() ? at::zeros_like(w) : Tensor()};
-  Bands b = bwd_bands(bwd_lanes(n), m, n, false);
-  if (max_bands > 0)
-    b = override_bands(bwd_lanes(n), m, max_bands);
-  Tensor dwp = at::empty({b.bands, n}, x2.options().dtype(at::kFloat));
-  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode, b.bands, b.iters);
+  Tensor dwp = at::empty({row_segments(m), n}, x2.options().dtype(at::kFloat));
+  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode);
   if (w.defined()) {
     Tensor folded = at::empty({n}, dwp.options());
     launch_dw_fold(dwp, folded);
@@ -143,7 +131,7 @@ struct GatedGrads {
 };
 
 GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, const Tensor &rstd,
-                          const Tensor &w, int mode, int64_t max_bands) {
+                          const Tensor &w, int mode) {
   int64_t n = x.size(2);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -153,11 +141,8 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   int64_t m = x2.size(0);
   GatedGrads g{at::empty({m, n}, x2.options()), at::empty({m, n}, x2.options()), Tensor()};
   if (m) {
-    Bands b = bwd_bands(bwd_lanes(n), m, n, true);
-    if (max_bands > 0)
-      b = override_bands(bwd_lanes(n), m, max_bands);
-    Tensor dwp = w.defined() ? at::empty({b.bands, n}, x2.options().dtype(at::kFloat)) : Tensor();
-    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode, b.bands, b.iters);
+    Tensor dwp = w.defined() ? at::empty({row_segments(m), n}, x2.options().dtype(at::kFloat)) : Tensor();
+    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode);
     if (w.defined()) {
       Tensor folded = at::empty({n}, dwp.options());
       launch_dw_fold(dwp, folded);
@@ -171,8 +156,6 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   return g;
 }
 
-constexpr int64_t kMaxBands = 0; // 0: use the measured plan (plan.h)
-
 struct RMSNormFn : public torch::autograd::Function<RMSNormFn> {
   static variable_list forward(AutogradContext *ctx, Tensor x, Tensor w, double eps, int64_t mode) {
     FwdOut o = rms_forward(x, std::nullopt, w, eps, int(mode));
@@ -185,7 +168,7 @@ struct RMSNormFn : public torch::autograd::Function<RMSNormFn> {
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor()};
     auto [dx, dw] =
-        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()), kMaxBands);
+        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()));
     return {dx, dw, Tensor(), Tensor()};
   }
 };
@@ -203,7 +186,7 @@ struct AddRMSNormFn : public torch::autograd::Function<AddRMSNormFn> {
     Tensor dy = grads[0], dh = grads[1], dtot, dw;
     if (dy.defined()) {
       std::tie(dtot, dw) =
-          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()), kMaxBands);
+          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()));
     } else {
       dtot = dh;
     }
@@ -223,7 +206,7 @@ struct GatedNormFn : public torch::autograd::Function<GatedNormFn> {
     auto s = ctx->get_saved_variables();
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor(), Tensor()};
-    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()), kMaxBands);
+    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()));
     return {g.dx, g.dz, g.dw, Tensor(), Tensor()};
   }
 };
@@ -291,10 +274,8 @@ std::tuple<Tensor, Tensor, Tensor> raw_rms_fwd(const Tensor &x, const std::optio
 
 std::tuple<Tensor, Tensor> raw_rms_bwd(const Tensor &dy, const Tensor &x, const Tensor &rstd,
                                        const std::optional<Tensor> &w,
-                                       const std::optional<Tensor> &dres, bool zero_centered,
-                                       int64_t max_bands) {
-  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1,
-                               max_bands);
+                                       const std::optional<Tensor> &dres, bool zero_centered) {
+  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1);
   return {dx, dw};
 }
 
@@ -307,38 +288,26 @@ std::tuple<Tensor, Tensor> raw_gated_fwd(const Tensor &x, const Tensor &z,
 
 std::tuple<Tensor, Tensor, Tensor> raw_gated_bwd(const Tensor &dy, const Tensor &x, const Tensor &z,
                                                  const Tensor &rstd, const std::optional<Tensor> &w,
-                                                 bool zero_centered, int64_t max_bands) {
-  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1,
-                                max_bands);
+                                                 bool zero_centered) {
+  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1);
   return {g.dx, g.dz, g.dw};
 }
 
-std::tuple<int, int, int, int> recipe(int64_t n) {
-  Lanes f = fwd_lanes_active(n), b = bwd_lanes(n);
-  return {f.L, f.K, b.L, b.K};
-}
+// (hidden-axis segment length, row segment length) the kernels were compiled with.
+std::tuple<int, int> schedule() { return {hidden_segment(), row_segment()}; }
 
-std::tuple<int, int, int, int> active_recipe(int64_t n) {
-  Lanes f = fwd_lanes_active(n);
-  return {fwd_recipe(n), f.L, f.K, 8 * f.K};
-}
-
-int recipe_default(int64_t n) { return fwd_recipe_default(n); }
-
-std::tuple<int, int, int, int64_t, int, int, int, int, int> plan(int64_t n, int64_t rows) {
-  FwdPlan f = fwd_plan(fwd_lanes_active(n), rows);
-  Bands b = bwd_bands(bwd_lanes(n), rows, n, false);
-  FoldPlan fo = fold_plan(b.bands, n);
-  return {f.threads, f.var, bwd_var(bwd_lanes(n), rows), b.bands, b.iters,
-          fo.threads, fo.cpt, fo.unroll, fo.mode};
+// Execution geometry, none of it numerical: (forward threads per row, forward loads per thread, backward threads per
+// row, backward loads per thread, forward CTA threads, forward register plan, backward load plan) at `rows` rows.
+std::tuple<int, int, int, int, int, int, int> plan(int64_t n, int64_t rows) {
+  Lanes fl = fwd_lanes(n), bl = bwd_lanes(n);
+  FwdPlan f = fwd_plan(fl, rows);
+  return {fl.L, fl.K, bl.L, bl.K, f.threads, f.var, bwd_var(bl, rows)};
 }
 
 } // namespace norms_sm100
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   using namespace norms_sm100;
-  m.attr("RECIPE_VERSION") = 1;             // v1, the forward/backward recipe this package shipped
-  m.attr("RECIPE_VERSIONS") = py::make_tuple(1, 2); // both declared forward recipes (plan.h)
   m.def("rms_norm", &rms_norm, py::arg("x"), py::arg("weight"), py::arg("eps"), py::arg("zero_centered"));
   m.def("rms_norm_round_scale", &rms_norm_round_scale, py::arg("x"), py::arg("weight"), py::arg("eps"));
   m.def("add_rms_norm", &add_rms_norm, py::arg("x"), py::arg("residual"), py::arg("weight"), py::arg("eps"),
@@ -349,9 +318,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("raw_rms_bwd", &raw_rms_bwd);
   m.def("raw_gated_fwd", &raw_gated_fwd);
   m.def("raw_gated_bwd", &raw_gated_bwd);
-  m.def("recipe", &recipe);
-  m.def("active_recipe", &active_recipe, py::arg("n"));
-  m.def("recipe_default", &recipe_default, py::arg("n"));
+  m.def("schedule", &schedule);
   m.def("fwd_supported", &fwd_supported);
   m.def("plan", &plan, py::arg("n"), py::arg("rows"));
 }
