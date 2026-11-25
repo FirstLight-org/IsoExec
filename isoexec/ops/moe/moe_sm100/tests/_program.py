@@ -55,11 +55,23 @@ def glu_epilogue_torch(gate_bf: torch.Tensor, up_bf: torch.Tensor, probs=None) -
 
 
 def combine_reference(rows_fp32: torch.Tensor, combine_rows: torch.Tensor, dtype) -> torch.Tensor:
-    """One fp32 chain over the k slots in canonical slot order, then one conversion."""
-    acc = rows_fp32.index_select(0, combine_rows[:, 0].long())
-    for j in range(1, combine_rows.shape[1]):
+    """One fp32 chain over the k slots in canonical slot order, seeded with +0 (schedule policy rule 2),
+    then one conversion."""
+    acc = torch.zeros_like(rows_fp32.index_select(0, combine_rows[:, 0].long()))
+    for j in range(combine_rows.shape[1]):
         acc = acc + rows_fp32.index_select(0, combine_rows[:, j].long())
     return acc.to(dtype)
+
+
+def selected_sum_reference(terms: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """The selected-set sum of ``route_mechanics`` (schedule policy rule 2): ``terms [T, k]`` in selection
+    order, their experts ``indices [T, k]``; one fp32 chain in ASCENDING EXPERT ID seeded with +0."""
+    order = torch.argsort(indices.to(torch.int64), dim=1, stable=True)
+    by_id = torch.gather(terms, 1, order)
+    acc = torch.zeros_like(by_id[:, :1])
+    for j in range(by_id.shape[1]):
+        acc = acc + by_id[:, j : j + 1]
+    return acc
 
 
 def biteq(a: torch.Tensor, b: torch.Tensor) -> bool:

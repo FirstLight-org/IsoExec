@@ -7,10 +7,11 @@ from isoexec.ops.moe.router_sm100 import reference as R, spec
 
 def test_spec_constants():
     assert spec.ARCH == "sm100"
-    assert spec.IMPL_GROUPED == "sm100_route_grouped_v1"
-    assert spec.IMPL_SQRTSOFTPLUS == "sm100_route_sqrtsoftplus_v1"
+    assert spec.IMPL_GROUPED == "sm100_route_grouped_v2"
+    assert spec.IMPL_SQRTSOFTPLUS == "sm100_route_sqrtsoftplus_v2"
+    assert spec.IMPL_BACKWARD == "sm100_route_bwd_v2"
     assert spec.TABLE_SLOT_ORDER == "ascending_global_expert_id"
-    assert all(h // 64 % s == 0 for h, s in spec.LOGIT_SEGMENTS.items())
+    assert all(spec.logit_segments(h) == 1 for h in (2048, 4096, 5120, 7168))
     assert spec.SEG_T % 16 == 0
 
 

@@ -2,8 +2,8 @@
 
 The class's claim is EP invariance: a token's k expert terms are folded over ascending GLOBAL expert
 id in one fp32 chain, so an EP split cannot reorder the sum. This battery runs the trainer's
-``nn.MoE`` (``sm100_tcgen05_after_fc2_v1`` experts, ``sm100_after_fc2_combine_v1`` fold, the same
-native combine kernel ``sm100_gather_korder_v1`` launches) at the released geometry -- H 2048,
+``nn.MoE`` (``sm100_tcgen05_after_fc2_v1`` experts, ``sm100_after_fc2_combine_v2`` fold, the same
+native combine kernel ``sm100_gather_korder_v2`` launches) at the released geometry -- H 2048,
 256 experts, top 8, I 512, a gated 512-wide shared expert -- with identical weights and tokens at
 
 * EP1  -- one process, the class's program;
@@ -48,7 +48,7 @@ STEPS = 3
 #: name -> (world, ep, etp)
 LAYOUTS = {"ep1": (1, 1, 1), "ep2": (2, 2, 1), "ep4": (4, 4, 1), "etp4": (4, 1, 4)}
 #: The impls this battery proves members of ``moe.combine.korder_fp32``.
-MEMBERS = ("sm100_after_fc2_combine_v1", "sm100_gather_korder_v1")
+MEMBERS = ("sm100_after_fc2_combine_v2", "sm100_gather_korder_v2")
 
 
 def _bits(t: torch.Tensor) -> torch.Tensor:

@@ -50,7 +50,7 @@ def _check_grouped(E, k, ng, tg, seed):
         nt = ROWS // 4 + ROWS // 16
         hf_idx, hf_w = R.hf_deepseek_v3(x[nt:], b, ng, tg, k, 2.5)
         assert torch.equal(torch.sort(hf_idx, 1).values, torch.sort(ours[nt:], 1).values)
-        # weights: the declared half-fold vs HF's torch.sum, fp32 tolerance
+        # weights: the declared ascending-id chain vs HF's torch.sum, fp32 tolerance
         _, w = R.route_reference(x[nt:], routing=R.GROUPED, top_k=k, n_group=ng, topk_group=tg,
                                  expert_bias=b, routed_scale=2.5)
         hw = torch.gather(hf_w, 1, torch.argsort(hf_idx, 1))
@@ -109,16 +109,20 @@ def test_reference_refusals_and_shapes():
     assert bool((idx[0, 1:6] > idx[0, :5]).all())          # ascending global expert id
 
 
-def test_halffold_spelling():
-    v = torch.arange(1, 9, dtype=torch.float32).unsqueeze(0)
-    # ((a0+a4)+(a2+a6)) + ((a1+a5)+(a3+a7)) for K = 8
-    a = v[0]
-    want = ((a[0] + a[4]) + (a[2] + a[6])) + ((a[1] + a[5]) + (a[3] + a[7]))
-    assert float(R.halffold(v)[0]) == float(want)
+def test_selected_sum_spelling():
+    """Schedule policy rule 2: one segment per selected expert, a chain in ascending expert id from +0."""
     v6 = torch.tensor([[1e8, 1.0, -1e8, 3.0, 0.5, 7.0]])
+    ids = torch.tensor([[40, 3, 17, 255, 0, 9]])          # selection-rank order; ascending id: 0, 3, 9, 17, 40, 255
     a = v6[0]
-    want6 = ((a[0] + a[3]) + (a[2] + a[5])) + (a[1] + a[4])
-    assert float(R.halffold(v6)[0]) == float(want6)
+    want6 = ((((((torch.tensor(0.0) + a[4]) + a[1]) + a[5]) + a[2]) + a[0]) + a[3])
+    assert float(R.selected_sum(v6, ids)[0]) == float(want6)
+    rank_chain = torch.tensor(0.0)
+    for j in range(6):
+        rank_chain = rank_chain + a[j]
+    assert float(R.selected_sum(v6, ids)[0]) != float(rank_chain)     # 11.0 against 10.5: the order is in the bits
+    assert not hasattr(R, "halffold")
+    z = torch.full((1, 6), -0.0)
+    assert torch.signbit(R.selected_sum(z, ids)).item() is False       # seeded with +0
 
 
 def test_float64_twin_is_close():

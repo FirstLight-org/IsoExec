@@ -1321,8 +1321,9 @@ sm100_bf16_mega_moe_impl(void* y,
             bool do_reduce = move_mask_and_load(load_stage_idx);
 
             // Accumulate all top-k contributions for this chunk in float registers
+            // IsoExec: `reduced` starts at +0 and every selected expert's row is added to it in ascending global
+            // expert id (schedule policy rule 2: one segment per selected coordinate, a chain seeded with +0)
             float2 reduced[kNumUint4PerLane * kNumElemsPerUint4] = {};
-            bool first_contribution = true;
             while (do_reduce) {
                 // Prefetch next top-k into the buffer while current is being accumulated
                 do_reduce = move_mask_and_load(load_stage_idx ^ 1);
@@ -1338,14 +1339,12 @@ sm100_bf16_mega_moe_impl(void* y,
                         auto& value = reduced[j * kNumElemsPerUint4 + l];
                         if constexpr (kIsoexecCanonical) {
                             const float2 input = __bfloat1622float2(bf16_values[l]);
-                            value = first_contribution ? input : float2{
-                                __fadd_rn(value.x, input.x), __fadd_rn(value.y, input.y)};
+                            value = float2{__fadd_rn(value.x, input.x), __fadd_rn(value.y, input.y)};
                         } else {
                             ptx::accumulate(value, bf16_values[l]);
                         }
                     }
                 }
-                first_contribution = false;
                 cutlass::arch::fence_view_async_shared();
                 combine_phase ^= load_stage_idx;
                 load_stage_idx ^= 1;

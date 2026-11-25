@@ -1,5 +1,5 @@
-"""Bitwise gate of the one-launch router (``route_mega``: the vendored DeepGEMM MegaGate with the logits program's 4
-segments in tensor memory and ``select.cuh`` as its gate) against ``route`` (segment GEMMs + the tree-folding
+"""Bitwise gate of the one-launch router (``route_mega``: the vendored DeepGEMM MegaGate with the logits program's
+segments (one, the schedule policy's count) in tensor memory and ``select.cuh`` as its gate) against ``route`` (segment GEMMs + the tree-folding
 selection): ids and weights equal bit for bit at every row count, under every launch-plan ownership (split-K slices
 owning whole segments, single CTA or CTA pair), with masks, ties and non-finite logits, run to run, and under CUDA
 graph replay."""
@@ -31,8 +31,9 @@ def _ref(x, w, **kw):
     """The two-launch tree program (the committed router before route_mega became the default), else the fused kernel."""
     from isoexec.ops.mm.deepgemm_sm100 import segtree
     H = x.shape[1]
-    if ops.declared_segments(H) == 4 and segtree.serves(w.shape[0], H, 4):
-        return ops.route_select_tree(segtree.partials(x.contiguous(), w.contiguous(), 4), **kw)
+    segments = ops.declared_segments(H)
+    if segtree.serves(w.shape[0], H, segments):
+        return ops.route_select_tree(segtree.partials(x.contiguous(), w.contiguous(), segments), **kw)
     return ops.route_fused(x, w, **kw)
 
 
@@ -53,7 +54,7 @@ def test_route_mega_is_route_at_every_row_count():
         _same(ops.route_mega(xt, w, **kw), _ref(xt, w, **kw), f"T={T}")
 
 
-@pytest.mark.parametrize("split", [1, 2, 4])
+@pytest.mark.parametrize("split", [1])        # one segment (the schedule policy's count): K is never split
 @pytest.mark.parametrize("ctas", [1, 2])
 def test_every_ownership_is_route(split, ctas):
     """The heuristic's choices (split-K slices of whole segments; one CTA or a CTA pair per expert group, whose
@@ -105,7 +106,7 @@ def test_sigmoid_grouped_geometry():
     kw = dict(routing=ops.GROUPED, top_k=8, n_group=8, topk_group=4, expert_bias=bias, routed_scale=2.5)
     for T in (1, 64, 512, 4096):
         _same(ops.route_mega(x[:T], w, **kw), _ref(x[:T], w, **kw), f"T={T}")
-        for split in (1, 4):
+        for split in (1,):                  # one segment: K is never split
             for ctas in (1, 2):
                 _same(ops.route_mega(x[:T], w, num_split_k=split, num_mma_ctas=ctas, **kw), _ref(x[:T], w, **kw),
                       f"T={T} split={split} ctas={ctas}")
@@ -149,15 +150,15 @@ def test_default_route_is_the_tree_program_and_capture_falls_back():
     from isoexec.ops.mm.deepgemm_sm100 import segtree
     for T in (1, 8, 64, 128, 512, 2048, 8192):
         x, w, _, kw = _v41(100 + T, T)
-        want = ops.route_select_tree(segtree.partials(x, w, 4), **kw)
+        want = ops.route_select_tree(segtree.partials(x, w, ops.declared_segments(H)), **kw)
         _same(ops.route(x, w, **kw), want, f"default T={T}")
     x, w, _, kw = _v41(5, 3)
-    want = ops.route_select_tree(segtree.partials(x, w, 4), **kw)
+    want = ops.route_select_tree(segtree.partials(x, w, ops.declared_segments(H)), **kw)
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
-        segtree.partials(x, w, 4)                    # warm the two-launch path only (not route_mega at T = 3)
-        ops.route_select_tree(segtree.partials(x, w, 4), **kw)
+        segtree.partials(x, w, ops.declared_segments(H))                    # warm the two-launch path only (not route_mega at T = 3)
+        ops.route_select_tree(segtree.partials(x, w, ops.declared_segments(H)), **kw)
     torch.cuda.current_stream().wait_stream(stream)
     g = torch.cuda.CUDAGraph()
     with torch.cuda.graph(g, stream=stream):

@@ -1,5 +1,5 @@
-"""Bitwise gate of the segment-root router path against the fused router kernel: the logits program's four
-segments as DeepGEMM segment GEMMs (``mm/deepgemm_sm100/segtree.partials``) plus the tree-folding selection
+"""Bitwise gate of the segment-root router path against the fused router kernel: the logits program's
+segments (one, the schedule policy's count: ``ops.declared_segments``) as DeepGEMM segment GEMMs (``mm/deepgemm_sm100/segtree.partials``) plus the tree-folding selection
 (``route_select_tree``) give ``route_fused``'s ids and weights at EVERY row count the engine (``route``: the tree
 form at every row count) or the trainer (always ``route_fused``) runs: rollout == trainer needs this equality."""
 import pytest
@@ -30,7 +30,7 @@ def test_tree_select_is_route_fused_at_every_row_count(E, H, k):
     for T in TS:
         x = xs[:T].contiguous()
         want_i, want_w = ops.route_fused(x, w, **kw)
-        got_i, got_w = ops.route_select_tree(segtree.partials(x, w, 4), **kw)
+        got_i, got_w = ops.route_select_tree(segtree.partials(x, w, ops.declared_segments(H)), **kw)
         assert torch.equal(got_i, want_i) and torch.equal(got_w.view(torch.int32), want_w.view(torch.int32)), T
         r_i, r_w = ops.route(x, w, **kw)
         assert torch.equal(r_i, want_i) and torch.equal(r_w.view(torch.int32), want_w.view(torch.int32)), T

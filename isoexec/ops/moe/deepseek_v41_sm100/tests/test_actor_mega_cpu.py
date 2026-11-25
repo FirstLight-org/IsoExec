@@ -110,7 +110,11 @@ def test_canonical_bf16_kernel_edits():
     src = _src("include/deep_gemm/impls/sm100_bf16_mega_moe.cuh")
     assert "bool kIsoexecCanonical," in src
     # canonical combine: ascending global expert id, shared last, first contribution assigned, __fadd_rn
-    assert "__reduce_min_sync(0xffffffffu, expert)" in src and "first_contribution ? input" in src
+    # the combine: ascending global expert id, and (schedule policy rule 2) a chain seeded with +0 -- every
+    # selected expert's row is added to the zero-initialised accumulator; no first-contribution special case
+    assert "__reduce_min_sync(0xffffffffu, expert)" in src and "first_contribution" not in src
+    assert "float2 reduced[kNumUint4PerLane * kNumElemsPerUint4] = {};" in src
+    assert "value = float2{__fadd_rn(value.x, input.x), __fadd_rn(value.y, input.y)};" in src
     assert "__fadd_rn(value.x, input.x)" in src
     # graph-replay-safe readiness tag
     assert src.count("launch_tag") >= 4 and "get_isoexec_launch_epoch_ptr() = launch_tag" in src

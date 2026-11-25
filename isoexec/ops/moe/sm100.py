@@ -162,7 +162,7 @@ def resolve_sm100(op, *, site, routing, side, weight_after_fc2=False):
         if side == "engine":
             from isoexec.ops.moe.moe_sm90.moe_pik_combine_owner import engine_combine_owner
             fn = engine_combine_owner(fn)
-        return resolution(op, "sm100_after_fc2_combine_v1", fn, provider=provider, site=site)
+        return resolution(op, "sm100_after_fc2_combine_v2", fn, provider=provider, site=site)
     if op == "moe.shared_expert" and weight_after_fc2:
         fn = shared_expert_sm100
         if side == "engine":
@@ -172,12 +172,12 @@ def resolve_sm100(op, *, site, routing, side, weight_after_fc2=False):
             fn = engine_shared_expert_owner(fn, mm=mm_linear, gate_mm=mm_vendored)
         return resolution(op, integration.SHARED_IMPL, fn, provider=provider, site=site)
     if op == "moe.route_mechanics":
-        impl = {"softmax_renorm": "sm100_fused_topk_v1",
-                "sigmoid_noaux_bias_select": "sm100_sigmoid_noaux_bias_select_v1"}.get(routing)
+        impl = {"softmax_renorm": "sm100_fused_topk_v2",
+                "sigmoid_noaux_bias_select": "sm100_sigmoid_noaux_bias_select_v2"}.get(routing)
         if impl is not None:
             return resolution(op, impl, mechanics(routing), provider=provider, site=site)
     if op == "moe.combine":
-        return resolution(op, "sm100_gather_korder_v1", combine, provider=provider, site=site)
+        return resolution(op, "sm100_gather_korder_v2", combine, provider=provider, site=site)
     if op == "moe.shared_expert":
         # This native recipe is local-only; callers needing TP/SP must bind a qualified seam.
         return resolution(op, integration.EAGER_SHARED_IMPL, forward_only(ops.shared_expert), provider=provider,

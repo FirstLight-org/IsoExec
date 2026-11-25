@@ -2,17 +2,59 @@
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 import torch
 
+from isoexec.ops import schedule_policy
+
 from ._extension import extension
+
+# ------------------------------------------------------------------------- schedule ---
+# Every reduction of this operator and the rule of ``isoexec/ops/schedule_policy.py`` that orders it.
+# The operator publishes no constant (policy_validation/sparse_design/ONEPAGE.md, Inputs: "Tensor-core
+# sums (GEMM, the MoE router, ...) publish nothing and are one segment per shard").
+#
+#   route_score      one chain over the hidden axis per (token, expert)        rule 3, G = 1
+#   fc1, fc1_glu     one chain over the hidden axis per output                 rule 3, G = 1
+#   fc2              ``leaves`` = d_max shards of the intermediate axis, one    rule 3, G = 1 per shard,
+#                    segment each, balanced tree over the shards               tree over the d_max shards
+#   route_mechanics  the selected-set sum: one segment per selected expert,    rule 2
+#                    chain in ascending expert id from +0
+#   combine          the same chain over a token's selected experts' rows      rule 2
+
+#: The tensor-core reducer's exact block: one ``tcgen05.mma`` consumes 16 K terms (hardware; the same
+#: reducer as ``ops/mm/mm_sm100/segments.py``). ``SEGMENT_MULTIPLE`` below is the kernel's K granularity
+#: (a segment is padded with zero terms up to it), not a schedule input.
+REDUCER_BLOCK = 16
+#: The reducer's published shortest segment: none, so rule 3 gives one segment per shard.
+REDUCER_SHORTEST = None
+#: Rule 2, for the selected-set sum and the combine (``csrc/route.cu`` ``selected_sum`` / ``combine_kernel``).
+SELECTED = schedule_policy.selected()
+
+
+@functools.lru_cache(maxsize=None)
+def projection_schedule(K: int, d_max: int = 1) -> schedule_policy.Segments:
+    """Rule 3 for one shard of a projection's K reduction. ``d_max`` is 1 for fc1 (the hidden axis is
+    not sharded) and the declared leaf count for fc2 (``Placement.leaves`` / ``ISOEXEC_PIK_LEAVES``, the
+    largest expert-tensor-parallel degree); a shard shorter than whole blocks is zero-padded capacity."""
+    if d_max < 1 or d_max & (d_max - 1) or K < 1 or K % d_max:
+        raise ValueError(f"K = {K} is not {d_max} equal shards (d_max must be a power of two)")
+    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, L=REDUCER_SHORTEST)
+
+
+@functools.lru_cache(maxsize=None)
+def fc2_leaves(K: int, d_max: int) -> int:
+    """Leaves of fc2's fixed tree: ``d_max`` shards of the policy's G segments. Cached per (K, d_max): the policy
+    is evaluated once per shape, never on the per-call path."""
+    return d_max * projection_schedule(K, d_max).G
 
 #: The row-block granularity of the tile plan. Tiling in M is not numerical -- it is the
 #: cta_group::1 UMMA's M -- but the plan and the kernel must agree on it.
 BLOCK_M = 128
 
-#: Legal leaf counts, as on SM90.
+#: Legal leaf counts (declared d_max of the intermediate axis), as on SM90.
 LEAVES = (1, 2, 4, 8)
 
 #: Every K segment must be a multiple of this: one 128-byte TMA swizzle atom of 16-bit
@@ -254,6 +296,8 @@ def fc2(x, down, plan: GroupedPlan, *, leaves=8, out=None):
         raise ValueError(f"leaves must be one of {LEAVES}")
     if x.size(1) % (8 * leaves):
         raise ValueError("each logical K segment must be a positive multiple of 8")
+    if fc2_leaves(x.size(1), leaves) != leaves:
+        raise ValueError("the schedule policy gives one segment per shard; leaves must be the declared d_max")
     segment = x.size(1) // leaves
     # One leaf: the kernel reads K's tail with zero-filled TMA boxes (the bits of an explicit zero pad), so
     # nothing is copied per call. Several leaves: each declared leaf boundary stays a whole-atom boundary.
@@ -357,6 +401,8 @@ __all__ = [
     "dispatch",
     "experts",
     "fc1",
+    "fc2_leaves",
+    "projection_schedule",
     "fc1_glu",
     "fc2",
     "make_plan",

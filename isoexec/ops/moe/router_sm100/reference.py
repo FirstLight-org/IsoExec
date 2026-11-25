@@ -4,7 +4,7 @@
 ``route_reference`` IS the declared program: run on CUDA tensors it is bit-equal to
 ``ops.route_select_only`` (Gate 2) -- every rounding site is one torch fp32 op in the kernel's
 order (``1 / (1 + exp(-x))``, ``x > 20 ? x : log1p(exp(x))`` then ``sqrt``, one add for the key,
-one add for the group score, the explicit half-fold, ``+ 1e-20``, one divide, one multiply). The
+one add for the group score, the selected-set chain, ``+ 1e-20``, one divide, one multiply). The
 selection is an exact total order and is computed here WITHOUT any tie-dependent library call:
 every candidate gets one int64 sort key ``(allowed, key, -id)`` whose integer order is the declared
 order, so ``torch.sort``'s stability and its treatment of ``-0.0`` cannot enter.
@@ -54,16 +54,14 @@ def _ordered_bits(r: torch.Tensor) -> torch.Tensor:
     return torch.where(b >= 0, b, b ^ 0x7FFFFFFF)
 
 
-def halffold(v: torch.Tensor) -> torch.Tensor:
-    """THE renormalisation fold over the last dim, in the given (selection-rank) order:
-    ``while n > 1: m = ceil(n/2); a[i] += a[i+m] for i + m < n; n = m``."""
-    a = v.clone()
-    n = a.size(-1)
-    while n > 1:
-        m = (n + 1) // 2
-        a[..., : n - m] = a[..., : n - m] + a[..., m:n]
-        n = m
-    return a[..., 0]
+def selected_sum(v: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+    """THE renormalisation sum (schedule policy rule 2): ``v [T, K]`` are the scores of the experts ``ids [T, K]``
+    in any order; one chain in ASCENDING EXPERT ID seeded with +0, one fp32 add per selected expert."""
+    by_id = torch.gather(v, -1, torch.argsort(ids.long(), dim=-1, stable=True))
+    acc = torch.zeros_like(by_id[..., 0])
+    for j in range(by_id.size(-1)):
+        acc = acc + by_id[..., j]
+    return acc
 
 
 def _selection(r: torch.Tensor, allowed: torch.Tensor, k: int) -> torch.Tensor:
@@ -117,7 +115,7 @@ def route_reference(logits: torch.Tensor, *, routing: str, top_k: int, n_group: 
         allowed = torch.ones(T, E, dtype=torch.bool, device=x.device)
     ranked = _selection(r, allowed, top_k)                            # rank order
     sc = score(torch.gather(x, 1, ranked), routing)
-    denom = halffold(sc) + 1e-20
+    denom = selected_sum(sc, ranked) + 1e-20
     w = (sc / denom.unsqueeze(-1)) * routed_scale
     if return_rank_order:
         return ranked.to(torch.int32), w
@@ -191,8 +189,8 @@ def deepgemm_mega_gate(logits, expert_bias, top_k, routed_scale):
     return idx, ts / (ts.sum(dim=1, keepdim=True) + 1e-20) * routed_scale
 
 
-__all__ = ["GROUPED", "SQRTSOFTPLUS", "deepgemm_mega_gate", "group_scores", "halffold",
-           "hf_deepseek_v3", "route_reference", "score", "selected_groups", "semantic_ordered"]
+__all__ = ["GROUPED", "SQRTSOFTPLUS", "deepgemm_mega_gate", "group_scores",
+           "hf_deepseek_v3", "route_reference", "score", "selected_groups", "selected_sum", "semantic_ordered"]
 
 
 # ------------------------------------------------------------------------------- backward ---
@@ -211,7 +209,7 @@ def route_backward_reference(dp, x, router_w, logits, *, routing, top_k, n_group
     ranked, _ = route_reference(logits, return_rank_order=True, **kw)
     ranked = ranked.long()
     s_rank = score(torch.gather(logits, 1, ranked), routing)
-    D = halffold(s_rank) + 1e-20
+    D = selected_sum(s_rank, ranked) + 1e-20
     order = torch.argsort(ranked, dim=-1)
     ids = torch.gather(ranked, 1, order)
     s = torch.gather(s_rank, 1, order)

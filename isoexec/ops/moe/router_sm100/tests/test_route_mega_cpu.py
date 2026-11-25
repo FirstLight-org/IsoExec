@@ -1,5 +1,6 @@
 """CPU contract of ``route_mega``: the vendored MegaGate's gate IS this package's selection program (byte-identical
-copies of ``select.cuh`` and the segment tree), and what it serves is the declared 4-segment logits program."""
+copies of ``select.cuh`` and the segment tree), and what it serves is the logits program at the schedule policy's
+segment count (one)."""
 from pathlib import Path
 
 import pytest
@@ -41,12 +42,27 @@ def test_megagate_compiles_with_the_router_arithmetic_profile():
         assert flag in host, flag
 
 
-def test_mega_serves_the_declared_four_segment_program():
-    for h, s in spec.LOGIT_SEGMENTS.items():
-        assert ops.mega_serves(384, h) == (s == 4 and h % 256 == 0)
+def test_mega_serves_the_schedule_policys_segment_count():
+    """The MegaGate's compiled segment count (``layout/mega_gate.cuh``) is the schedule policy's, and the path is
+    refused when the two differ."""
+    from isoexec.ops import schedule_policy as P
+
+    layout = (VENDOR / "layout" / "mega_gate.cuh").read_text()
+    assert "static constexpr uint32_t kNumSegments = 1;" in layout
+    for h in (2048, 4096, 5120, 7168, 64 * 6):
+        assert ops.mega_gate_segments() == P.reduce(h, b=16).G == spec.logit_segments(h) == 1
+        assert ops.mega_serves(384, h)
     assert ops.mega_serves(384, 5120) and ops.mega_serves(256, 7168) and ops.mega_serves(512, 4096)
-    assert not ops.mega_serves(384, 64 * 6)          # declared_segments = 2
+    assert not ops.mega_serves(384, 100)             # not whole 64-wide K blocks
+    heur = (VENDOR.parents[1] / "csrc" / "jit_kernels" / "heuristics" / "mega_gate.hpp").read_text()
+    assert "const bool deterministic = kNumSegments == 1;" in heur      # one segment: K is never split
     assert not ops.mega_serves(1024, 5120)           # above MegaGate's 512 experts
+    saved = ops.mega_gate_segments
+    try:                                             # a header at another count is not served
+        ops.mega_gate_segments = lambda: 4
+        assert not ops.mega_serves(384, 5120)
+    finally:
+        ops.mega_gate_segments = saved
     assert not ops.mega_serves(386, 5120)            # E % 4 != 0
 
 

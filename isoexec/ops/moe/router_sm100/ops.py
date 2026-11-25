@@ -16,18 +16,36 @@ GLOBAL EXPERT ID -- the table ``moe_sm100``'s dispatch (``ops.route`` / ``ops.di
 ``route_select_only`` runs the selection over caller-supplied fp32 logits. ``route_fused`` runs the
 router GEMM (bf16 operands, tcgen05 fp32 accumulation, see DESIGN.md "The logits program") and the
 same selection in one kernel; ``return_logits=True`` also writes the fp32 logits it selected on.
-``route_select_tree`` runs the selection over the logits program's 4 fp32 segment roots (the tree folded in
+``route_select_tree`` runs the selection over the logits program's fp32 segment roots (the tree folded in
 the selection launch), and ``route`` is ``route_fused`` for inference that takes that form (the segments on
 DeepGEMM): the same logits program, so the same table. ``route_mega`` is the same program in one launch on the
 vendored DeepGEMM MegaGate (the segments in tensor memory, the tree in its epilogue and gate, ``select.cuh`` as the
 gate); not yet ``route``'s default.
+
+Schedule (``isoexec/ops/schedule_policy.py``). The logits program is a tensor-core sum over the hidden axis: rule 3
+with the reducer's block 16 and no published shortest segment, so ONE segment (``declared_segments``); every path
+(fused, segment roots + selection, MegaGate) takes that count. The renormaliser is a sum over the K data-selected
+experts: rule 2, one segment per selected expert, a chain in ascending expert id from +0 (``select.cuh``
+``selected_sum``).
 """
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
+from isoexec.ops import schedule_policy
 from isoexec.ops.moe.router_sm100._extension import extension
+
+#: The logits reducer: one ``tcgen05.mma`` consumes 16 hidden terms (hardware); it publishes no shortest segment
+#: (policy_validation/sparse_design/ONEPAGE.md, Inputs: "Tensor-core sums (GEMM, the MoE router, ...) publish
+#: nothing and are one segment per shard"; measured cost of one segment against four:
+#: policy_validation/moe_megamoe_sm100/ROUND_B.md, Round F, build/r1.log).
+LOGITS_REDUCER_BLOCK = 16
+LOGITS_REDUCER_SHORTEST = None
+#: Rule 2 for the renormaliser (``select.cuh`` ``selected_sum``): one segment per selected expert, chain from +0.
+RENORM_SCHEDULE = schedule_policy.selected()
 
 GROUPED = "sigmoid_noaux_bias_select_grouped"
 SQRTSOFTPLUS = "sqrtsoftplus_bias_select"
@@ -86,18 +104,33 @@ def route_select_only(logits: torch.Tensor, *, routing: str, top_k: int, n_group
     return idx, w
 
 
+@functools.lru_cache(maxsize=None)
 def declared_segments(H: int) -> int:
-    """The logits program's segment count (``router.cu`` ``declared_segments``): a function of H only."""
-    atoms = H // 64
-    return 4 if atoms % 4 == 0 else 2 if atoms % 2 == 0 else 1
+    """The logits program's segment count: the schedule policy's G for the hidden axis (rule 3; the axis is not
+    sharded, d_max = 1). 1 for every H. Cached per H: the policy is evaluated once, never on the per-call path."""
+    return schedule_policy.reduce(H, b=LOGITS_REDUCER_BLOCK, L=LOGITS_REDUCER_SHORTEST).G
+
+
+@functools.lru_cache(None)
+def mega_gate_segments() -> int:
+    """The segment count compiled into the vendored MegaGate (``layout/mega_gate.cuh`` ``kNumSegments``), read from
+    the header the kernels are built from. ``mega_serves`` refuses the one-launch path unless it equals the
+    policy's count, so a header that drifts cannot run another schedule."""
+    import re
+    from pathlib import Path
+
+    header = (Path(__file__).resolve().parents[2] / "_vendor" / "deep_gemm" / "include" / "deep_gemm" / "layout"
+              / "mega_gate.cuh").read_text()
+    return int(re.search(r"static constexpr uint32_t kNumSegments = (\d+);", header).group(1))
 
 
 def route_select_tree(parts: torch.Tensor, *, routing: str, top_k: int, n_group: int = 1,
                       topk_group: int = 1, expert_bias: torch.Tensor | None = None,
                       routed_scale: float = 1.0, num_shared: int = 0,
                       mask: torch.Tensor | None = None):
-    """``route_select_only`` on logits given as their 4 FP32 segment roots ``parts [4, T, E]``: each logit is the
-    logits program's segment tree of its roots (folded in the selection launch), then the same selection."""
+    """``route_select_only`` on logits given as their FP32 segment roots ``parts [S, T, E]`` (S =
+    ``declared_segments(H)`` = 1): each logit is the logits program's segment tree of its roots (folded in the
+    selection launch), then the same selection."""
     _check(parts, dtype=torch.float32, ndim=3, name="parts")
     parts = parts.contiguous()
     T, E = parts.shape[1], parts.shape[2]
@@ -149,11 +182,12 @@ def route(x: torch.Tensor, router_w: torch.Tensor, **kw):
     if _mega_ok(x, router_w, kw):
         return route_mega(x, router_w, **kw)
     T, H = x.shape
-    if (0 < T <= SEGTREE_ROWS and not kw.get("return_logits") and declared_segments(H) == 4
+    segments = declared_segments(H)
+    if (0 < T <= SEGTREE_ROWS and not kw.get("return_logits")
             and x.dtype == router_w.dtype == torch.bfloat16 and x.is_cuda):
         from isoexec.ops.mm.deepgemm_sm100 import segtree
-        if segtree.serves(router_w.shape[0], H, 4):
-            parts = segtree.partials(x.contiguous(), router_w.contiguous(), 4)
+        if segtree.serves(router_w.shape[0], H, segments):
+            parts = segtree.partials(x.contiguous(), router_w.contiguous(), segments)
             return route_select_tree(parts, **kw)
     return route_fused(x, router_w, **kw)
 
@@ -186,15 +220,19 @@ def route_fused(x: torch.Tensor, router_w: torch.Tensor, *, routing: str, top_k:
     w = torch.empty((T, ks), dtype=torch.float32, device=x.device)
     logits = torch.empty((T, E), dtype=torch.float32, device=x.device) if return_logits else None
     extension().fused(x, router_w, bias, mask, _MODE[routing], top_k, num_shared, n_group,
-                      topk_group, float(routed_scale), idx, w, logits)
+                      topk_group, float(routed_scale), idx, w, logits, declared_segments(H))
     return (idx, w, logits) if return_logits else (idx, w)
 
 
 def mega_serves(num_experts: int, hidden: int) -> bool:
-    """True when ``route_mega`` serves the weight ``[E, H]``: whole 64-wide K blocks in each of the 4 declared
-    segments (``H % 256 == 0``, so ``declared_segments(H) == 4``) and DeepGEMM MegaGate's expert range
-    (``E <= 512``, ``E % 4 == 0``)."""
-    return hidden > 0 and hidden % 256 == 0 and 2 <= num_experts <= 512 and num_experts % 4 == 0
+    """True when ``route_mega`` serves the weight ``[E, H]``: the MegaGate is compiled for the schedule policy's
+    segment count (``mega_gate_segments() == declared_segments(H)``), whole 64-wide K blocks in each segment, and
+    DeepGEMM MegaGate's expert range (``E <= 512``, ``E % 4 == 0``)."""
+    if hidden <= 0:
+        return False
+    segments = declared_segments(hidden)
+    return (mega_gate_segments() == segments and hidden % (64 * segments) == 0
+            and 2 <= num_experts <= 512 and num_experts % 4 == 0)
 
 
 def route_mega(x: torch.Tensor, router_w: torch.Tensor, *, routing: str, top_k: int, n_group: int = 1,
@@ -202,10 +240,11 @@ def route_mega(x: torch.Tensor, router_w: torch.Tensor, *, routing: str, top_k: 
                num_shared: int = 0, mask: torch.Tensor | None = None, num_split_k: int = 0,
                num_mma_ctas: int = 0):
     """``route(x, router_w, ...)`` in ONE launch (inference, forward only): the vendored DeepGEMM MegaGate with the
-    logits program's 4 segments in 4 TMEM accumulators (each one ascending chain from zero), folded by the segment
-    tree, and this package's selection (``select.cuh``) as its gate, so ids and weights equal ``route``'s bit for bit.
+    logits program's segment(s) in TMEM accumulators (each one ascending chain from zero; one segment under the
+    schedule policy), folded by the segment tree, and this package's selection (``select.cuh``) as its gate, so ids
+    and weights equal ``route``'s bit for bit.
 
-    ``num_split_k`` (1 / 2 / 4) and ``num_mma_ctas`` (1 / 2) restrict the launch plan's ownership (0 = the
+    ``num_split_k`` (a divisor of the segment count: 1) and ``num_mma_ctas`` (1 / 2) restrict the launch plan's ownership (0 = the
     heuristic's choice); ownership never moves a bit. The first call per CUDA stream (and per shape) must run
     before CUDA graph capture on that stream (JIT compile and the stream's barrier workspace)."""
     _check(x, dtype=torch.bfloat16, ndim=2, name="x")
@@ -219,9 +258,10 @@ def route_mega(x: torch.Tensor, router_w: torch.Tensor, *, routing: str, top_k: 
     if router_w.size(1) != H:
         raise ValueError("x and router_w disagree on the hidden size")
     if not mega_serves(E, H):
-        raise ValueError(f"route_mega serves H % 256 == 0 and E <= 512 with E % 4 == 0, got E = {E}, H = {H}")
-    if num_split_k not in (0, 1, 2, 4) or num_mma_ctas not in (0, 1, 2):
-        raise ValueError("num_split_k must be 0, 1, 2 or 4 and num_mma_ctas 0, 1 or 2")
+        raise ValueError(f"route_mega serves H % 64 == 0 and E <= 512 with E % 4 == 0, got E = {E}, H = {H}")
+    if num_split_k not in (0, 1) or num_mma_ctas not in (0, 1, 2):
+        raise ValueError("num_split_k must be 0 or 1 (a split-K slice owns whole segments; there is one) and "
+                         "num_mma_ctas 0, 1 or 2")
     replayable = mask is None     # a caller's token mask is not replayable from shapes alone (prebuilt row sweep)
     bias, mask = _args(routing, E, top_k, n_group, topk_group, expert_bias, num_shared, mask, T, x.device)
     ks = top_k + num_shared
@@ -241,18 +281,28 @@ def route_mega(x: torch.Tensor, router_w: torch.Tensor, *, routing: str, top_k: 
     return idx, w
 
 
-__all__ = ["GROUPED", "SQRTSOFTPLUS", "declared_segments", "mega_serves", "route", "route_fused", "route_mega",
+__all__ = ["GROUPED", "LOGITS_REDUCER_BLOCK", "LOGITS_REDUCER_SHORTEST", "RENORM_SCHEDULE", "SQRTSOFTPLUS",
+           "declared_segments", "mega_gate_segments", "mega_serves", "route", "route_fused", "route_mega",
            "route_select_only", "route_select_tree"]
 
 
 #: the token-segment length of dW's fixed segment tree (moe_fp8_sm100/SPEC.md §8.3's SEG_T): a
 #: deployment-fixed constant published per (op, shape) -- here a function of E only, never of T.
 #: Measured (README "Backward"): 512 wins at E = 64 (shorter chains, more CTAs), 1024 at E >= 256.
+#: In the schedule policy's terms this is the published shortest segment L of dW's scalar reducer (a sum over
+#: the tokens that selected an expert): rule 3 without an occupancy gives segments of exactly L, the last one
+#: short, merged by a tree -- ``backward_segment_tokens``. The policy has ONE L per reducer; this one is two
+#: values keyed on E, which is recorded here as it was measured and not derived.
 SEG_T = 1024
 
 
 def seg_t_for(num_experts: int) -> int:
     return 512 if num_experts <= 128 else 1024
+
+
+def backward_segment_tokens(num_tokens: int, num_experts: int) -> int:
+    """Tokens per segment of dW's tree: ``schedule_policy.reduce(T, b = 16, L = seg_t_for(E))`` (S = L)."""
+    return schedule_policy.reduce(max(int(num_tokens), 1), b=16, L=seg_t_for(num_experts)).S
 
 
 def route_backward(dp: torch.Tensor, x: torch.Tensor, router_w: torch.Tensor, logits: torch.Tensor,
@@ -271,7 +321,7 @@ def route_backward(dp: torch.Tensor, x: torch.Tensor, router_w: torch.Tensor, lo
     _check(dp, dtype=torch.float32, ndim=2, name="dp")
     _check(logits, dtype=torch.float32, ndim=2, name="logits")
     T, E = logits.shape
-    seg_t = seg_t_for(E) if seg_t is None else seg_t
+    seg_t = backward_segment_tokens(T, E) if seg_t is None else seg_t
     if dp.shape != (T, top_k):
         raise ValueError("dp must be fp32 [T, top_k] in slot order")
     if x.shape[0] != T or router_w.shape != (E, x.shape[1]):
@@ -303,4 +353,4 @@ def route_backward(dp: torch.Tensor, x: torch.Tensor, router_w: torch.Tensor, lo
     return dx, dw, dl, idx
 
 
-__all__ += ["SEG_T", "route_backward", "seg_t_for"]
+__all__ += ["SEG_T", "backward_segment_tokens", "route_backward", "seg_t_for"]

@@ -129,7 +129,8 @@ static MegaGateConfig get_mega_gate_config(const int& num_tokens, const int& hid
     // IsoExec: a split-K slice owns whole logit segments and the gate folds the slices by the segment tree, so the split
     // never moves a bit and deterministic mode does not forbid it (upstream: "deterministic mode is also batch
     // invariant, so K is never split"); a split never cuts a segment (at most `kNumSegments` slices)
-    const bool deterministic = false;
+    // With one segment (the schedule policy's count) there is no whole-segment slice to split off: K is never split.
+    const bool deterministic = kNumSegments == 1;
     const bool forced = forced_num_split_k > 0 or forced_num_mma_ctas > 0;
 
     std::vector<MegaGateConfig> candidates;

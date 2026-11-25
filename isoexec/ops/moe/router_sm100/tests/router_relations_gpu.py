@@ -18,7 +18,7 @@ Gate 3 -- ``route_fused``:
   fused_logits_ownership   logits identical across every (N, MR, CS, KA, persistent) point
   fused_batch_invariance   a row alone == inside T in {7, 256, 2048, 16384} (different tiles!)
   fused_repeat / fused_graph_replay
-  fused_segment_decomposition   logits(S=4) == tree over four S=1 runs on the H/4 slices
+  (the logits program is ONE segment, the schedule policy's count: no segment decomposition relation)
   fused_logits_accuracy    vs the float64 GEMM (report)
 Backward (DESIGN.md "Backward"):
   bwd_vs_reference         (dX, dW, dl, idx) == reference.route_backward_reference, op for op

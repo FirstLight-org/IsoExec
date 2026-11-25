@@ -5,10 +5,20 @@ import torch
 from isoexec.ops.moe.router_sm100 import ops, spec
 
 
-def test_declared_segments_are_the_spec():
-    for h, s in spec.LOGIT_SEGMENTS.items():
-        assert ops.declared_segments(h) == s
-    assert ops.declared_segments(64 * 6) == 2 and ops.declared_segments(64 * 3) == 1
+def test_declared_segments_are_the_schedule_policys():
+    """The logits program's segment count is rule 3 of ``schedule_policy`` (block 16, no published shortest
+    segment): one segment for every hidden size, with no table keyed on H."""
+    from isoexec.ops import schedule_policy as P
+
+    assert ops.LOGITS_REDUCER_BLOCK == spec.LOGIT_REDUCER_BLOCK == 16
+    assert ops.LOGITS_REDUCER_SHORTEST is None and spec.LOGIT_REDUCER_SHORTEST is None
+    for h in (2048, 4096, 5120, 7168, 64 * 6, 64 * 3):
+        want = P.reduce(h, b=16)
+        assert (want.G, want.S, want.merge) == (1, h, "tree")
+        assert ops.declared_segments(h) == spec.logit_segments(h) == want.G
+    assert not hasattr(spec, "LOGIT_SEGMENTS")
+    assert ops.RENORM_SCHEDULE == P.selected() == P.Segments(1, None, "chain")
+    assert spec.RENORM_FOLD == "ascending_expert_id_chain_from_zero_plus_1e-20"
 
 
 def test_route_keeps_the_fused_kernel_outside_decode_rows(monkeypatch):

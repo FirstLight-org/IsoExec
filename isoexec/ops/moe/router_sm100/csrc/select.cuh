@@ -18,9 +18,9 @@
 //              keys of the group (a max and a second max, exact), then one __fadd_rn of two operands
 //              (order-free). Groups ranked by (G desc, g asc); the first topk_group survive.
 //   weights    s_j = score(logit[e_j]) for the selected experts in SELECTION-RANK order j;
-//              denom = halffold(s_0..s_{K-1}) + 1e-20f; w_j = (s_j / denom) * scale, each op one
-//              IEEE round-to-nearest. halffold: while n > 1 { m = ceil(n/2); a[i] += a[i+m] for
-//              i + m < n; n = m } -- for a power-of-two K exactly moe_sm100's half-fold.
+//              denom = selected_sum(s) + 1e-20f; w_j = (s_j / denom) * scale, each op one IEEE
+//              round-to-nearest. selected_sum: the schedule policy's rule 2 -- one segment per selected
+//              expert, a chain in ASCENDING EXPERT ID from +0 (moe_sm100's ``selected_sum``).
 //   slots      emitted in ASCENDING GLOBAL EXPERT ID (exact integer rank of <= 16 distinct ids);
 //              routing B's shared slots E..E+S-1 follow with weight 1.0; a masked token writes
 //              id -1 and weight 0 in every slot.
@@ -67,27 +67,31 @@ __device__ __forceinline__ uint32_t ordered_key(float r) {
   return (b & 0x80000000u) ? ~b : (b | 0x80000000u);
 }
 
-//: THE renormalisation fold: halffold over the K selected scores in selection-rank order.
-template <int K, int KP> __device__ __forceinline__ float halffold(const float (&v)[KP]) {
-  float a[KP];
+//: THE renormalisation sum. Schedule policy rule 2 (``isoexec/ops/schedule_policy.py`` ``selected()``): a sum over
+//: data-selected coordinates is ONE SEGMENT PER COORDINATE, chained in ASCENDING EXPERT ID from +0. ``v[j]`` is
+//: the score of expert ``ids[j]`` (j = selection rank); the chain visits the scores by the rank of their id, so
+//: the sum does not depend on the selection order or on which rank holds which expert.
+template <int K>
+__device__ __forceinline__ float selected_sum(const float (&v)[K], const uint32_t (&ids)[K]) {
+  int rank[K];   // rank of each selected id among the K (ids are distinct): computed once, K * K compares
 #pragma unroll
-  for (int j = 0; j < KP; ++j)
-    a[j] = v[j];
-  int n = K;
+  for (int j = 0; j < K; ++j) {
+    int slot = 0;
 #pragma unroll
-  for (int it = 0; it < 5; ++it) {
-    if (n > 1) {
-      const int m = (n + 1) / 2;
-#pragma unroll
-      for (int j = 0; j < KP; ++j) {
-        // j + m < n with n, m compile-time after unrolling (K is a template constant).
-        if (j + m < n && j + m < KP)
-          a[j] = __fadd_rn(a[j], a[j + m < KP ? j + m : 0]);
-      }
-      n = m;
-    }
+    for (int l = 0; l < K; ++l)
+      slot += ids[l] < ids[j];
+    rank[j] = slot;
   }
-  return a[0];
+  float acc = 0.f;
+#pragma unroll
+  for (int s = 0; s < K; ++s) {
+    float term = 0.f;
+#pragma unroll
+    for (int j = 0; j < K; ++j)
+      term = rank[j] == s ? v[j] : term;
+    acc = __fadd_rn(acc, term);
+  }
+  return acc;
 }
 
 struct SelectArgs {
@@ -283,7 +287,7 @@ __device__ __forceinline__ void select_warp_n(const float (&v)[TPW][EPL], const 
   for (int t = 0; t < TPW; ++t) {
     if (!valid[t])
       continue;
-    const float denom = __fadd_rn(halffold<K, K>(sw[t]), 1e-20f);
+    const float denom = __fadd_rn(selected_sum<K>(sw[t], win[t]), 1e-20f);
     const bool active = a.mask ? (a.mask[tok[t]] != 0) : true;
     if (lane < K) {
       uint32_t mine = 0u;

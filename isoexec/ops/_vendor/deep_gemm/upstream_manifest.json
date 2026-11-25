@@ -80,11 +80,12 @@
    "source": "deep_gemm",
    "upstream_path": "csrc/apis/mega_gate.hpp",
    "upstream_sha256": "1e0cfc3361a1551476d10dbd9a9f11b7121851d956ce6ad7cb3ad0a529fae186",
-   "sha256": "5aa703b6c36c33edba6d60a6e07200cd43f309825a0d616c72a6ac05eb5939ea",
+   "sha256": "9838e2d4b30b573abaa38cda75f82a980e2e7ca3511972c846d00d3a4b0b9f04",
    "modified": true,
    "modifications": [
     "IsoExec router program (bf16_mega_gate_isoexec): the binding takes the router's selection arguments (mode 0 sigmoid grouped / 1 sqrt-softplus, top_k in {1,2,4,6,8,16}, shared-as-routed slots, groups, routed scale, optional FP32 bias and bool mask) and caller-allocated int32 ids / FP32 weights [T, K+S] in isoexec.ops.moe.router_sm100's table format, and checks the router's geometry (check_geometry; upstream's H % 256 == 0 is also the router logits program's 4 whole-K-block segments); upstream's bf16_mega_gate scoring and its image-bias, fixed-routing, random-routing and physical-map options are not part of this copy. Optional forced_num_split_k / forced_num_mma_ctas restrict the launch plan's ownership for tests (never the bits).",
-    "Add get_mega_gate_isoexec_config (the launch plan the heuristic picks for a shape: ownership only) for tests and benchmarks."
+    "Add get_mega_gate_isoexec_config (the launch plan the heuristic picks for a shape: ownership only) for tests and benchmarks.",
+    "Schedule-policy port: kHiddenAlignment is kNumSegments x BLOCK_K (64 at the policy's one segment) instead of the literal 256."
    ]
   },
   {
@@ -124,12 +125,13 @@
    "source": "deep_gemm",
    "upstream_path": "csrc/jit_kernels/heuristics/mega_gate.hpp",
    "upstream_sha256": "2084d423d8f612da3a8419da5b8ccd03aa95b890c94e5b1bd16071faf44471a9",
-   "sha256": "399d5ca516982d4c6d98dab343a000743e472a7a998aebe72879f0aceeb88445",
+   "sha256": "94cce3fee100986fd5d8e42f19b537d02792818c75069774c15733f906d4bc55",
    "modified": true,
    "modifications": [
     "IsoExec segments: a split-K slice owns kNumSegments / num_split_k whole logit segments (num_split_k in {1, 2, 4}, never cutting a segment; upstream also tries 8), which is bit-neutral because the epilogue and the gate fold the segment tree in fixed order, so deterministic mode no longer forbids splitting (upstream: deterministic mode keeps num_split_k = 1).",
     "IsoExec TMEM budget: each candidate's largest token block is layout::mega_gate::get_max_block_tokens (both epilogue stages of all its segment accumulators in 512 columns) instead of kNumMaxBlockTokens; the task-doubling test measures the doubled plan with its own bound. Every other rule (candidate order, waves, gate warpgroups, stages) is upstream's.",
-    "Optional forced_num_split_k / forced_num_mma_ctas restrict the candidates (tests); the config records max_block_tokens."
+    "Optional forced_num_split_k / forced_num_mma_ctas restrict the candidates (tests); the config records max_block_tokens.",
+    "Schedule-policy port: with kNumSegments == 1 K is never split (deterministic = kNumSegments == 1)."
    ]
   },
   {
@@ -425,10 +427,11 @@
    "source": "deep_gemm",
    "upstream_path": "deep_gemm/include/deep_gemm/epilogue/sm100_mega_gate.cuh",
    "upstream_sha256": "e6122684592ce0abd15dbd6f85eb4cb12d81ca07a3e249832aa9c367e009e222",
-   "sha256": "d2b43b179ef1e2abf1e8e814fac053f4b3414988fdf4fcc03dbee1910845363e",
+   "sha256": "1259aa3a5622a1e2174f1b548492ab29f1734fae68faf6a4f215c2f06298a588",
    "modified": true,
    "modifications": [
-    "IsoExec gate: replace upstream's sqrt_softplus, sort4/select_warp_topk, select_warp_expert_value, store_token_outputs, store_topk_token and store_random_topk_token by verbatim copies of isoexec/ops/moe/router_sm100/csrc/select.cuh (namespace rt100) and router.cu's segment_tree (byte-compared by router_sm100/tests/test_route_mega_cpu.py), plus sm100_store_tmem_partials_to_global (upstream's TMEM-to-scratch drain over SL segment accumulators folded by the segment tree) and select_token (the router's select_tree body over the split partials)."
+    "IsoExec gate: replace upstream's sqrt_softplus, sort4/select_warp_topk, select_warp_expert_value, store_token_outputs, store_topk_token and store_random_topk_token by verbatim copies of isoexec/ops/moe/router_sm100/csrc/select.cuh (namespace rt100) and router.cu's segment_tree (byte-compared by router_sm100/tests/test_route_mega_cpu.py), plus sm100_store_tmem_partials_to_global (upstream's TMEM-to-scratch drain over SL segment accumulators folded by the segment tree) and select_token (the router's select_tree body over the split partials).",
+    "Schedule-policy port: the verbatim select.cuh copy now carries selected_sum (the renormaliser as a chain in ascending expert id from +0, schedule policy rule 2) in place of halffold."
    ]
   },
   {
@@ -494,10 +497,11 @@
    "source": "deep_gemm",
    "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_mega_moe.cuh",
    "upstream_sha256": "0387bd9bea62644b6580fd88d9e29f62d13e6ae4d319046ef1b8590224d1b8c5",
-   "sha256": "50c30e20c3ae544d9ad86b714c464389f7980577bb666be144838ed4930c5fb2",
+   "sha256": "9e9f4fec05de4935d3144222f598047e3cf1e3f4cfd6ba400c5bb44cbfc05d30",
    "modified": true,
    "modifications": [
-    "IsoExec canonical BF16 specialization (deepseek_v41_bf16_actor_v1): L1 weights read in the master [gate | up] layout through a 5D TMA map (no interleaved copy), canonical FP32 weighted clamped SwiGLU with one BF16 RNE, combine in ascending global expert ID with the shared contribution last and the first contribution assigned, per-launch combine-readiness tag from MegaMoESignals::isoexec_launch_epoch. Upstream default path preserved."
+    "IsoExec canonical BF16 specialization (deepseek_v41_bf16_actor_v1): L1 weights read in the master [gate | up] layout through a 5D TMA map (no interleaved copy), canonical FP32 weighted clamped SwiGLU with one BF16 RNE, combine in ascending global expert ID with the shared contribution last and the first contribution assigned, per-launch combine-readiness tag from MegaMoESignals::isoexec_launch_epoch. Upstream default path preserved.",
+    "Schedule-policy port: the canonical combine chain starts from +0 and adds every selected expert's row (rule 2); the first-contribution special case is removed."
    ]
   },
   {
@@ -523,11 +527,12 @@
    "source": "deep_gemm",
    "upstream_path": "deep_gemm/include/deep_gemm/layout/mega_gate.cuh",
    "upstream_sha256": "543ca6ee1f5c2e2bb04144232fbbab26026afcd0e12d3a547891d1a306ba25e7",
-   "sha256": "1d9cb386deb29bcc94c367b89a77a3e62c070066843218292ddf33cc55477685",
+   "sha256": "25ce8395151d09939533cdb30b28e99d16f9e83562d181b41553952fde612353",
    "modified": true,
    "modifications": [
     "IsoExec logits program: add kNumSegments = 4 and the TMEM budget helpers get_num_accum_cols / get_max_block_tokens (a 128-expert group on a CTA pair holds N / 2 columns per CTA).",
-    "Remove RoutingArgs, caches_logical_count, kNumExpertsPerWave and the 4 KiB metadata cache of SharedStorage (the gate is router_sm100's selection, which reads the bias itself)."
+    "Remove RoutingArgs, caches_logical_count, kNumExpertsPerWave and the 4 KiB metadata cache of SharedStorage (the gate is router_sm100's selection, which reads the bias itself).",
+    "Schedule-policy port: kNumSegments = 1 (isoexec/ops/schedule_policy.py rule 3: a tensor-core sum publishes no shortest segment, so the logits are one chain over the hidden axis)."
    ]
   },
   {

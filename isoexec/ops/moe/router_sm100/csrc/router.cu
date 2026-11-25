@@ -47,12 +47,13 @@ __global__ __launch_bounds__(256) void select_kernel(const float *__restrict__ l
 
 // ------------------------------------------------------------------------ fused ---
 //
-// THE LOGITS PROGRAM. The hidden axis is cut into S = kSegments fixed segments of H/S (a multiple of
-// 64); segment g is ONE tcgen05 accumulation chain from zero over its h in ascending order, K = 16
-// per instruction (cta_group::1, kind::f16, bf16 x bf16 -> fp32, both operands K-major, SW128);
-// the logit is the balanced tree of the S fp32 partials with lower-index subtrees on the left --
-// ((p0 + p1) + (p2 + p3)) at S = 4 -- one __fadd_rn per node. S is a function of the weight
-// (deployment-fixed), never of T.
+// THE LOGITS PROGRAM. The hidden axis is cut into S fixed segments of H/S (a multiple of 64); segment g is ONE
+// tcgen05 accumulation chain from zero over its h in ascending order, K = 16 per instruction (cta_group::1,
+// kind::f16, bf16 x bf16 -> fp32, both operands K-major, SW128); the logit is the balanced tree of the S fp32
+// partials with lower-index subtrees on the left, one __fadd_rn per node. S IS THE SCHEDULE POLICY'S: the host
+// passes ``schedule_policy.reduce(H, b = 16).G`` (``ops.declared_segments``), which is 1 -- a tensor-core sum
+// publishes no shortest segment, so the logit is ONE chain over the whole hidden axis and the tree is the
+// identity. The kernels stay templated on (CS, SL); only S = 1 (CS = SL = 1) is instantiated.
 //
 // OWNERSHIP (free, gated bit-for-bit): a cluster of CE x CS CTAs covers one token tile of N tokens.
 // CTA (ce, cs) owns experts [MR*ce, MR*ce + MR) and segments [SL*cs, SL*cs + SL) (S = CS*SL), each
@@ -378,8 +379,8 @@ __global__ __launch_bounds__(Threads<N>::v, OCC) void fused_kernel(const __grid_
 // ------------------------------------------------------------------- persistent ---
 //
 // The PREFILL schedule of the same program: a cluster of CE CTAs walks token tiles of 128 (CTA ce
-// owns experts [128ce, 128ce + 128), all four segments in four TMEM accumulators of 128 columns).
-// Warp roles: 0 TMA, 1 UMMA, 4-7 drain (fold the four segment partials by the declared tree, one
+// owns experts [128ce, 128ce + 128), all S segments in S TMEM accumulators of 128 columns; S = 1 under the
+// schedule policy). Warp roles: 0 TMA, 1 UMMA, 4-7 drain (fold the S segment partials by the declared tree, one
 // thread per element, and store the logits into the selecting CTA's buffer), the other ten select.
 // The drain releases TMEM as soon as it has read it, so tile i+1's UMMAs run while tile i is being
 // selected out of a double-buffered shared-memory logits buffer. Cluster mbarriers carry the
@@ -390,13 +391,13 @@ constexpr int kPN = 128;            // tokens a tile
 constexpr int kPThreads = 512;
 constexpr int kPSelWarps = 10;      // warps 2, 3, 8..15
 
-template <int CE, int MODE, int K, int EPL, int NB>
+template <int CE, int MODE, int K, int EPL, int NB, int S>
 __global__ __launch_bounds__(kPThreads, 1) void persist_kernel(
     const __grid_constant__ CUtensorMap wmap, const __grid_constant__ CUtensorMap xmap,
     FusedArgs f, SelectArgs a) {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 1000)
   using Sh = FusedShape<kPN, 128>;
-  constexpr int S = 4;
+  static_assert(S >= 1 && S * kPN <= 512, "segment accumulators exceed tensor memory");
   constexpr int C = CE;
   constexpr int OWN = (kPN + C - 1) / C;
   constexpr uint32_t kTmemCols = 512;
@@ -526,7 +527,7 @@ __global__ __launch_bounds__(kPThreads, 1) void persist_kernel(
     }
     __syncwarp();
   } else if (warp >= 4 && warp < 8) {
-    // ---- drain: four segment partials -> declared tree -> the selecting CTA's buffer ----
+    // ---- drain: the S segment partials -> declared tree -> the selecting CTA's buffer ----
     const uint32_t q = warp & 3u;
     const int e = m0 + int(q * 32u + lane);
     const bool real = e < E;
@@ -754,8 +755,9 @@ void select_tree_cuda(const at::Tensor &parts, const c10::optional<at::Tensor> &
                       int64_t n_group, int64_t topk_group, double scale, at::Tensor out_idx,
                       at::Tensor out_w) {
   TORCH_CHECK(parts.is_cuda() && parts.scalar_type() == at::kFloat && parts.dim() == 3 && parts.is_contiguous() &&
-                  parts.size(0) == 4,
-              "router_sm100: segment roots must be contiguous CUDA fp32 [4, T, E]");
+                  parts.size(0) == 1,
+              "router_sm100: segment roots must be contiguous CUDA fp32 [1, T, E] (one segment: the schedule "
+              "policy's count for the logits program)");
   const c10::cuda::CUDAGuard guard(parts.device());
   const int T = int(parts.size(1)), E = int(parts.size(2));
   const Geometry g = check_geometry(T, E, int(K), int(S), int(n_group), int(topk_group),
@@ -783,7 +785,7 @@ void select_tree_cuda(const at::Tensor &parts, const c10::optional<at::Tensor> &
   cfg.numAttrs = 1;
   const float *pp = parts.data_ptr<float>();
 #define RT_SELT(MODE_)                                                                       \
-  RT_DISPATCH_K(g.K, RT_DISPATCH_EPL(g.EPL, (launch_pdl(cfg, select_tree_kernel<MODE_, KT, ET, 4>, pp, seg, \
+  RT_DISPATCH_K(g.K, RT_DISPATCH_EPL(g.EPL, (launch_pdl(cfg, select_tree_kernel<MODE_, KT, ET, 1>, pp, seg, \
                                                          int64_t(E), T, a))))
   if (mode == kSigmoid)
     RT_SELT(kSigmoid);
@@ -795,18 +797,15 @@ void select_tree_cuda(const at::Tensor &parts, const c10::optional<at::Tensor> &
 
 namespace {
 
-//: the declared segment count of the logits program: a function of the weight's H only.
-int declared_segments(int H) {
-  const int atoms = H / 64;
-  return atoms % 4 == 0 ? 4 : atoms % 2 == 0 ? 2 : 1;
-}
-
 //: the fused kernel's ownership at T: token tile N, experts a CTA MR, segment CTAs CS, atoms a
 //: stage KA. OWNERSHIP ONLY -- the battery pins every served point at one T and compares bits.
 struct Tile {
   int N, MR, CS, KA, OCC;   //: OCC: CTAs a multiprocessor (2 halves the smem and TMEM budget)
   int PERSIST;              //: 1 = the persistent prefill schedule (N = 128, MR = 128, CS = 1)
 };
+//: CS (segment CTAs a cluster) in the rungs below was measured for the 4-segment program this kernel ran before
+//: the schedule policy. It is ownership only and is clamped to a divisor of the policy's S by the caller, so at
+//: S = 1 every rung runs CS = 1; the (N, MR, KA) of the rungs are kept as measured.
 
 Tile pick_tile(int T, int E, int H, int S) {
   // THE MEASURED RULE (sweep_tiles.py, README "Ownership sweep"): per expert-count class, the
@@ -828,12 +827,11 @@ Tile pick_tile(int T, int E, int H, int S) {
                               {1024, {32, 128, 2, 2, 1, 0}},  {2048, {64, 128, 2, 2, 1, 0}},
                               {4096, {128, 128, 2, 2, 1, 0}}, {8192, {128, 128, 1, 1, 1, 0}},
                               {1 << 30, {128, 128, 1, 1, 1, 1}}};
-  // e384 decode rungs: 12-CTA non-portable clusters (CS = 4) below T = 128,
-  // 11.75 -> 9.96 us at T <= 64 on DeepSeek V4.1 layer 3 (bit-equal idx / weights / logits at
-  // T = 1/16/32/64/128/256 vs the previous rung).
-  static const Rung e384v4[] = {{64, {16, 128, 4, 4, 1, 0}},  {128, {32, 128, 4, 2, 1, 0}},
-                                {256, {16, 128, 2, 4, 1, 0}},   {512, {32, 128, 2, 2, 1, 0}},
-                                {1024, {64, 128, 2, 2, 1, 0}},  {2048, {128, 128, 2, 2, 1, 0}},
+  // e384v4 (DeepSeek V4-class, E in (288, 384]): re-measured at ONE segment (CS = 1) on B200, H 5120, top-6 + shared
+  // (policy_validation/port/dense/results/sweep_router_tile_fl.json: every (N, KA, persistent) point bit-equal to
+  // the previous rung, then timed). With one segment a cluster is CE = 3 CTAs, so the small token tile carries
+  // the parallelism the segment CTAs used to: N = 16 up to 1024 rows, 64 up to 2048, 128 above.
+  static const Rung e384v4[] = {{1024, {16, 128, 1, 4, 1, 0}},  {2048, {64, 128, 1, 2, 1, 0}},
                                 {4096, {128, 128, 1, 1, 1, 0}}, {1 << 30, {128, 128, 1, 1, 1, 1}}};
   static const Rung e384[] = {{256, {16, 128, 2, 4, 1, 0}},   {512, {32, 128, 2, 2, 1, 0}},
                               {1024, {64, 128, 2, 2, 1, 0}},  {2048, {128, 128, 2, 2, 1, 0}},
@@ -842,8 +840,8 @@ Tile pick_tile(int T, int E, int H, int S) {
                               {1024, {32, 128, 1, 2, 1, 0}},  {2048, {64, 128, 1, 2, 1, 0}},
                               {4096, {128, 128, 1, 1, 1, 0}}, {8192, {128, 128, 1, 1, 1, 0}},
                               {1 << 30, {128, 128, 1, 1, 1, 1}}};
-  // E in (288, 384] (DeepSeek V4-class, the only geometry instantiated with CS = 4 at E = 384) takes
-  // the decode rungs; GLM-5.3-Flash (E = 288) keeps the previous ladder.
+  // E in (288, 384] (DeepSeek V4-class) takes the ladder re-measured at one segment; the other classes keep the
+  // (N, MR, KA) of their 4-segment sweeps with CS clamped to 1 (not re-measured).
   const Rung *r = E <= 64 ? e64 : E <= 256 ? e256 : E <= 288 ? e384 : E <= 384 ? e384v4 : e512;
   while (T > r->tmax)
     ++r;
@@ -871,10 +869,20 @@ int make_atom_map(CUtensorMap *map, const void *base, uint64_t rows, uint64_t H,
 
 } // namespace
 
+//: OWNERSHIP OVERRIDE for sweeps and the ownership relation (tests): N > 0 replaces the ladder's token tile and
+//: atoms a stage, persist >= 0 its persistent flag. Ownership only: every point computes the same bits. Zero
+//: (the default) leaves the measured ladder in force; nothing in the package sets it.
+static int g_tile_n = 0, g_tile_ka = 0, g_tile_persist = -1;
+void tile_override_cuda(int64_t n, int64_t ka, int64_t persist) {
+  g_tile_n = int(n);
+  g_tile_ka = int(ka);
+  g_tile_persist = int(persist);
+}
+
 void fused_cuda(const at::Tensor &x, const at::Tensor &w, const c10::optional<at::Tensor> &bias,
                 const c10::optional<at::Tensor> &mask, int64_t mode, int64_t K, int64_t S_,
                 int64_t n_group, int64_t topk_group, double scale, at::Tensor out_idx,
-                at::Tensor out_w, const c10::optional<at::Tensor> &logits_out) {
+                at::Tensor out_w, const c10::optional<at::Tensor> &logits_out, int64_t segments) {
   TORCH_CHECK(x.is_cuda() && w.is_cuda() && x.scalar_type() == at::kBFloat16 &&
                   w.scalar_type() == at::kBFloat16 && x.dim() == 2 && w.dim() == 2 &&
                   x.stride(1) == 1 && w.stride(1) == 1 && x.size(1) == w.size(1),
@@ -901,9 +909,17 @@ void fused_cuda(const at::Tensor &x, const at::Tensor &w, const c10::optional<at
                out_idx.data_ptr<int>(), out_w.data_ptr<float>()};
   if (!T)
     return;
-  const int S = declared_segments(H);
-  TORCH_CHECK((H / 64) % S == 0, "router_sm100 fused: H/64 must divide into the segments");
+  //: the segment count of the logits program: the schedule policy's, passed by the host (ops.declared_segments)
+  const int S = int(segments);
+  TORCH_CHECK(S >= 1 && (H / 64) % S == 0, "router_sm100 fused: H/64 must divide into the segments");
   Tile tl = pick_tile(T, E, H, S);
+  while (S % tl.CS)       // ownership: a cluster cannot hold more segment CTAs than there are segments
+    tl.CS /= 2;
+  if (g_tile_n > 0) {
+    tl.N = g_tile_n;
+    tl.KA = g_tile_ka > 0 ? g_tile_ka : tl.KA;
+    tl.PERSIST = g_tile_persist >= 0 ? g_tile_persist : 0;
+  }
   const int OCC = tl.OCC;
   const int N = tl.N, MR = tl.MR, CS = tl.CS;
   const int CE = (E + MR - 1) / MR;
@@ -924,8 +940,8 @@ void fused_cuda(const at::Tensor &x, const at::Tensor &w, const c10::optional<at
   auto stream = at::cuda::getCurrentCUDAStream();
   bool launched = false;
   if (tl.PERSIST) {
-    TORCH_CHECK(N == 128 && MR == 128 && CS == 1 && S == 4,
-                "router_sm100 persistent: tile (128, 128, 1) at S = 4 only");
+    TORCH_CHECK(N == 128 && MR == 128 && CS == 1 && S == 1,
+                "router_sm100 persistent: tile (128, 128, 1) at S = 1 only");
     using Sh = FusedShape<128, 128>;
     const uint32_t stage = uint32_t(KA) * (Sh::kAtomA + Sh::kAtomB);
     const int OWN = (128 + CE - 1) / CE;
@@ -939,7 +955,7 @@ void fused_cuda(const at::Tensor &x, const at::Tensor &w, const c10::optional<at
 #define RT_PERSIST(CE_, MODE_, K_, EPL_)                                                     \
     if (!launched && CE == CE_ && int(mode) == MODE_ && g.K == K_ && g.EPL == EPL_) {      \
       launched = true;                                                                       \
-      auto kern = persist_kernel<CE_, MODE_, K_, EPL_, 1>;                                   \
+      auto kern = persist_kernel<CE_, MODE_, K_, EPL_, 1, 1>;                                \
       C10_CUDA_CHECK(cudaFuncSetAttribute(kern, cudaFuncAttributeMaxDynamicSharedMemorySize, \
                                           int(smem)));                                       \
       cudaLaunchConfig_t cfg{};                                                              \
@@ -1011,46 +1027,22 @@ void fused_cuda(const at::Tensor &x, const at::Tensor &w, const c10::optional<at
   }
 #define RT_FUSED(N_, MR_, CE_, CS_, SL_, MODE_, K_, EPL_)                                    \
   RT_FUSED_O(N_, MR_, CE_, CS_, SL_, MODE_, K_, EPL_, 1)
-  // The ownership ladder per served geometry: N in {16, 32, 64, 128}, MR in {64, 128}, and the
-  // (CS, SL) splits of the declared S = 4 whose cluster fits eight CTAs.
+  // The ownership ladder per served geometry at the policy's S = 1 (CS = SL = 1): N in {16, 32, 64, 128},
+  // MR in {64, 128}. The (CS, SL) splits of the 4-segment program are no longer instantiated.
 #define RT_NS(MR_, CE_, CS_, SL_, MODE_, K_, EPL_)                                           \
   RT_FUSED(16, MR_, CE_, CS_, SL_, MODE_, K_, EPL_)                                          \
   RT_FUSED(32, MR_, CE_, CS_, SL_, MODE_, K_, EPL_)                                          \
   RT_FUSED(64, MR_, CE_, CS_, SL_, MODE_, K_, EPL_)                                          \
   RT_FUSED(128, MR_, CE_, CS_, SL_, MODE_, K_, EPL_)
 #define RT_GEOM(E_, MODE_, K_, EPL_)                                                         \
-  RT_FUSED_O(64, 128, (E_ + 127) / 128, 1, 4, MODE_, K_, EPL_, 2)                            \
-  RT_FUSED_O(64, 128, (E_ + 127) / 128, 2, 2, MODE_, K_, EPL_, 2)                            \
-  RT_NS(128, (E_ + 127) / 128, 1, 4, MODE_, K_, EPL_)                                        \
-  RT_NS(128, (E_ + 127) / 128, 2, 2, MODE_, K_, EPL_)                                        \
-  RT_FUSED(256, 128, (E_ + 127) / 128, 2, 2, MODE_, K_, EPL_)                                \
-  RT_NS(64, (E_ + 63) / 64, 1, 4, MODE_, K_, EPL_)                                           \
-  RT_NS(64, (E_ + 63) / 64, 2, 2, MODE_, K_, EPL_)
+  RT_NS(128, (E_ + 127) / 128, 1, 1, MODE_, K_, EPL_)                                        \
+  RT_NS(64, (E_ + 63) / 64, 1, 1, MODE_, K_, EPL_)
   RT_GEOM(64, kSigmoid, 4, 2)                 // GLM-4.7-Flash
-  RT_NS(128, 1, 4, 1, kSigmoid, 4, 2)
-  RT_NS(64, 1, 4, 1, kSigmoid, 4, 2)
   RT_GEOM(256, kSigmoid, 8, 8)                // DeepSeek V3-class, grouped or not
-  RT_NS(128, 2, 4, 1, kSigmoid, 8, 8)
-  RT_FUSED(256, 128, 2, 4, 1, kSigmoid, 8, 8)
-  RT_FUSED(64, 128, 2, 1, 1, kSigmoid, 8, 8)  // S = 1: the decomposition relation only
-  RT_FUSED(64, 128, 2, 1, 2, kSigmoid, 8, 8)  // S = 2: likewise
-  RT_FUSED_O(64, 128, 3, 1, 4, kSigmoid, 8, 12, 2)
-  RT_NS(128, 3, 1, 4, kSigmoid, 8, 12)       // GLM-5.3-Flash, E = 288 (partial expert tile)
-  RT_NS(128, 3, 2, 2, kSigmoid, 8, 12)
-  RT_FUSED(256, 128, 3, 2, 2, kSigmoid, 8, 12)
+  RT_NS(128, 3, 1, 1, kSigmoid, 8, 12)        // GLM-5.3-Flash, E = 288 (partial expert tile)
   RT_GEOM(256, kSqrtSoftplus, 6, 8)           // V4-class
-  RT_NS(128, 2, 4, 1, kSqrtSoftplus, 6, 8)
-  RT_FUSED(256, 128, 2, 4, 1, kSqrtSoftplus, 6, 8)
-  RT_FUSED_O(64, 128, 3, 1, 4, kSqrtSoftplus, 6, 12, 2)
-  RT_FUSED_O(64, 128, 4, 1, 4, kSqrtSoftplus, 6, 16, 2)
-  RT_NS(128, 3, 1, 4, kSqrtSoftplus, 6, 12)   // V4-class E = 384
-  RT_NS(128, 3, 2, 2, kSqrtSoftplus, 6, 12)
-  RT_FUSED(16, 128, 3, 4, 1, kSqrtSoftplus, 6, 12)   // decode: 12-CTA (non-portable) cluster
-  RT_FUSED(32, 128, 3, 4, 1, kSqrtSoftplus, 6, 12)
-  RT_FUSED(256, 128, 3, 2, 2, kSqrtSoftplus, 6, 12)
-  RT_NS(128, 4, 1, 4, kSqrtSoftplus, 6, 16)   // V4-class E = 512
-  RT_NS(128, 4, 2, 2, kSqrtSoftplus, 6, 16)
-  RT_FUSED(256, 128, 4, 2, 2, kSqrtSoftplus, 6, 16)
+  RT_NS(128, 3, 1, 1, kSqrtSoftplus, 6, 12)   // V4-class E = 384
+  RT_NS(128, 4, 1, 1, kSqrtSoftplus, 6, 16)   // V4-class E = 512
 #undef RT_GEOM
 #undef RT_NS
 #undef RT_FUSED

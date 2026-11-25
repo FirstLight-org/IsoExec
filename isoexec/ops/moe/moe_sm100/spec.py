@@ -15,8 +15,13 @@ _SM100 = frozenset({"sm100"})
 FC1_GLU_ACT = "silu"
 
 #: Combine walks ascending GLOBAL expert id, then route slot: an EP or ETP split may not
-#: reorder a token's sum. moe_sm90's ``SM90_COMBINE_ORDER`` states the same thing.
+#: reorder a token's sum. moe_sm90's ``SM90_COMBINE_ORDER`` states the same order.
+#: Schedule policy rule 2 (``isoexec/ops/schedule_policy.py`` ``selected()``): a sum over data-selected
+#: coordinates is one segment per coordinate, a chain seeded with +0. The same rule orders the
+#: selected-set sum of ``route_mechanics`` (v2; v1 folded it by a power-of-two half fold in selection
+#: order). The seed is what differs from sm90's fold: a token whose k terms are all -0 sums to +0 here.
 SM100_COMBINE_ORDER = "ascending_expert_then_slot"
+SM100_SELECTED_SUM = "ascending_expert_chain_from_zero"
 
 #: Dispatch rows are exact integer ranks over the flat ``(token, slot)`` index, so
 #: within-expert placement is canonical -- stronger than sm90, where it is unspecified and the
@@ -35,7 +40,7 @@ SM100_SEGMENT_MULTIPLE = 64
 SM100_SCORE_MATCHES_SM90 = False
 
 #: ``KORDER`` is the exception: this package declares TWO members of it (the forward-only
-#: ``sm100_gather_korder_v1`` and the after-fc2 ``sm100_after_fc2_combine_v1``, one native combine
+#: ``sm100_gather_korder_v2`` and the after-fc2 ``sm100_after_fc2_combine_v2``, one native combine
 #: kernel), so the class has an on-arch counterparty and carries the field. ``runtimes/parallel``
 #: admits EP > 1 only against a combine whose RECORD names the class, and
 #: ``tests/test_ep_korder_gpu.py`` is the proof the record points at.
@@ -69,12 +74,12 @@ IMPLS: tuple[ImplSpec, ...] = (
     ImplSpec(op="moe.route_mechanics", impl_id="sm100_softmax_full_v1", version=1, supported_archs=_SM100),
     ImplSpec(op="moe.expert_mlp", impl_id="sm100_tcgen05_after_fc2_v1", version=1,
              supported_archs=_SM100, inputs=dict(_EXPERT_INPUTS)),
-    # The after-fc2 recipe's fold: the same native combine kernel ``sm100_gather_korder_v1`` launches,
+    # The after-fc2 recipe's fold: the same native combine kernel ``sm100_gather_korder_v2`` launches,
     # on rows already weighted after fc2, under an exact row-gather adjoint. At EP > 1
     # ``ops/moe/expert_parallel.expert_dispatch`` places every returned term at its token's
     # canonical slot and calls this fold over them, so the bits are EP1's;
     # ``tests/test_ep_korder_gpu.py`` proves it at EP 1/2/4 (and ETP 4) on the 35B layer.
-    ImplSpec(op="moe.combine", impl_id="sm100_after_fc2_combine_v1", version=1, supported_archs=_SM100,
+    ImplSpec(op="moe.combine", impl_id="sm100_after_fc2_combine_v2", version=2, supported_archs=_SM100,
              twin_class=KORDER),
     # v2: gate | up on ``mm_sm100``, the N = 1 gate on the vendored Triton GEMM, both named rather than
     # reached through ``matmul_persistent`` (whose wrappers differ between a trainer and an engine).
@@ -89,21 +94,22 @@ IMPLS: tuple[ImplSpec, ...] = (
         version=1,
         supported_archs=_SM100,
     ),
-    # Sorted top-k with the (score desc, index asc) tie rule -- ``SORTED_TOPK``'s program, and
-    # ``core/registry.TWIN_PROOFS[SORTED_TOPK]`` now names this package's battery as the sm100
-    # proof of it. The ``twin_class`` FIELD is deliberately NOT set: see WHY_NO_TWIN_FIELD.
+    # Sorted top-k with the (score desc, index asc) tie rule: the SELECTION is ``SORTED_TOPK``'s. v2: the
+    # weights divide by the selected-set sum taken as the schedule policy's chain (ascending expert id
+    # from +0), not by sm90's half fold, so this impl is NOT a member of the cross-arch ``SORTED_TOPK``
+    # class any more and ``core/registry.TWIN_PROOFS[SORTED_TOPK]`` no longer names this package.
     ImplSpec(
         op="moe.route_mechanics",
-        impl_id="sm100_fused_topk_v1",
-        version=1,
+        impl_id="sm100_fused_topk_v2",
+        version=2,
         supported_archs=_SM100,
     ),
     # Sigmoid scores with a no-aux expert bias: a different selection function, not a different
     # implementation of the same one, so it carries no twin class.
     ImplSpec(
         op="moe.route_mechanics",
-        impl_id="sm100_sigmoid_noaux_bias_select_v1",
-        version=1,
+        impl_id="sm100_sigmoid_noaux_bias_select_v2",
+        version=2,
         supported_archs=_SM100,
     ),
     ImplSpec(
@@ -129,15 +135,16 @@ IMPLS: tuple[ImplSpec, ...] = (
         twin_class=SEGMENT_TREE_GLU,
     ),
     # ``KORDER``'s program: the k slots folded in canonical slot order by one fp32 chain with one
-    # rounding, which is bit-for-bit what moe_sm90's ``pik_leaf_tree`` computes from the same rows
-    # (the fold has no tensor core in it, so tcgen05 changes nothing here) -- including the EP
+    # rounding. v2 seeds the chain with +0 (schedule policy rule 2); moe_sm90's ``pik_leaf_tree`` takes
+    # the first slot as is, so the two agree bit for bit except on a sum whose terms are all -0
+    # (+0 here, -0 there) -- including the EP
     # home-rank fold, which is the same call on rows shipped home. ``TWIN_PROOFS[KORDER]`` names
     # the batteries that check it; ``tests/test_ep_korder_gpu.py`` proves this member and
-    # ``sm100_after_fc2_combine_v1`` bitwise equal on the same rows and EP-invariant.
+    # ``sm100_after_fc2_combine_v2`` bitwise equal on the same rows and EP-invariant.
     ImplSpec(
         op="moe.combine",
-        impl_id="sm100_gather_korder_v1",
-        version=1,
+        impl_id="sm100_gather_korder_v2",
+        version=2,
         supported_archs=_SM100,
         twin_class=KORDER,
     ),
@@ -159,6 +166,7 @@ __all__ = (
     "SM100_COMBINE_ORDER",
     "SM100_DISPATCH_ORDER",
     "SM100_SCORE_MATCHES_SM90",
+    "SM100_SELECTED_SUM",
     "SM100_SEGMENT_MULTIPLE",
     "SORTED_TOPK",
     "WHY_NO_TWIN_FIELD",
