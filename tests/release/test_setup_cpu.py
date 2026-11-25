@@ -75,6 +75,18 @@ def test_reuse_refuses_a_root_built_for_another_version(tmp_path, monkeypatch, m
     assert json.loads((root / 'receipt.json').read_text()) == receipt
 
 
+def test_unreadable_recorded_wheel_removes_the_receipt(tmp_path, monkeypatch, manifest, capsys):
+    monkeypatch.setenv('CUDA_HOME', str(tmp_path / 'cuda'))
+    root = tmp_path / 'root'
+    receipt = write_receipt(root, manifest)
+    (root / 'isoexec-0.1.0-py3-none-any.whl').write_bytes(b'not a zip archive')
+    receipt |= {'dev': False, 'wheel': 'isoexec-0.1.0-py3-none-any.whl', 'wheel_sha256': '0' * 64}
+    (root / 'receipt.json').write_text(json.dumps(receipt))
+    assert setup_env.main(['--root', str(root)]) == 1
+    assert 'not a readable wheel' in capsys.readouterr().err
+    assert not (root / 'receipt.json').exists()
+
+
 def test_installed_installer_refuses_dev(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(setup_env, 'INSTALLED', True)
     assert setup_env.main(['--root', str(tmp_path / 'root'), '--dev']) == 1

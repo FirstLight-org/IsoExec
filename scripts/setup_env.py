@@ -389,7 +389,11 @@ def setup(args, manifest: dict) -> None:
             # The manifest can stay the same across releases, e.g. after pip install -U isoexec.
             recorded = root / built['wheel'] if built['wheel'] else None
             if recorded is not None and recorded.is_file():
-                found = wheel_metadata(recorded)[1]
+                try:
+                    found = wheel_metadata(recorded)[1]
+                except Exception as error:
+                    receipt.unlink()  # A failed check must not leave an ENV_PASS behind.
+                    raise SetupError(f'{recorded} is not a readable wheel: {error}') from error
                 if found != project_version():
                     raise SetupError(f'{root} holds isoexec {found}, not {project_version()}; '
                                      'choose a new ISOEXEC_ROOT')
