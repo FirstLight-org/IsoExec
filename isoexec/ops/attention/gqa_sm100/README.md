@@ -68,28 +68,32 @@ A row with border `B` is made of `n = ceil(B / SEG)` segments
 [k*SEG, min((k+1)*SEG, B))      for k = 0 .. n-1
 ```
 
-`SEG` is **fixed**: a table over `(head dim, max context)` in `ops.SEG_TOKENS`, read through
-`ops.seg_for`. It never depends on batch, sequence length, KV length, chunk boundary, split
-count, grid or SM count.
+`SEG` is **fixed** and is the output of the schedule policy (`isoexec/ops/schedule_policy.py`, design
+version 7.1, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
+length, KV length, chunk boundary, split count, grid or SM count.
 
-| head dim | max context | SEG | n at the max context |
-|---|---|---|---|
-| 128 | 2048 | 128 | 16 |
-| 128 | 8192 | 512 | 16 |
-| 128 | 32768 | 2048 | 16 |
-| 128 | 131072 | 8192 | 16 |
-| 256 | 2048 | 128 | 16 |
-| 256 | 8192 | 512 | 16 |
-| 256 | 32768 | 2048 | 16 |
-| 256 | 131072 | 8192 | 16 |
+```
+G   = pow2floor(min(p, cap, n // L_r)), at least 1        segments of a row of the declared longest context
+SEG = 128 * ceil(n / (128 * G))
+p   = 148 // (smallest batch * model KV heads * SMs per item)
+```
 
-The rule is `n_max = 16`, floored at one KV tile. A small SEG publishes a partial per segment and
-loses on long-query rows; a large SEG leaves decode with too few workers per (request, KV head).
+| input | value | where |
+|---|---|---|
+| `L_r`, shortest segment | 512 keys (measured) | `ops.SOFTMAX_SHORTEST_SEGMENT` |
+| `cap`, segments of one output in flight | 16 (tuned; `params.h FOLD_MAX_RUN`) | `ops.SOFTMAX_SEGMENT_CAP` |
+| SMs per work item | 2 at head dim 256 (a CTA pair), 1 at 128 | `ops.SMS_PER_ITEM` |
+| `n`, longest declared context | 10240 (the production `max_model_len` of the seam batteries) | `spec.LONGEST_CONTEXT` |
+| smallest declared batch | 128 | `spec.SMALLEST_BATCH` |
+| model KV heads | 2 (the smallest of the release models) | `spec.MODEL_KV_HEADS` |
 
-**The release reads one row of this table: `spec.SEG_CONTEXT = 32768`, so `SEG = 2048` at both head
-dims** (`ops.segment_span`). It is a constant of the recipe, not a deployment input, so the trainer and
-every engine read the same SEG whatever their own maximum length. A row longer than 32768 keys is
-served exactly, with more than 16 segments (the combine admits up to 4096).
+**At these declarations `p = 1`, so `G = 1` and `SEG = 10240` at both head dims** (`ops.segment_span`):
+a row of up to 10240 keys is one segment. The declarations are constants of the recipe, so the trainer
+and every engine read the same SEG whatever their own batch or maximum length. A row longer than 10240
+keys is served exactly, with more segments (the combine admits up to 4096). The head-dim-256 decode leaf
+holds a segment of at most 128 tiles (16384 keys) and refuses a longer SEG. One SEG serves one batch
+regime: a deployment that decodes at batch 1-4 is slower with this SEG than with the 640 the rule gives
+at a smallest batch of 1 (the removed max-context table held 2048, the same rule at a context of 32768).
 
 ### 1.4 The leaf program: one segment, one packed query tile
 
@@ -202,7 +206,7 @@ Everything here is free: the relations battery forces the alternatives and requi
 | | |
 |---|---|
 | dispatch | `ops/_dispatch.py`: the `gqa` seam selects `attention.gqa_sm100` on `sm100`. `attention.core.gqa` resolves to `integration.trainer_core` (`sm100_gqa_segtree_v2_varlen`); the vLLM adapter binds `integration.paged_core` (`sm100_gqa_segtree_v2_paged`). |
-| SEG | `spec.SEG_CONTEXT = 32768` -> `SEG = 2048` at both head dims (section 1.3), a constant of the recipe. |
+| SEG | the schedule policy at `spec.LONGEST_CONTEXT = 10240`, `spec.SMALLEST_BATCH = 128` -> `SEG = 10240` at both head dims (section 1.3), a constant of the recipe. |
 | engine cache | the CUSTOM vLLM backend (`ops/attention/varlen_backend.py`) reads `integration.PAGE_MULTIPLE` (kernel block sizes `MultipleOf(128)`, preferred block size rounded up to 128, which vLLM's hybrid page alignment then keeps) and `integration.KV_CACHE_LAYOUTS` (`LBNHC`, vLLM's default and the block-compact layout hybrid models need), so the engine allocates pages this kernel reads in place. The kernel writes the engine's output buffer in place. |
 | trainer install | `integration.install()` builds the extension, checks the CuTe DSL install (section 4) and returns the receipt (`recipe`, `seg_tokens`, the backward per head dim, `fa4_commit`). |
 
@@ -255,7 +259,7 @@ and every modification). It is not imported from an installed `flash_attn`.
 
 | claim | test |
 |---|---|
-| Declarations, twin class, dispatch row, resolution on SM100, SEG table and recipe SEG, canonical tree and `node_size_at` against an independent construction, lazy import, the CuTe DSL refusal | `tests/test_contract_cpu.py` |
+| Declarations, twin class, dispatch row, resolution on SM100, recipe SEG, canonical tree and `node_size_at` against an independent construction, lazy import, the CuTe DSL refusal | `tests/test_contract_cpu.py` |
 | **The seam**: trainer rows == paged prefill == chunked prefill == decode, on the release models' layers (Qwen3.5-35B-A3B, -9B, -0.8B at head dim 256; Qwen1.5-MoE-A2.7B at 128), page sizes 128 and 1152, dense pages and vLLM's interleaved `LBNHC` pages | `tests/test_seam_gpu.py` |
 | TP 2/4/8 head splits give each rank exactly the TP=1 bits of its heads (trainer and decode) | `tests/test_seam_gpu.py` |
 | A decode row is the same alone, in a batch of 64 and of 512; long-context decode (10240, 40000) equals the trainer row; a CUDA graph captured with `max_seqlen_k = max_model_len` replays the eager bits, and replays new lengths correctly | `tests/test_seam_gpu.py` |
@@ -344,7 +348,7 @@ dim 128 FA4's `deterministic=True` costs 8 to 15 % against its non-deterministic
 
 | file | |
 |---|---|
-| `spec.py` | the declarations: recipe, version, SEG context, twin class, hazards |
+| `spec.py` | the declarations: recipe, version, the schedule policy's inputs (longest context, smallest batch, model KV heads), twin class, hazards |
 | `ops.py` | the forward entry (`gqa_sm100_fwd`), the trainer/engine wrappers, FA4's backward, the autograd core, the CuTe DSL check |
 | `integration.py` | the op-table face: `trainer_core`, `paged_core`, `install`, the engine cache contract |
 | `reference.py` | the float64 oracle and the tree's structure in host Python |

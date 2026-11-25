@@ -18,17 +18,18 @@ import torch
 
 from isoexec.core.arch import live_device_arch
 
-pytestmark = pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU")
+pytestmark = [pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU"),
+              pytest.mark.usefixtures("declaration")]
 
 from isoexec.ops.attention.gqa_sm100 import ops
 from isoexec.ops.attention.gqa_sm100.tests._harness import bit_equal, cu, draw, first_diff, page_kv
 
 D = 256
-SEG = ops.segment_span(D)
 SCALE = ops.default_scale(D)
 MAX_K = 10240
-#: Contexts on and off the tile (128) and segment (2048) boundaries, up to five segments.
-CONTEXTS = (1, 2, 127, 128, 129, 300, 2047, 2048, 2049, 4095, 4097, 6000, 8192, 10240)
+#: Contexts on and off the tile (128) and segment (640 under ``batch1``) boundaries, up to sixteen segments there;
+#: test_schedule_boundary_gpu.py covers the declared span's boundaries.
+CONTEXTS = (1, 2, 127, 128, 129, 300, 639, 640, 641, 1280, 1281, 2047, 2048, 2049, 4095, 4097, 6000, 8192, 10240)
 RATIOS = [(16, 4), (8, 2), (4, 1), (16, 2), (2, 1), (16, 1), (16, 16)]
 
 
@@ -39,7 +40,7 @@ def _qkv(q_lens, kv_lens, hq, hk, seed, population="normal"):
 
 def _call(q, kc, vc, q_lens, kv_lens, leaf, *, table=None, cu_k=None, **kw):
     used = torch.tensor(list(kv_lens), device="cuda", dtype=torch.int32)
-    return ops.gqa_sm100_fwd(q, kc, vc, cu(q_lens), used, softmax_scale=SCALE, seg_tokens=SEG,
+    return ops.gqa_sm100_fwd(q, kc, vc, cu(q_lens), used, softmax_scale=SCALE, seg_tokens=ops.segment_span(D),
                              max_seqlen_q=max(q_lens), max_seqlen_k=MAX_K if table is not None else max(kv_lens),
                              block_table=table, cu_seqlens_k=cu_k, leaf=leaf, **kw)
 
@@ -141,7 +142,7 @@ def test_ratio_six_decodes_in_one_launch_with_the_grouped_bits():
 
     def grouped(qq):
         calls.append(qq.shape[1])
-        return ops.gqa_sm100_fwd(qq, kc, vc, cu(q_lens), used, softmax_scale=SCALE, seg_tokens=SEG,
+        return ops.gqa_sm100_fwd(qq, kc, vc, cu(q_lens), used, softmax_scale=SCALE, seg_tokens=ops.segment_span(D),
                                  max_seqlen_q=1, max_seqlen_k=MAX_K, block_table=table)
 
     three = ops._by_head_groups(q, 4, None, grouped)
