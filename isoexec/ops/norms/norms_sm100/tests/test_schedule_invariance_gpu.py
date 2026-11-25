@@ -154,3 +154,32 @@ def test_gated_backward_repeats_and_rows_are_independent(n):
         px, pz, _ = ext.raw_gated_bwd(dy[a:b].clone(), x[a:b].clone(), z[a:b].clone(),
                                       rstd.view(t, hv)[a:b].reshape(-1).clone(), w, True)
         assert bitwise_equal(px, dx[a:b]) and bitwise_equal(pz, dz[a:b]), (a, b)
+
+
+@pytest.mark.parametrize("n", (128, 384, 2048, 1536, 4096, 5120))
+@pytest.mark.parametrize("m", (1, 7, 8, 9, 63, 64, 65, 255, 256, 257, 1023, 1024, 1025, 2049, 4099))
+def test_weight_gradient_execution_plans_are_bitwise_identical(n, m):
+    """One row per thread group and one segment per thread group are the same schedule: equal dx and dW bits, and
+    equal to the plan the row count selects (row_plan 0)."""
+    ext = extension()
+    x, w = rows(m, n, seed=m + 5), weight(n, zero_centered=True, dtype=torch.float32)
+    dy = rows(m, n, seed=m + 6)
+    rstd = ext.raw_rms_fwd(x, None, w, EPS, True)[2]
+    want = R.rms_backward(dy, x, w, EPS, True)
+    for plan in (0, 1, S):
+        dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, plan)
+        assert bitwise_equal(dx, want[0]) and bitwise_equal(dw, want[1]), (n, m, plan)
+
+
+def test_gated_weight_gradient_execution_plans_are_bitwise_identical():
+    ext = extension()
+    n, hv = 128, 8
+    for t in (1, 3, 33, 300):
+        x, z = rows(t * hv, n, seed=t).view(t, hv, n), rows(t * hv, n, seed=t + 1, scale=6.0).view(t, hv, n)
+        w = weight(n, zero_centered=True, dtype=torch.float32)
+        dy = rows(t, hv * n, seed=t + 2)
+        rstd = ext.raw_gated_fwd(x, z, w, EPS, True)[1]
+        a = ext.raw_gated_bwd(dy, x, z, rstd, w, True, 1)
+        b = ext.raw_gated_bwd(dy, x, z, rstd, w, True, S)
+        c = ext.raw_gated_bwd(dy, x, z, rstd, w, True)
+        assert all(bitwise_equal(p, q) and bitwise_equal(p, r) for p, q, r in zip(a, b, c)), t

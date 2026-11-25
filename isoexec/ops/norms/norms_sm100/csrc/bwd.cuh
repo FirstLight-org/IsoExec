@@ -6,9 +6,12 @@
 namespace norms_sm100 {
 
 
-// The weight gradient of one CTA thread group is ONE segment of the sum over rows: rows ROW_SEG g .. ROW_SEG g +
-// ROW_SEG - 1 of segment g, ascending, each column a chain from +0. A row past the end adds +0 (which leaves a chain
-// that started at +0 unchanged), so the last segment is short. launch_bwd.cu::fold_dw_tree combines the segments.
+// The weight gradient. A CTA thread group owns `rpg` consecutive rows, rows rpg g .. rpg g + rpg - 1 of group g, and
+// writes one partial per column: the chain from +0 over its rows, ascending. A row past the end adds +0 (which
+// leaves a chain that started at +0 unchanged). Two execution plans, the same bits:
+//   rpg == ROW_SEG  a group is one segment of the sum over rows; launch_bwd.cu::fold_dw_tree combines the segments.
+//   rpg == 1        a group is one row (more CTAs in flight at small row counts); the partial is that row's term and
+//                   the fold kernel forms each segment's chain before the tree.
 template <class T> __device__ __forceinline__ T select0(int live, T v) { return live ? v : T(0); }
 
 template <int K, int L, int MODE, bool WF, bool RES, int VAR = 0>
@@ -17,14 +20,14 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
                         const float *__restrict__ rstd, const void *__restrict__ w,
                         const __nv_bfloat16 *__restrict__ dres, int64_t sdres,
                         __nv_bfloat16 *__restrict__ dx, float *__restrict__ dwp, int64_t M,
-                        int64_t nseg) {
+                        int64_t nseg, int rpg) {
   constexpr int C = 8 * K, N = 8 * L * K, RPI = L <= 64 ? 128 / L : 1;
   constexpr bool STREAM = VAR == BWD_STREAM;
   constexpr bool RING = VAR == BWD_RING && L == 128 && K <= 5;
   constexpr int TPB = 128;
   __shared__ uint4 ring[RING ? 2 * 2 * K * TPB : 1];
   int lane = threadIdx.x % L;
-  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group's row segment
+  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group
   float dwa[C];
 #pragma unroll
   for (int c = 0; c < C; ++c)
@@ -54,7 +57,7 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
         g[j] = __fadd_rn(1.f, g[j]);
   };
   auto issue = [&](int it, int stage) {
-    int64_t raw = seg * ROW_SEG + it;
+    int64_t raw = seg * rpg + it;
     int64_t row = raw < M ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
 #pragma unroll
@@ -64,7 +67,7 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
     }
   };
   auto step = [&](int it, int stage) {
-    int64_t raw = seg * ROW_SEG + it;
+    int64_t raw = seg * rpg + it;
     int live = raw < M;
     int64_t row = live ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
@@ -139,15 +142,15 @@ __global__ void rms_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
   if constexpr (RING) {
     issue(0, 0);
     cp_async_commit();
-    for (int it = 0; it < ROW_SEG; ++it) {
-      if (it + 1 < ROW_SEG)
+    for (int it = 0; it < rpg; ++it) {
+      if (it + 1 < rpg)
         issue(it + 1, (it + 1) & 1);
       cp_async_commit();
       cp_async_wait<1>();
       step(it, it & 1);
     }
   } else {
-    for (int it = 0; it < ROW_SEG; ++it)
+    for (int it = 0; it < rpg; ++it)
       step(it, 0);
   }
   if constexpr (MODE != 0) {
@@ -168,10 +171,10 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
                           const __nv_bfloat16 *__restrict__ z, int64_t szt, int64_t szh,
                           const float *__restrict__ rstd, const void *__restrict__ w,
                           __nv_bfloat16 *__restrict__ dx, __nv_bfloat16 *__restrict__ dz,
-                          float *__restrict__ dwp, int64_t M, int hv, int64_t nseg) {
+                          float *__restrict__ dwp, int64_t M, int hv, int64_t nseg, int rpg) {
   constexpr int C = 8 * K, N = 8 * L * K, RPI = L <= 64 ? 128 / L : 1;
   int lane = threadIdx.x % L;
-  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group's row segment
+  const int64_t seg = int64_t(blockIdx.x) * RPI + threadIdx.x / L; // this thread group
   float dwa[C];
 #pragma unroll
   for (int c = 0; c < C; ++c)
@@ -191,7 +194,7 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
     }
   }
   auto step = [&](int it) {
-    int64_t raw = seg * ROW_SEG + it;
+    int64_t raw = seg * rpg + it;
     int live = raw < M;
     int64_t row = live ? raw : M - 1;
     const __nv_bfloat16 *xr = x + row * sx, *dyr = dy + row * sdy;
@@ -242,7 +245,7 @@ __global__ void gated_bwd(const __nv_bfloat16 *__restrict__ dy, int64_t sdy,
       store8(dxr, k, L, lane, o);
     }
   };
-  for (int it = 0; it < ROW_SEG; ++it)
+  for (int it = 0; it < rpg; ++it)
     step(it);
   if constexpr (MODE != 0) {
     if (seg < nseg) {

@@ -88,7 +88,8 @@ FwdOut rms_forward(const Tensor &x, const std::optional<Tensor> &r, const std::o
 }
 
 std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const Tensor &rstd,
-                                       const Tensor &w, const Tensor &dres, int mode) {
+                                       const Tensor &w, const Tensor &dres, int mode,
+                                       int row_plan) {
   int64_t n = x.size(-1);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -101,11 +102,12 @@ std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const 
   Tensor dw;
   if (!m)
     return {dx.view(x.sizes()), w.defined() ? at::zeros_like(w) : Tensor()};
-  Tensor dwp = at::empty({row_segments(m), n}, x2.options().dtype(at::kFloat));
-  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode);
+  const int rpg = row_group(m, row_plan);
+  Tensor dwp = at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat));
+  launch_rms_bwd(dy2, x2, rstd.reshape({m}), w, dr2, dx, dwp, mode, rpg);
   if (w.defined()) {
     Tensor folded = at::empty({n}, dwp.options());
-    launch_dw_fold(dwp, folded);
+    launch_dw_fold(dwp, folded, rpg);
     dw = w.scalar_type() == at::kFloat ? folded : folded.to(w.scalar_type());
   }
   return {dx.view(x.sizes()), dw};
@@ -131,7 +133,7 @@ struct GatedGrads {
 };
 
 GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, const Tensor &rstd,
-                          const Tensor &w, int mode) {
+                          const Tensor &w, int mode, int row_plan) {
   int64_t n = x.size(2);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);
@@ -141,11 +143,12 @@ GatedGrads gated_backward(const Tensor &dy, const Tensor &x, const Tensor &z, co
   int64_t m = x2.size(0);
   GatedGrads g{at::empty({m, n}, x2.options()), at::empty({m, n}, x2.options()), Tensor()};
   if (m) {
-    Tensor dwp = w.defined() ? at::empty({row_segments(m), n}, x2.options().dtype(at::kFloat)) : Tensor();
-    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode);
+    const int rpg = row_group(m, row_plan);
+    Tensor dwp = w.defined() ? at::empty({row_units(m, rpg), n}, x2.options().dtype(at::kFloat)) : Tensor();
+    launch_gated_bwd(dy2, x2, z3, rstd.reshape({m}), w, g.dx, g.dz, dwp, mode, rpg);
     if (w.defined()) {
       Tensor folded = at::empty({n}, dwp.options());
-      launch_dw_fold(dwp, folded);
+      launch_dw_fold(dwp, folded, rpg);
       g.dw = w.scalar_type() == at::kFloat ? folded : folded.to(w.scalar_type());
     }
   } else if (w.defined()) {
@@ -168,7 +171,7 @@ struct RMSNormFn : public torch::autograd::Function<RMSNormFn> {
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor()};
     auto [dx, dw] =
-        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()));
+        rms_backward(grads[0], s[0], s[2], s[1], Tensor(), int(ctx->saved_data["mode"].toInt()), 0);
     return {dx, dw, Tensor(), Tensor()};
   }
 };
@@ -186,7 +189,7 @@ struct AddRMSNormFn : public torch::autograd::Function<AddRMSNormFn> {
     Tensor dy = grads[0], dh = grads[1], dtot, dw;
     if (dy.defined()) {
       std::tie(dtot, dw) =
-          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()));
+          rms_backward(dy, s[0], s[2], s[1], dh, int(ctx->saved_data["mode"].toInt()), 0);
     } else {
       dtot = dh;
     }
@@ -206,7 +209,7 @@ struct GatedNormFn : public torch::autograd::Function<GatedNormFn> {
     auto s = ctx->get_saved_variables();
     if (!grads[0].defined())
       return {Tensor(), Tensor(), Tensor(), Tensor(), Tensor()};
-    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()));
+    GatedGrads g = gated_backward(grads[0], s[0], s[1], s[3], s[2], int(ctx->saved_data["mode"].toInt()), 0);
     return {g.dx, g.dz, g.dw, Tensor(), Tensor()};
   }
 };
@@ -274,8 +277,9 @@ std::tuple<Tensor, Tensor, Tensor> raw_rms_fwd(const Tensor &x, const std::optio
 
 std::tuple<Tensor, Tensor> raw_rms_bwd(const Tensor &dy, const Tensor &x, const Tensor &rstd,
                                        const std::optional<Tensor> &w,
-                                       const std::optional<Tensor> &dres, bool zero_centered) {
-  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1);
+                                       const std::optional<Tensor> &dres, bool zero_centered,
+                                       int row_plan) {
+  auto [dx, dw] = rms_backward(dy, x, rstd, weight(w, x.size(-1)), opt(dres), zero_centered ? 2 : 1, row_plan);
   return {dx, dw};
 }
 
@@ -288,8 +292,8 @@ std::tuple<Tensor, Tensor> raw_gated_fwd(const Tensor &x, const Tensor &z,
 
 std::tuple<Tensor, Tensor, Tensor> raw_gated_bwd(const Tensor &dy, const Tensor &x, const Tensor &z,
                                                  const Tensor &rstd, const std::optional<Tensor> &w,
-                                                 bool zero_centered) {
-  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1);
+                                                 bool zero_centered, int row_plan) {
+  GatedGrads g = gated_backward(dy, x, z, rstd, weight(w, x.size(-1)), !w ? 0 : zero_centered ? 2 : 1, row_plan);
   return {g.dx, g.dz, g.dw};
 }
 
@@ -315,9 +319,13 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("gated_rms_norm", &gated_rms_norm, py::arg("x"), py::arg("z"), py::arg("weight"), py::arg("eps"),
         py::arg("zero_centered"));
   m.def("raw_rms_fwd", &raw_rms_fwd);
-  m.def("raw_rms_bwd", &raw_rms_bwd);
+  // row_plan: 0 = the plan (plan by row count), 1 = one row per thread group, 8 = one segment per group. Execution
+  // only: every value gives the same bits (tests hold them equal).
+  m.def("raw_rms_bwd", &raw_rms_bwd, py::arg("dy"), py::arg("x"), py::arg("rstd"), py::arg("weight"), py::arg("dres"),
+        py::arg("zero_centered"), py::arg("row_plan") = 0);
   m.def("raw_gated_fwd", &raw_gated_fwd);
-  m.def("raw_gated_bwd", &raw_gated_bwd);
+  m.def("raw_gated_bwd", &raw_gated_bwd, py::arg("dy"), py::arg("x"), py::arg("z"), py::arg("rstd"), py::arg("weight"),
+        py::arg("zero_centered"), py::arg("row_plan") = 0);
   m.def("schedule", &schedule);
   m.def("fwd_supported", &fwd_supported);
   m.def("plan", &plan, py::arg("n"), py::arg("rows"));
