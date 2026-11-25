@@ -139,7 +139,9 @@ def rel_saturated_decode_cut(rec: Rec, cfg: Config):
                                                F.FOLD_OVERHEAD_BLOCKS)
         rec.witness(f"{tag}_run_target", int(fired))
         if tag == "n4":
-            rec.require("rule_fires_at_B512_n4", fired > 0 or W != 148,
+            # the plan's cost model cuts when a segment outweighs an item's fixed overhead: stated for segments of
+            # at least 8 KV blocks (512 keys); a shorter span (the policy's at a smallest batch of 1) need not cut
+            rec.require("rule_fires_at_B512_n4", fired > 0 or W != 148 or seg < 512,
                         "the cut rule must fire at B = 512, n = 4 on a 148-SM part")
         try:
             base = rec.fwd(b)

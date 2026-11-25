@@ -45,3 +45,22 @@ PAGE = 64
 #: root round with L == 0 or NaN replaced by 1. Blackwell changes how it is evaluated (64 heads per
 #: CTA with the accumulator in TMEM, latent-tile multicast, two-CTA NOT a decode lever) and must not
 #: change what is evaluated.
+
+# --- declarations the schedule policy reads (design version 7.1; fwd.schedule_for) --------------------
+# Constants of the recipe, not per-call inputs, so the trainer and every engine read the same segment
+# span whatever their own batch, length or tensor-parallel degree. No model or deployment config of
+# this tree states them for MLA (no model of the tree runs MLA), so they are declared here.
+
+#: The declared longest context, in keys: the production ``max_model_len`` of this tree's attention
+#: batteries (gqa_sm100/tests/test_seam_gpu.py), a row the removed SEG table also carried. Longer rows
+#: are served exactly, with more segments.
+LONGEST_CONTEXT = 10240
+
+#: The declared smallest batch of a decode step. 64 is the RL deployment of
+#: policy_validation/mla_sm100/ROUND_B.md (round E); a deployment that decodes at batch 1 pays up to
+#: 2.3x for it (same file).
+SMALLEST_BATCH = 64
+
+#: Heads of the MODEL (never a rank's): GLM-4.7-Flash, the geometry the removed SEG table was keyed on
+#: (20 heads; 10 and 5 per rank at TP 2 and 4). Any head count up to 64 gives the same occupancy.
+MODEL_HEADS = 20

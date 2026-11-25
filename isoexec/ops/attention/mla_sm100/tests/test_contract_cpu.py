@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from isoexec.ops.attention.mla_sm100 import spec
 from isoexec.ops.attention.mla_sm100 import fwd as fwd_mod
 from isoexec.ops.attention.mla_sm100 import _extension as ext_mod
@@ -58,22 +56,6 @@ def test_the_declared_nvcc_profile_disables_fma_contraction():
     # the digest is stable and reflects flags + CUTLASS identity + source bytes
     assert len(fwd_mod.profile_digest()) == 16
     assert fwd_mod.profile_digest() == ext_mod.profile_digest()
-
-
-def test_the_seg_table_is_a_deployment_table_over_head_geometry_and_max_context():
-    table = fwd_mod.SEG_TABLE
-    assert {h for (h, _) in table} == {5, 10, 20}
-    for (h, ctx), seg in table.items():
-        assert seg % spec.PAGE == 0 and seg > 0, (h, ctx, seg)
-        assert ctx / seg <= fwd_mod.MAX_TREE_LEAVES, (h, ctx, seg)
-    # monotone in the context class, and the lookup picks the smallest covering class
-    assert fwd_mod.seg_tokens_for(10, 4096) == table[(10, 8192)]
-    assert fwd_mod.seg_tokens_for(10, 8192) == table[(10, 8192)]
-    assert fwd_mod.seg_tokens_for(10, 100000) == table[(10, 131072)]
-    assert fwd_mod.seg_tokens_for(10, 10 ** 9) == table[(10, max(c for (h, c) in table if h == 10))]
-    assert len(fwd_mod.seg_table_digest()) == 16
-    with pytest.raises(KeyError):
-        fwd_mod.seg_tokens_for(7, 4096)
 
 
 def test_the_execution_overrides_are_execution_only_and_all_keys_are_known():

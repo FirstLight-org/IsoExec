@@ -63,7 +63,8 @@ def _run_isolated(relation: str, args) -> dict:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--seg", type=int, default=512)
+    ap.add_argument("--seg", type=int, default=None,
+                    help="default: the schedule policy's span at spec.py's declarations (fwd.segment_span())")
     ap.add_argument("--heads", type=int, default=5)
     ap.add_argument("--long-ctx", type=int, default=8192 + 21)
     ap.add_argument("--repeats", type=int, default=50)
@@ -73,6 +74,10 @@ def main(argv=None) -> int:
     ap.add_argument("--recipe", type=int, default=1, choices=(1, 2),
                     help="1: sm100_absorbed_segtree (default); 2: sm100_absorbed_segtree_v2")
     args = ap.parse_args(argv)
+    if args.seg is None:
+        from isoexec.ops.attention.mla_sm100.fwd import segment_span
+
+        args.seg = segment_span()
 
     try:
         import torch

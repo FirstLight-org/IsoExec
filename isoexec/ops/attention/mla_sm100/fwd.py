@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import math
 import os
 
 import torch
 
+from isoexec.ops import schedule_policy
+from isoexec.ops.attention.mla_sm100 import spec
 from isoexec.ops.attention.mla_sm100._extension import extension, profile_digest
 from isoexec.ops.attention.mla_sm100.spec import PAGE
 
 __all__ = [
     "MlaSm100Plan", "mla_sm100_fwd", "mla_sm100_plan", "mla_sm100_fwd_selfcheck",
-    "SEG_TABLE", "EXEC_OVERRIDE_VARIANTS", "seg_table_digest", "seg_tokens_for", "profile_digest",
+    "DEVICE_SMS", "EXEC_OVERRIDE_VARIANTS", "SOFTMAX_SHORTEST_SEGMENT", "occupancy", "schedule_for",
+    "bind_schedule", "seg_tokens_for", "segment_span", "profile_digest",
 ]
 
 HEAD_DIM_K = 576
@@ -60,30 +62,70 @@ EXEC_OVERRIDE_VARIANTS = [
 MAX_TREE_LEAVES = 1024
 EMPTY_LSE = float(torch.tensor(-1e30, dtype=torch.float32) / torch.tensor(1.4426950408889634, dtype=torch.float32))
 
-#: SEG, the deployment-fixed segment size, over (h_q per rank, max context).  A multiple of the
-#: 64-token KV tile.  Blackwell's SEG is much smaller than sm90's 2048 because one Blackwell CTA
-#: owns the whole 512-wide fp32 accumulator in TMEM and therefore cannot share an SM: the number of
-#: segments IS the number of SMs the op can use, so at decode the split is the only parallelism
-#: lever.  See README.md "SEG table" for the regret argument and the measurements.
-SEG_TABLE = {
-    (5, 8192): 512, (5, 10240): 512, (5, 32768): 512, (5, 131072): 1024, (5, 202752): 1024,
-    (10, 8192): 512, (10, 10240): 512, (10, 32768): 512, (10, 131072): 1024, (10, 202752): 1024,
-    (20, 8192): 512, (20, 10240): 512, (20, 32768): 512, (20, 131072): 1024, (20, 202752): 1024,
-}
+# --- the softmax reducer's published constants (design version 7.1, rule 3) ---------------------------
+# One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
+# of the declarations in spec.py; no table. This reducer publishes no cap.
+
+#: L_r, the shortest segment worth a fresh start, in keys. Measured:
+#: policy_validation/mla_sm100/pv_sweep_b.log (64 slower than 256 in every cell; 128 equal only at
+#: batch 1 / 8k), pv_sweep.log.
+SOFTMAX_SHORTEST_SEGMENT = 256
+
+#: SMs of the device generation this package compiles for (B200). Hardware.
+DEVICE_SMS = 148
 
 
-def seg_tokens_for(h_q: int, max_seqlen_k: int) -> int:
-    """SEG for a deployment: the smallest max-context class that covers max_seqlen_k."""
-    classes = sorted({c for (h, c) in SEG_TABLE if h == int(h_q)})
-    if not classes:
-        raise KeyError(f"no SEG table entry for h_q={h_q}")
-    cls = next((c for c in classes if c >= int(max_seqlen_k)), classes[-1])
-    return SEG_TABLE[(int(h_q), cls)]
+def occupancy(model_heads: int, batch: int) -> int:
+    """SMs that one segment of every output of a single-position call occupies: each request has its own
+    ``ceil(heads / 64)`` row blocks (requests never share one, `_exact_sizes`), one CTA per block
+    (policy_validation/mla_sm100/pv_mech.log: items = batch x segments at 5, 10 and 20 heads).
+    ``model_heads`` is the MODEL's head count, never a rank's."""
+    if batch < 1 or model_heads < 1:
+        raise ValueError(f"occupancy needs batch >= 1 and heads >= 1 (got {batch}, {model_heads})")
+    return batch * -(-model_heads // M_BLOCK)
 
 
-def seg_table_digest() -> str:
-    """Digest of the SEG table, compared at bind time."""
-    return hashlib.sha256(repr(sorted(SEG_TABLE.items())).encode()).hexdigest()[:16]
+def schedule_for(max_context: int, *, min_batch: int | None = None,
+                 model_heads: int | None = None) -> schedule_policy.Segments:
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, n // L_r))`` segments of
+    ``S = 64 * ceil(n / (64 * G))`` keys, adjacent tree, with ``n = max_context`` and
+    ``p = DEVICE_SMS // occupancy`` at the declared smallest batch. ``min_batch`` and ``model_heads``
+    default to the declarations in spec.py."""
+    min_batch = spec.SMALLEST_BATCH if min_batch is None else min_batch
+    model_heads = spec.MODEL_HEADS if model_heads is None else model_heads
+    p = schedule_policy.workers(DEVICE_SMS, occupancy(model_heads, min_batch))
+    return schedule_policy.reduce(int(max_context), b=PAGE, L=SOFTMAX_SHORTEST_SEGMENT, p=p)
+
+
+def seg_tokens_for(h_q: int, max_seqlen_k: int, *, min_batch: int | None = None,
+                   model_heads: int | None = None) -> int:
+    """SEG for a deployment whose longest context is ``max_seqlen_k``: ``schedule_for(...).S``.
+
+    ``h_q`` is a rank's head count and is not read: a tensor-parallel degree must not reach the span
+    (the occupancy takes the model's heads, ``spec.MODEL_HEADS`` unless given)."""
+    if int(h_q) < 1:
+        raise ValueError(f"h_q must be positive (got {h_q})")
+    return schedule_for(max_seqlen_k, min_batch=min_batch, model_heads=model_heads).S
+
+
+#: The recipe's span, evaluated ONCE when the schedule is bound (module import, or :func:`bind_schedule` after a
+#: declaration changed). The per-call paths read it and never call the policy.
+_BOUND_SPAN: list[int] = []
+
+
+def bind_schedule() -> int:
+    """Evaluate the schedule policy at spec.py's declarations and bind the result. Called at import; a process that
+    changes a declaration calls it again; nothing on a forward call does."""
+    _BOUND_SPAN[:] = [seg_tokens_for(spec.MODEL_HEADS, spec.LONGEST_CONTEXT)]
+    return _BOUND_SPAN[0]
+
+
+def segment_span() -> int:
+    """The recipe's segment span: the policy's S at the declarations of spec.py, as bound by :func:`bind_schedule`."""
+    return _BOUND_SPAN[0]
+
+
+bind_schedule()
 
 
 def _num_sms() -> int:
