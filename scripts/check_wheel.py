@@ -2,11 +2,14 @@
 """Check the wheel produced by make build.
 
 Install it outside the checkout so local code cannot hide a broken package. The
-wheel is built from the sdist, so skip repeated checks from sdist.
+wheel is built from the sdist, so skip repeated checks from sdist. The bundled
+CUTLASS tree is compared with the pinned commit's tree, which git fetches (trees only).
 """
 from __future__ import annotations
 
 import argparse
+from functools import cache
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -72,22 +75,54 @@ BUNDLED = {'isoexec/_runtime/setup_env.py': 'scripts/setup_env.py',
 CUTLASS = 'isoexec/_runtime/cutlass/'
 
 
+def git_blob_id(data: bytes) -> str:
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+
+
+@cache
+def cutlass_blobs(repository: str, revision: str) -> dict[str, str]:
+    """Path -> git blob ID of the pinned commit's include/, tools/util/include/ and LICENSE.txt."""
+    with tempfile.TemporaryDirectory(prefix='isoexec-cutlass-check-') as temporary:
+        def git(*args: str) -> bytes:
+            return subprocess.run(['git', '-C', temporary, *args], check=True, stdout=subprocess.PIPE).stdout
+
+        git('init', '-q')
+        git('fetch', '-q', '--depth', '1', '--filter=blob:none', repository, revision)
+        found = git('rev-parse', 'FETCH_HEAD').decode().strip()
+        if found != revision:
+            raise ValueError(f'fetched CUTLASS is {found}, not {revision}')
+        entries = git('ls-tree', '-r', '-z', '--full-tree', revision, '--',
+                      'include', 'tools/util/include', 'LICENSE.txt')
+    blobs = {}
+    for entry in filter(None, entries.split(b'\0')):
+        metadata, path = entry.split(b'\t', 1)
+        mode, kind, oid = metadata.split()
+        if kind != b'blob' or mode not in (b'100644', b'100755'):
+            raise ValueError(f'unsupported CUTLASS tree entry: {entry!r}')
+        blobs[os.fsdecode(path)] = oid.decode()
+    return blobs
+
+
 def check_cutlass(archive: zipfile.ZipFile, source: Path) -> int:
-    """The bundled CUTLASS tree holds the headers and license of the manifest's pinned commit only."""
-    revision = tomllib.loads((source / 'environments/default.toml').read_text())['cutlass']['revision']
-    names = [name[len(CUTLASS):] for name in archive.namelist()
-             if name.startswith(CUTLASS) and not name.endswith('/')]
-    stray = sorted(name for name in names if not name.startswith(('include/', 'tools/util/include/'))
-                   and name not in ('LICENSE.txt', '.isoexec-revision'))
-    if stray:
-        raise ValueError(f'unexpected files in {CUTLASS}: {stray[:5]}')
-    missing = [name for name in ('include/cutlass/version.h', 'tools/util/include/cutlass/util/device_memory.h',
-                                 'LICENSE.txt', '.isoexec-revision') if name not in names]
-    if missing:
-        raise ValueError(f'wheel lacks {[CUTLASS + name for name in missing]}')
+    """The bundled CUTLASS tree is exactly the pinned commit's headers and license, byte for byte."""
+    spec = tomllib.loads((source / 'environments/default.toml').read_text())['cutlass']
+    names = {name[len(CUTLASS):] for name in archive.namelist()
+             if name.startswith(CUTLASS) and not name.endswith('/')}
+    if '.isoexec-revision' not in names:
+        raise ValueError(f'wheel lacks {CUTLASS}.isoexec-revision')
     found = archive.read(CUTLASS + '.isoexec-revision').decode().strip()
-    if found != revision:
-        raise ValueError(f'bundled CUTLASS is {found}, not the manifest pin {revision}')
+    if found != spec['revision']:
+        raise ValueError(f"bundled CUTLASS is {found}, not the manifest pin {spec['revision']}")
+    expected = cutlass_blobs(spec['repository'], spec['revision'])
+    missing = sorted(set(expected) - names)
+    if missing:
+        raise ValueError(f'wheel lacks {[CUTLASS + name for name in missing[:5]]} ({len(missing)} files)')
+    extra = sorted(names - set(expected) - {'.isoexec-revision'})
+    if extra:
+        raise ValueError(f'unexpected files in {CUTLASS}: {extra[:5]}')
+    stale = [name for name, oid in sorted(expected.items()) if git_blob_id(archive.read(CUTLASS + name)) != oid]
+    if stale:
+        raise ValueError(f"bundled CUTLASS bytes differ from {spec['revision']}: {stale[:5]}")
     return len(names)
 
 

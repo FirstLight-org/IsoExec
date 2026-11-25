@@ -39,6 +39,8 @@ def fetch_cutlass(checkout: Path) -> str:
 
     checkout.mkdir(parents=True)
     git('init', '-q')
+    # Cone mode keeps root files such as LICENSE.txt; Git before 2.37 does not default to it.
+    git('sparse-checkout', 'init', '--cone')
     git('sparse-checkout', 'set', *CUTLASS_PARTS)
     git('fetch', '-q', '--depth', '1', '--filter=blob:none', spec['repository'], spec['revision'])
     git('checkout', '-q', 'FETCH_HEAD')
