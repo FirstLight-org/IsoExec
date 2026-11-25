@@ -345,7 +345,7 @@ def attention_rows_gen(module, x, cfg, index, state, glob, rows, *, linear_fn, d
     q = ops.q_rope(q, D, table, ops.Pos(pos=pos, div=H))
 
     if index in cfg.index_source_layer_ids:
-        from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
+        from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
         cand_src, blk = cfg.candidate_source_layer_id, cfg.candidate_block_size
         with torch.no_grad():
             hi = cfg.index_n_heads
@@ -490,7 +490,7 @@ def query_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequant_f
     not applied: layer b's window keys are token-wise in the encoder output), ``wo_a``, ``wo_b``. The TP generator
     protocol of ``attention_paged_gen``: returns this rank's ``wo_b`` root."""
     yield from ()
-    from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
+    from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
     from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
 
     from . import paged

@@ -336,7 +336,7 @@ def test_candidate_mask_equals_torch(rows, width, nsel):
 def test_topk_two_band_equals_single_launch(band):
     """dsa_topk's two-band execution (rows by live window length, each band its own plan) == the one launch
     planned for the captured width, for windows on both sides of the band edge, ties and NaN padding."""
-    from isoexec.ops.attention.sparse_sm100 import topk as T
+    from isoexec.ops.attention.indexer_sm100 import topk as T
     g = torch.Generator(device="cpu").manual_seed(band)
     rows, width = 24, 1 << 19
     ke = torch.tensor([0, 1, 511, 512, 513, 2048, band - 1, band, band + 1, 3 * band, 70000, 200000, width]
@@ -440,7 +440,7 @@ def test_index_scores_auto_span_equals_fixed(rows, P, kemax):
 def test_topk_solo_rows_and_rows_out(mode):
     """dsa_topk on a cluster-planned width: the one-launch solo form (short rows on rank 0 alone) and the two-launch
     form == the plain cluster launch; the rows output == paged_lists_masked's extra list on the same selection."""
-    from isoexec.ops.attention.sparse_sm100 import topk as T
+    from isoexec.ops.attention.indexer_sm100 import topk as T
     g = torch.Generator(device="cpu").manual_seed(7)
     rows, width = 24, 1 << 19
     ke = torch.tensor([0, 1, 511, 512, 513, 2048, 32767, 32768, 32769, 70000, 200000, width]
@@ -502,7 +502,7 @@ def test_q_kv_post_rows_main_list_equals_paged_lists(N, per):
 
 def test_topk_many_rows_one_cta_plan_equals_cluster():
     """More rows than clusters fit on the SMs at a cluster-planned width: the 1-CTA plan == the cluster plan."""
-    from isoexec.ops.attention.sparse_sm100 import topk as T
+    from isoexec.ops.attention.indexer_sm100 import topk as T
     g = torch.Generator(device="cpu").manual_seed(9)
     rows, width = 130, 131072
     ke = torch.randint(0, width + 1, (rows,), generator=g, dtype=torch.int32)

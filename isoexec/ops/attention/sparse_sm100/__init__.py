@@ -23,9 +23,6 @@ from __future__ import annotations
 import importlib
 
 _EXPORTS = {
-    "dsa_topk": "topk",
-    "dsa_indexer_decode": "indexer",
-    "dsa_indexer_prefill": "indexer",
     "sparse_attn": "fwd",
     "sparse_attn_decode": "fwd",
     "sparse_attn_prefill": "fwd",

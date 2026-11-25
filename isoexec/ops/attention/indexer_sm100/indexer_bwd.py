@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import torch
 
-from ._extension import extension
+# `reduce` (the atomics-free key-row reduction) lives in the sparse attention's backward extension (csrc/bwd/bwd.cu)
+from isoexec.ops.attention.sparse_sm100._extension import extension
 
 __all__ = ["dsa_indexer_bwd"]
 

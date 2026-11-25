@@ -51,7 +51,9 @@ def test_reused_kernels_have_no_float_atomics_cpu():
     cached = [fn for fn in (moe, mm, dsa) if fn.cache_info().currsize == 0]
     try:
         scans = [kernel_sass(moe, family="moe", cutlass=True), kernel_sass(mm, family="mm", cutlass=True)]
-        scans += [kernel_sass(lambda s=s: dsa(s), family="sparse", cutlass=True) for s in ("attn", "bwd", "indexer", "topk")]
+        scans += [kernel_sass(lambda s=s: dsa(s), family="sparse", cutlass=True) for s in ("attn", "bwd")]
+        from isoexec.ops.attention.indexer_sm100._extension import extension as idx
+        scans += [kernel_sass(lambda s=s: idx(s), family="indexer", cutlass=True) for s in ("indexer", "topk")]
         pat = re.compile(r"\b(ATOM|ATOMS|ATOMG|RED)\.[A-Z0-9._]*(F16|F32|F64|BF16|FADD|FMIN|FMAX)")
         for funcs in scans:
             for name, lines in funcs.items():

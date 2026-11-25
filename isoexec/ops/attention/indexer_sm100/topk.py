@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from . import spec
+from isoexec.ops.attention.sparse_sm100 import spec   # the three recipes' shared constants
 from ._extension import extension
 
 __all__ = ["dsa_topk", "default_plan"]

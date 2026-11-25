@@ -3,8 +3,8 @@
 The profile is mla_sm100's, verbatim: ``build_cache.NUMERICS_FLAGS``
 (``--ftz=false --fmad=false``) then ``--ftz=true -DNDEBUG --prec-div=false`` -- the later
 ``--ftz=true`` wins, ``--fmad=false`` is the load-bearing flag (no FMA contraction on any fold path,
-in any translation unit).  One profile for the top-k, the indexer, the sparse-attention leaf and the
-combine.  Each sub-op is its own extension (its own build directory), so iterating on one kernel does
+in any translation unit).  One profile for the sparse-attention leaves, the combine and the backward (the indexer and the top-k build under
+the same flags in attention/indexer_sm100).  Each sub-op is its own extension (its own build directory), so iterating on one kernel does
 not rebuild the others; ``profile_digest(sub)`` folds the flags, the CUTLASS identity and the bytes of
 that sub-op's sources (``csrc/<sub>`` plus ``csrc/common``) into one id.
 
@@ -33,15 +33,11 @@ _SRC = _PKG / "csrc"
 
 #: Sources per sub-op extension (relative to csrc/).
 SOURCES = {
-    "topk": ("topk/bindings.cpp", "topk/topk.cu"),
-    "indexer": ("indexer/bindings.cpp", "indexer/indexer.cu"),
     "attn": ("attn/bindings.cpp", "attn/leaf_h64.cu", "attn/combine.cu", "attn/sink.cu"),
     "prims": ("prims/prims.cu", "prims/mma_probe.cu"),
     "bwd": ("bwd/bwd.cu",),
     # the dual-rail leaf (csrc/dualrail: FlashMLA-derived, MIT; dualrail/PROVENANCE.md)
     "dualrail": ("dualrail/dualrail.cu",),
-    # the index scores on DeepGEMM's SM100 MQA logits (isoexec/ops/_vendor/deep_gemm, MIT; PROVENANCE.md there)
-    "mqa": ("mqa/bindings.cpp", "mqa/mqa.cu", "mqa/gather.cu"),
 }
 
 #: The vendored DeepGEMM include root (its own CUTLASS/CuTe closure at the revision it vendors).
@@ -51,17 +47,11 @@ _DEEP_GEMM_INCLUDE = _PKG.parent.parent / "_vendor" / "deep_gemm" / "include"
 SUB_INCLUDES = {"dualrail": ("dualrail", "dualrail/flashmla", "dualrail/kerutils/include")}
 #: Sub-ops built against a vendored tree's own CUTLASS instead of the pinned one (include roots, absolute; hashed
 #: into the digest file by file).
-SUB_VENDOR_INCLUDES = {"mqa": (_DEEP_GEMM_INCLUDE,)}
+SUB_VENDOR_INCLUDES: dict = {}
 SUB_CUDA_FLAGS = {"dualrail": ("-DFLASH_MLA_IS_BUILD_ON_CUDA", "-DKERUTILS_IS_BUILD_ON_CUDA", "--expt-extended-lambda",
                                "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
-                               "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "--diag-suppress=445"),
-                  # DeepJIT's front-end flags for these kernels (C++20 templated lambdas, constexpr in device code);
-                  # host symbols hidden and no STB_GNU_UNIQUE, so the copy never binds to a host DeepGEMM
-                  "mqa": ("--expt-relaxed-constexpr", "--expt-extended-lambda", "-U__CUDA_NO_HALF_OPERATORS__",
-                          "-U__CUDA_NO_HALF_CONVERSIONS__", "-U__CUDA_NO_HALF2_OPERATORS__",
-                          "-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "-Xcompiler=-fvisibility=hidden",
-                          "-Xcompiler=-fvisibility-inlines-hidden", "-Xcompiler=-fno-gnu-unique")}
-SUB_CFLAGS = {"mqa": ("-fvisibility=hidden", "-fvisibility-inlines-hidden", "-fno-gnu-unique")}
+                               "-U__CUDA_NO_HALF2_OPERATORS__", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__", "--diag-suppress=445")}
+SUB_CFLAGS: dict = {}
 
 #: Flags appended to the shared SM100 profile.  Order is part of the digest.  mla_sm100's exactly.
 EXTRA_CUDA_FLAGS = (

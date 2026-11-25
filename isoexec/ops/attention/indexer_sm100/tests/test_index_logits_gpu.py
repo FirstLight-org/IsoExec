@@ -12,7 +12,7 @@ Relations (bitwise on the window ``[0, ke)`` of every row unless stated):
 import pytest
 import torch
 
-from isoexec.ops.attention.sparse_sm100 import index_logits as il
+from isoexec.ops.attention.indexer_sm100 import index_logits as il
 from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")

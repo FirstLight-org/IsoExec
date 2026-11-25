@@ -298,7 +298,7 @@ INDEX_GATHER_MAX_KEYS = 1 << 20
 def index_gather_route(rows, seqs, table_rows, width):
     """The index-score route of one launch from its shape: ``rows`` query rows of ``seqs`` sequences (host shape)
     reading a ``table_rows``-row block table of ``width`` keys per row. Never data: an execution choice only."""
-    from isoexec.ops.attention.sparse_sm100 import index_logits
+    from isoexec.ops.attention.indexer_sm100 import index_logits
     keys = index_logits.gather_capacity(rows, table_rows, width)
     if not (rows > 0 and keys > 0 and 1 <= table_rows <= index_logits.MAX_GATHER_SEQS
             and table_rows * width < (1 << 31)):
@@ -661,7 +661,7 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
                            table=table, pos=ops.Pos(pos=gpos), codes=codes, sf=sf.view(R))
                 extension().paged_index_write(codes, sf, idest, pools.index[key])
         if index in cfg.index_source_layer_ids:
-            from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
+            from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
             def make_ke():          # (pos + 1) // r, 0 on padded rows: one integer launch
                 ke = torch.empty(N, dtype=torch.int32, device=dev)
                 extension().index_bounds(pos.to(torch.int32).contiguous(), batch.valid, r, ke)

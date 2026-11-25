@@ -7,7 +7,7 @@ Roughly 0.8 GiB peak allocation.
 import pytest
 import torch
 from isoexec.core.arch import live_device_arch
-from isoexec.ops.attention.sparse_sm100._extension import extension
+from isoexec.ops.attention.indexer_sm100._extension import extension
 from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
 
 pytestmark = pytest.mark.skipif(

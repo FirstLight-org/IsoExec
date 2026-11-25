@@ -1,6 +1,6 @@
 """GPU battery of the DSA top-k (relations R-T1..R-T9), bf16 and fp32 scores.
 
-    python -m pytest isoexec/ops/attention/sparse_sm100/tests/test_topk_gpu.py -q
+    python -m pytest isoexec/ops/attention/indexer_sm100/tests/test_topk_gpu.py -q
 
 Every test names its relation.  ``_battery`` counts relations / checks / mismatches into
 ``tests/battery_topk.json`` (README "Battery").  The reference for large rows is an exact torch
@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or live_device_arc
                                 reason="needs an SM100 device")
 
 from isoexec.ops.attention.sparse_sm100 import reference as ref  # noqa: E402
-from isoexec.ops.attention.sparse_sm100.topk import dsa_topk  # noqa: E402
+from isoexec.ops.attention.indexer_sm100.topk import dsa_topk  # noqa: E402
 
 K = 2048
 _TALLY: dict = {}

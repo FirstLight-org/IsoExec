@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 def _kernel_ops():
-    from isoexec.ops.attention.sparse_sm100._extension import extension
+    from isoexec.ops.attention.indexer_sm100._extension import extension
     _skip_unless_buildable()
     so = Path(extension("indexer").__file__)
     out = subprocess.run(["cuobjdump", "-sass", str(so)], capture_output=True, text=True, check=True).stdout
@@ -49,5 +49,5 @@ def _skip_unless_buildable():
         pytest.skip("SASS scan: set TORCH_EXTENSIONS_DIR to an explicit extension build directory")
     if shutil.which("cuobjdump") is None:
         pytest.skip("SASS scan: cuobjdump (CUDA toolkit) is not on PATH")
-    if build_cache.cutlass_include("sparse") is None:
+    if build_cache.cutlass_include("indexer") is None:
         pytest.skip("SASS scan: the pinned CUTLASS headers are not installed (make setup)")

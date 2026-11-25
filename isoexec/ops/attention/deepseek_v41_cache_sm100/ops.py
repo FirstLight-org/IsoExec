@@ -639,10 +639,15 @@ def compressor_full(comp, x2d, B, T, ratio, eps):
 # ---------------------------------------------------------------------------------------------
 # indexer (no gradient: the selector is frozen in the actor recipe)
 def _sparse():
-    from isoexec.ops.attention.sparse_sm100 import indexer as dsa_indexer
-    from isoexec.ops.attention.sparse_sm100 import topk as dsa_topk
+    from isoexec.ops.attention.indexer_sm100 import indexer as dsa_indexer
+    from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
     from isoexec.ops.attention.sparse_sm100._extension import extension as sparse_ext
     return dsa_indexer, dsa_topk, sparse_ext
+
+
+def _indexer_ext(sub):
+    from isoexec.ops.attention.indexer_sm100._extension import extension
+    return extension(sub)
 
 
 def check_index_query_format():
@@ -826,7 +831,7 @@ def indexer_tree(codes, sf, w, ke, *, width, leaves=spec.TP_LEAVES, f32=False, i
     stride = (width + 255) // 256 * 256
     out = torch.empty((rows, stride), dtype=torch.float32 if f32 else torch.bfloat16, device=codes.device)[:, :width]
     tiles = (width + 127) // 128
-    ext = sparse_ext("indexer")
+    ext = _indexer_ext("indexer")
     if cache is None:
         qb, span = 2, 1 << 20
         g = max(1, min(((rows + qb - 1) // qb) * ((tiles + span - 1) // span), 148))
@@ -854,20 +859,20 @@ def indexer_tree(codes, sf, w, ke, *, width, leaves=spec.TP_LEAVES, f32=False, i
 
 
 def index_schedule(ke, rows_seq):
-    """The paged index-score work division of a step's rows (``sparse_sm100.index_logits.paged_schedule``): one launch
+    """The paged index-score work division of a step's rows (``indexer_sm100.index_logits.paged_schedule``): one launch
     per step and compress ratio, shared by every index layer of that ratio. None under the FP32-tree fold."""
     if spec.INDEX_FOLD == "fp32_tree":
         return None
-    from isoexec.ops.attention.sparse_sm100 import index_logits
+    from isoexec.ops.attention.indexer_sm100 import index_logits
     return index_logits.paged_schedule(ke, rows_seq.to(torch.int32).contiguous())
 
 
 def index_key_ranges(ke, rows_seq, seqs, width):
-    """The gathered route's per-row key ranges of a step (``sparse_sm100.index_logits.key_ranges``): one launch per
+    """The gathered route's per-row key ranges of a step (``indexer_sm100.index_logits.key_ranges``): one launch per
     step and compress ratio, shared by every index layer of that ratio. None under the FP32-tree fold."""
     if spec.INDEX_FOLD == "fp32_tree":
         return None
-    from isoexec.ops.attention.sparse_sm100 import index_logits
+    from isoexec.ops.attention.indexer_sm100 import index_logits
     return index_logits.key_ranges(ke.to(torch.int32).contiguous(), rows_seq.to(torch.int32).contiguous(), seqs,
                                    width)
 
@@ -879,7 +884,7 @@ def index_scores(codes, sf, w, ke, *, width, keys=None, cache=None, block_table=
 
     ``spec.INDEX_FOLD == "bf16_dg"`` (the recipe): DeepGEMM's SM100 MQA logits program per (row, key) -- the FP32 MMA
     accumulator, per head bf16(relu), four BF16 fma chains over heads 4i + c, (c0 + c2, c1 + c3), low + high -- in
-    the vendored kernel (``sparse_sm100.index_logits``); the same bits from the paged (engine) and the contiguous
+    the vendored kernel (``indexer_sm100.index_logits``); the same bits from the paged (engine) and the contiguous
     (trainer) form, at every batch composition and schedule. ``bt_rows`` (paged): query row r reads block-table row
     ``bt_rows[r]``; ``schedule``: ``index_schedule(ke, bt_rows)`` of the step (computed here when None).
     ``gather`` (paged): the gathered route instead of the paged kernel -- the keys of the rows' sequences packed
@@ -890,7 +895,7 @@ def index_scores(codes, sf, w, ke, *, width, keys=None, cache=None, block_table=
     if spec.INDEX_FOLD == "fp32_tree":
         return indexer_tree(codes, sf, w, ke, width=width, keys=keys, cache=cache, block_table=block_table,
                             bt_rows=bt_rows)
-    from isoexec.ops.attention.sparse_sm100 import index_logits
+    from isoexec.ops.attention.indexer_sm100 import index_logits
     ke = ke.to(torch.int32).contiguous()
     if cache is None:
         kc, ksf = keys

@@ -39,14 +39,15 @@ for name in BLOCKED:
 
 import importlib, pathlib
 mods = ["isoexec.ops.attention.sparse_sm100", "isoexec.ops.attention.sparse_sm100._extension",
-        "isoexec.ops.attention.sparse_sm100.index_logits", "isoexec.ops.attention.sparse_sm100.indexer",
-        "isoexec.ops.attention.sparse_sm100.topk", "isoexec.ops.attention.sparse_sm100.dualrail",
+        "isoexec.ops.attention.indexer_sm100", "isoexec.ops.attention.indexer_sm100._extension",
+        "isoexec.ops.attention.indexer_sm100.index_logits", "isoexec.ops.attention.indexer_sm100.indexer",
+        "isoexec.ops.attention.indexer_sm100.topk", "isoexec.ops.attention.sparse_sm100.dualrail",
         "isoexec.ops.attention.deepseek_v41_cache_sm100", "isoexec.ops.attention.deepseek_v41_cache_sm100.ops",
         "isoexec.ops.attention.deepseek_v41_cache_sm100.paged", "isoexec.ops.attention.deepseek_v41_cache_sm100.cache",
         "isoexec.ops.attention.deepseek_v41_cache_sm100.tp", "isoexec.ops._vendor.deep_gemm._extension"]
 for m in mods:
     importlib.import_module(m)
-from isoexec.ops.attention.sparse_sm100 import _extension as ext
+from isoexec.ops.attention.indexer_sm100 import _extension as ext
 import isoexec
 root = pathlib.Path(isoexec.__file__).resolve().parent
 for inc in ext.SUB_VENDOR_INCLUDES["mqa"]:

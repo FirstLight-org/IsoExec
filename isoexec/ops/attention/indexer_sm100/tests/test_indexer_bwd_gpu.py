@@ -13,7 +13,7 @@ from isoexec.core.arch import live_device_arch
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or live_device_arch() != "sm100",
                                 reason="needs an SM100 device")
 
-from isoexec.ops.attention.sparse_sm100.indexer_bwd import dsa_indexer_bwd  # noqa: E402
+from isoexec.ops.attention.indexer_sm100.indexer_bwd import dsa_indexer_bwd  # noqa: E402
 
 _OUT = Path(__file__).resolve().parent / "battery_indexer_bwd.json"
 

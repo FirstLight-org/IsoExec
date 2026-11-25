@@ -553,8 +553,10 @@ def load_extension(*, name: str, sources: Sequence[str], build_directory: str | 
 EXTENSIONS: tuple[tuple[str, str, str, tuple], ...] = (
     ("deep_gemm_C", "isoexec.ops._vendor.deep_gemm._extension", "extension", ()),
     ("deepseek_v41_rows", "isoexec.ops.attention.deepseek_v41_cache_sm100._extension", "extension", ()),
+    *((f"indexer_{sub}", "isoexec.ops.attention.indexer_sm100._extension", "extension", (sub,))
+      for sub in ("topk", "indexer", "mqa")),
     *((f"sparse_{sub}", "isoexec.ops.attention.sparse_sm100._extension", "extension", (sub,))
-      for sub in ("topk", "indexer", "attn", "prims", "bwd", "dualrail", "mqa")),
+      for sub in ("attn", "prims", "bwd", "dualrail")),
     ("gqa_sm100", "isoexec.ops.attention.gqa_sm100._extension", "extension", ()),
     ("mla_sm100", "isoexec.ops.attention.mla_sm100._extension", "extension", ()),
     ("rope_sm100", "isoexec.ops.attention.rope_sm100._extension", "extension", ()),

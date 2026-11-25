@@ -1,6 +1,6 @@
 """GPU battery of the DSA lightning indexer (relations R-I1..R-I8).
 
-    python -m pytest isoexec/ops/attention/sparse_sm100/tests/test_indexer_gpu.py -q
+    python -m pytest isoexec/ops/attention/indexer_sm100/tests/test_indexer_gpu.py -q
 
 R-I2 compares against ``reference.indexer_emul`` bit for bit: its only hardware hypothesis is the
 tensor-core accumulation model (one k-step's 32-term block-scaled dot product formed exactly and added
@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or live_device_arc
 
 from isoexec.ops.attention.sparse_sm100 import reference as ref  # noqa: E402
 from isoexec.ops.attention.sparse_sm100.tests import _inputs as inputs  # noqa: E402
-from isoexec.ops.attention.sparse_sm100.indexer import dsa_indexer_decode, dsa_indexer_prefill  # noqa: E402
+from isoexec.ops.attention.indexer_sm100.indexer import dsa_indexer_decode, dsa_indexer_prefill  # noqa: E402
 
 _TALLY: dict = {}
 _OUT = Path(__file__).resolve().parent / "battery_indexer.json"

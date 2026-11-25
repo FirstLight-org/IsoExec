@@ -6,7 +6,7 @@
 BITWISE the scores of each other and of the contiguous (non-paged) path, for the plain indexer and the
 ``sm100_dsa_indexer_tree_v1`` form.
 
-    python -m pytest isoexec/ops/attention/sparse_sm100/tests/test_indexer_page128_gpu.py -q
+    python -m pytest isoexec/ops/attention/indexer_sm100/tests/test_indexer_page128_gpu.py -q
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or live_device_arc
                                 reason="needs an SM100 device")
 
 from isoexec.ops.attention.sparse_sm100.tests import _inputs as inputs  # noqa: E402
-from isoexec.ops.attention.sparse_sm100.indexer import dsa_indexer_decode, dsa_indexer_prefill  # noqa: E402
+from isoexec.ops.attention.indexer_sm100.indexer import dsa_indexer_decode, dsa_indexer_prefill  # noqa: E402
 
 H, D = 64, 128
 STRIDE = 110880          # the vLLM block stride of the probe (a multiple of 16, > 128 * 132)
