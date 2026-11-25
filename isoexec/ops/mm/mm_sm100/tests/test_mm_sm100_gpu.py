@@ -69,7 +69,7 @@ def test_unsplit_weights_are_bit_identical_to_cublas(mm):
 
     N, K = 4096, 4096
     if seg.segment_count(K, torch.bfloat16) != 1:
-        pytest.skip("the published table splits this weight, so the bits differ by design")
+        pytest.skip("the schedule splits this weight, so the bits differ by design")
     a, b = operands(64, N, K)
     assert torch.equal(_bits(mm.mm_sm100(a, b)), _bits(torch.matmul(a, b)))
 
@@ -79,7 +79,7 @@ def test_segments_per_cta_does_not_change_the_bits(mm):
     from isoexec.ops.mm.mm_sm100 import segments as seg
 
     N, K = 1152, 2048
-    plans = seg.plans_at_split(512, K, N, 2)  # an execution split: the table publishes S = 1
+    plans = seg.plans_at_split(512, K, N, 2)  # an execution split: the policy gives S = 1
     spcs = {p.spc for p in plans}
     if len(spcs) < 2:
         pytest.skip("this shape admits one cut of the tree only")

@@ -92,7 +92,7 @@ launch; on sm90 the segment-tree GEMM's segmentation reads K alone (``mm_sm90/se
 ``mm_sm90/tests/test_mm_sm90_gpu.py`` checks packed against unpacked bit for bit. That is the
 argument ``8ef83c9`` used for the GDN one-GEMM in_proj; ``ops/mm/tests/mm_column_slice_gpu.py``
 proves the column-slice half on the live providers. On SM100 the same holds because the
-``mm_sm100`` segment rule reads K alone (``mm_sm100/segments.py``, policy v4): the packed weight and
+``mm_sm100`` schedule reads K alone (``mm_sm100/segments.py``: the schedule policy's one segment per shard): the packed weight and
 each member share K, so they share every output column's K reduction. Under grad the read routes through
 :class:`_PackedProj`, which returns the buffer as a free alias and hands each member parameter
 exactly the row block ``torch.cat`` would have -- same values, same order, so weight gradients are

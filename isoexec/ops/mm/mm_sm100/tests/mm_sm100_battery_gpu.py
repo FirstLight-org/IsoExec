@@ -57,7 +57,7 @@ CUBLAS_UNSPLIT_M = 64
 
 
 def _plans_at_split(seg, M, K, N, split):
-    """Every compiled plan for this shape at an explicit split, ignoring the published table."""
+    """Every compiled plan for this shape at an explicit split (an execution split, not the policy's)."""
     return seg.plans_at_split(M, K, N, split)
 
 
@@ -89,7 +89,7 @@ def make_operands(M, N, K, population, device, seed):
     return a.bfloat16().contiguous(), w.bfloat16().contiguous().t()
 
 
-#: Execution-plan segment sizes below the table's 256-element alignment (README section 4.17):
+#: Execution-plan segment sizes below the dispatch's 256-element alignment (README section 4.17):
 #: pik's `mimo7b_mlp_down` leaf (1376 = 21.5 x 64, shards 5504 / 2752), a 1040 = 16 x 65 probe that
 #: is a tail on every K block (64, 128 and 256), pik's `35b_shared_fc2` 64-wide leaf, and a 16-wide
 #: segment (one UMMA). (N, K, segment_k).
@@ -346,8 +346,8 @@ def main() -> int:
     ext = extension()
     record = {
         "recipe": ops.RECIPE_VERSION,
-        "segment_table_digest": seg.table_digest(),
-        "policy_version": seg.POLICY_VERSION,
+        "schedule_digest": seg.schedule_digest(),
+        "schedule_policy_version": seg.schedule_policy.VERSION,
         "device": torch.cuda.get_device_name(0),
         "uuid": str(torch.cuda.get_device_properties(0).uuid),
         "sm_count": ext.sm_count(),
@@ -463,12 +463,12 @@ def main() -> int:
           f"{sum(1 for c in comp if not c['ok'])} failed")
 
     # ------------------------------------------------------------------- 4. execution plans
-    # Every legal plan under one segment table: segments-per-CTA 1 (one CTA per segment, tree
+    # Every legal plan under one schedule: segments-per-CTA 1 (one CTA per segment, tree
     # merged from global by a combine kernel) through all of them (one CTA per tile, tree merged
     # in tensor memory), across three tile families with different raster groups and grids.
-    # Swept at every split the KERNEL compiles, not only the published one: the published table is
-    # capped at 2 on performance grounds, and the tree's decomposition at depth 3 has to stay
-    # gated so raising that cap is a measurement and not a re-verification.
+    # Swept at every split the KERNEL compiles, not only the policy's one segment: explicit callers
+    # (execution splits, row-parallel leaf trees) run them, and the tree's decomposition at depth 3
+    # stays gated.
     plans = []
     for (N, K) in RELATION_SHAPES:
         for M in (1, 32, 512) if args.quick else RELATION_MS:

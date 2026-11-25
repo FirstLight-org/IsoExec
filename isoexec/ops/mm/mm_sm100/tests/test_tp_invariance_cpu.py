@@ -58,6 +58,9 @@ def test_a_row_shard_is_a_whole_subtree_of_the_full_K_leaf_tree(site):
     plan = pik.ReductionPlan(num_leaves=PIK_LEAVES)
     K = site.K
     leaf_k = plan.leaf_k(K)
+    # The tree's declared largest TP degree is the leaf count: d_max shards of the policy's one segment.
+    assert seg.row_parallel_leaves(K, PIK_LEAVES) == plan.num_leaves == PIK_LEAVES
+    assert seg.schedule(K, PIK_LEAVES).S == leaf_k and seg.schedule(K, PIK_LEAVES).G == 1
 
     def tree(values):
         slots = list(values)

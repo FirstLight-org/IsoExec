@@ -36,9 +36,8 @@ def record() -> dict:
     return {
         "impl_id": IMPL_ID,
         "recipe_version": RECIPE_VERSION,
-        "segment_table_digest": seg.table_digest(),
-        "segment_policy_version": seg.POLICY_VERSION,
-
+        "schedule_digest": seg.schedule_digest(),
+        "schedule_policy_version": seg.schedule_policy.VERSION,
     }
 
 
@@ -88,11 +87,10 @@ def install_mm_sm100() -> bool:
 
     if not _LOG_ONCE:
         _LOG_ONCE = True
-        rows = seg.published_table().get("rows", ())
         print(
-            f"[ISOEXEC-MM-SM100] {IMPL_ID} installed: recipe {RECIPE_VERSION}, segment table "
-            f"{seg.table_digest()} (policy v{seg.POLICY_VERSION}, {len(rows)} K values, "
-            f"{sum(1 for r in rows if int(r[2]) > 1)} split). bf16 in and out, K % 256 == 0, "
+            f"[ISOEXEC-MM-SM100] {IMPL_ID} installed: recipe {RECIPE_VERSION}, K schedule "
+            f"{seg.schedule_digest()} (schedule policy {seg.schedule_policy.VERSION}, rule 3, block "
+            f"{seg.REDUCER_BLOCK}, one segment per shard). bf16 in and out, K % 256 == 0, "
             f"N >= 64 and a multiple of 8, no fused bias, 2-D only; unsupported shapes refuse. "
             f"Flag ISOEXEC_MM_SM100=1.",
             flush=True,

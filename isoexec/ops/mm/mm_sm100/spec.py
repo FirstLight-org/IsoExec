@@ -8,16 +8,18 @@ ARCH = "sm100"
 
 #: The numerical program. Names the K consumption order, the segment/merge structure, the
 #: accumulator precision and the rounding points -- everything that is the same for every weight.
-#: Which S each K gets is NOT in here: that is the segment table, versioned separately by
-#: ``segments.POLICY_VERSION`` and identified by ``segments.table_digest()``. Both the recipe
-#: version and the table digest are part of the bind-time comparison; a table change moves the
-#: digest and the policy version, an arithmetic change moves this string.
+#: Which S each K gets is NOT in here: that is the schedule policy's output
+#: (``isoexec/ops/schedule_policy.py`` rule 3 on ``segments.REDUCER_BLOCK`` / ``REDUCER_SHORTEST``),
+#: identified by ``segments.schedule_digest()``. Both the recipe version and the schedule digest are
+#: part of the bind-time comparison; a change of what the schedule reads moves the digest, an
+#: arithmetic change moves this string.
 #:
 #: v2: the segmentation of an output element is a function of K alone. v1 let it read the weight's
 #: N, so a tensor-parallel column shard or a packed projection ran a different K reduction from the
 #: whole weight; under v2 the program of an output element is fixed by the logical weight whatever
 #: rank holds it and whatever it is packed with. That is a property of the program, not only of a
-#: table row, so it moves this string as well as the policy version (``segments.POLICY_VERSION`` 4).
+#: table row, so it moved this string. The policy gives every K one segment per shard, which is the
+#: schedule v2 already ran: the port to the schedule policy moved no bit and does not move this string.
 RECIPE_VERSION = "sm100_tcgen05_segtree_v2"
 
 #: The registry version of :data:`IMPL_ID`, moved with :data:`RECIPE_VERSION`.

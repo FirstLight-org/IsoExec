@@ -1,50 +1,42 @@
-"""The published K-segment table of the sm100 mm recipe, and the execution plans that serve it."""
+"""The K schedule of the sm100 mm recipe, taken from the schedule policy, and the execution plans that serve it."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass
-from functools import lru_cache
-from pathlib import Path
 
-#: Bumped when the policy changes what S any weight gets. It is part of the recipe identity.
-#: v4: S is a function of K (and the dtype) ALONE. v1-v3 read the weight's N as well, and N is the one
-#: dimension a deployment changes without changing the weight: a column-parallel shard holds N / tp of
-#: the same rows, and a packed projection (q | k | v | gate, gate | up) concatenates several weights
-#: along N. So the same output element was reduced over K in a different order at TP 1 and TP 4, or
-#: packed and unpacked -- different bits from the same logical weight. Under v4 every output element
-#: of every weight with the same K is the same program, whoever holds which columns. v3's per-(K, N)
-#: MEASURED splits are withdrawn with the N term: a (K, N) key cannot tell a logical weight from another
-#: weight's shard that happens to have the same width.
-POLICY_VERSION = 4
+from isoexec.ops import schedule_policy
 
-#: Streaming multiprocessors of the deployment target (B200). A **deployment-fixed** axis: the
-#: planner may read it, and a live device that disagrees is refused rather than served.
+# ------------------------------------------------------------------------------------- the schedule
+# The K reduction of one output element is rule 3 of ``isoexec/ops/schedule_policy.py``: G segments per
+# shard, an adjacent-pair fp32 tree inside a shard and then over the d_max shards, one bf16 RNE rounding at
+# the root. Everything the rule reads is in the three names below; there is no table and nothing is keyed on
+# a weight, on N, on M or on the machine.
+
+#: The reducer's exact block: one ``tcgen05.mma`` consumes 16 K terms, ascending k, fp32 accumulator, fresh
+#: start per segment. Hardware fact (policy_validation/gemm_sm100/SCHEDULE_INVENTORY.md items 1-2); the
+#: constant is the kernel's ``mma16`` step of ONEPAGE.md ("Tensor-core sums (GEMM, ...) publish nothing").
+REDUCER_BLOCK = 16
+
+#: The reducer's published shortest segment L_r. None: a tensor-core sum publishes no constant, so rule 3
+#: gives G = 1, one segment per shard (ONEPAGE.md, Inputs; measured cost of that choice against a split in
+#: policy_validation/gemm_sm100/bench/results/roundf_gpu_summary.txt). With None the rule reads no p, no
+#: occupancy, no cap, no smallest batch and no longest length.
+REDUCER_SHORTEST = None
+
+#: Streaming multiprocessors of the deployment target (B200). A **deployment-fixed** axis for the PLANNER
+#: (tile choice, ownership); the schedule does not read it. A live device that disagrees is refused.
 TARGET_SM_COUNT = 148
 
-#: Segment boundaries are multiples of this many K elements. Every mainloop K block of every
-#: configuration in this package divides it (64, 128 and 256), so a segment is always a whole
-#: number of K blocks and the ascending 16-wide UMMA chain inside a segment is the same chain
-#: whichever configuration runs it. That is what makes the tile shape free.
+#: K granularity this leaf's dispatch serves (:func:`supported`). A realisation limit of the kernel's
+#: mainloop K blocks (64, 128 and 256 all divide it), NOT a schedule input: the schedule's block is
+#: :data:`REDUCER_BLOCK`. A weight whose K is not a multiple is refused, never padded.
 SEGMENT_ALIGN = 256
-
-#: The splits the published table may contain. v4 publishes one: S = 1, the whole K axis as one
-#: ascending tcgen05 chain per output element. That is what the v2 rule already gave every weight
-#: wide enough to fill the machine at decode, and the narrow weights it split lose nothing by it:
-#: production evaluates a split tree whole on chip, where the cluster count is the unsplit launch's,
-#: so S = 2 was neither a gain nor a loss at decode (``N=1152``: 0.625 / 0.623 us at ``M=1`` for
-#: S = 1 / 2) and at best free at prefill, where every doubling of S costs tensor-memory columns.
-#: The leaf still compiles 2, 4 and 8 segments and the combine kernel 8 subtree roots, and the battery
-#: gates every one of them: they are the EXECUTION splits an explicit caller (``plans_at_split``,
-#: pik-style leaf trees) asks for, not something this table hands a weight.
-LEGAL_SPLITS = (1,)
 
 #: Output columns one CTA pair owns in the decode tile shape. The planner counts a decode launch's
 #: output tiles with it, and :func:`supported` refuses a weight narrower than one.
 DECODE_TILE_N = 64
-
-_TABLE_PATH = Path(__file__).resolve().parent / "segments.json"
 
 
 def _dtype_name(dtype) -> str:
@@ -60,84 +52,67 @@ def decode_clusters(N: int) -> int:
     return (N + DECODE_TILE_N - 1) // DECODE_TILE_N
 
 
-def segment_count_by_policy(K: int, dtype_name: str = "bf16") -> int:
-    """S for a reduction of length ``K``, from the rule that generated ``segments.json``.
+def schedule(K: int, d_max: int = 1) -> schedule_policy.Segments:
+    """The policy's schedule of one shard of a K reduction whose k axis is divisible up to degree ``d_max``.
 
-    It takes no N on purpose. Tensor parallelism shards a column-parallel weight along N and packing
-    concatenates weights along N, and neither may move a bit; K is the contraction itself, the same on
-    every rank and in every pack. (A row-parallel layer shards K, and its cross-rank sum is pik's fixed
-    leaf tree over the FULL K -- ``collectives/tp_tree.py`` -- not this kernel's segments.)
+    ``d_max`` is 1 for a column-parallel or replicated weight (k is not sharded; a column shard and a packed
+    projection hold the whole K, so they are the same program as the whole weight). For a row-parallel weight
+    it is the deployment's declared largest tensor-parallel degree (``Placement.leaves`` /
+    ``ISOEXEC_PIK_LEAVES``), and the shard is ``K / d_max``. A shard that is not whole blocks is refused.
     """
-    if dtype_name != "bf16":
-        raise ValueError(f"the sm100 mm recipe is bf16 only, not {dtype_name}")
-    return LEGAL_SPLITS[0]
-
-
-@dataclass(frozen=True)
-class SegmentEntry:
-    K: int
-    dtype: str
-    split: int
-
-    @property
-    def segment_k(self) -> int:
-        return self.K // self.split
-
-    def as_row(self) -> list:
-        return [self.K, self.dtype, self.split]
-
-
-@lru_cache(None)
-def published_table() -> dict:
-    """``segments.json`` as loaded, or an empty table when the file is absent."""
-    if not _TABLE_PATH.is_file():
-        return {"policy_version": POLICY_VERSION, "rows": []}
-    return json.loads(_TABLE_PATH.read_text())
-
-
-def table_digest(table: dict | None = None) -> str:
-    """Digest over the policy version and every published row, in canonical order."""
-    t = published_table() if table is None else table
-    rows = sorted(tuple(r) for r in t.get("rows", ()))
-    payload = json.dumps(
-        {"policy_version": t.get("policy_version"), "rows": [list(r) for r in rows]},
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()[:24]
+    if d_max < 1 or d_max & (d_max - 1):
+        raise ValueError(f"d_max = {d_max} is not a power of two")
+    if K < 1 or K % (REDUCER_BLOCK * d_max):
+        raise ValueError(f"K = {K} is not {d_max} shard(s) of whole {REDUCER_BLOCK}-term blocks")
+    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, L=REDUCER_SHORTEST)
 
 
 def segment_count(K: int, dtype) -> int:
-    """S for a reduction of length ``K``: the published row if there is one, else the policy.
+    """Segments of a K reduction that is not sharded along k: the policy's G at d_max = 1.
 
-    The weight's N is not an argument: every output column of every weight with this K is
-    segmented the same way, which is what makes a column shard or a packed projection the same
-    program as the whole weight (:func:`segment_count_by_policy`).
+    The weight's N is not an argument: every output column of every weight with this K is the same
+    program, whoever holds which columns and whatever it is packed with.
     """
-    name = dtype if isinstance(dtype, str) else _dtype_name(dtype)
-    for k, d, s in published_table().get("rows", ()):
-        if k == K and d == name:
-            return int(s)
-    return segment_count_by_policy(K, name)
+    if (dtype if isinstance(dtype, str) else _dtype_name(dtype)) != "bf16":
+        raise ValueError(f"the sm100 mm recipe is bf16 only, not {dtype}")
+    return schedule(K).G
 
 
 def segment_k(K: int, dtype) -> int:
-    """The segment size in K elements. ``K`` when the reduction is unsplit."""
-    return K // segment_count(K, dtype)
+    """The segment length in K elements: the policy's S at d_max = 1."""
+    segment_count(K, dtype)
+    return schedule(K).S
+
+
+def row_parallel_leaves(K: int, d_max: int) -> int:
+    """Leaves of the fixed tree of a row-parallel (k-sharded) projection: ``d_max`` shards of G segments."""
+    return d_max * schedule(K, d_max).G
+
+
+def schedule_inputs() -> dict:
+    """Every number the schedule reads, for the bind-time comparison between engine and trainer."""
+    return {"policy": schedule_policy.VERSION, "rule": 3, "block": REDUCER_BLOCK,
+            "shortest": REDUCER_SHORTEST, "merge": "tree", "root": "bf16_rne"}
+
+
+def schedule_digest() -> str:
+    """Digest of :func:`schedule_inputs`; a peer whose digest differs runs another K schedule."""
+    payload = json.dumps(schedule_inputs(), separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
 #: The finest segment boundary an EXECUTION plan may use: the UMMA K. A segment is ``segment_k / 16``
 #: ascending ``tcgen05.mma`` instructions from zero, and the leaf serves any multiple of 16 -- whole
 #: mainloop K blocks and at most one TAIL block of which the issuer multiplies only the UMMAs inside
 #: the segment (README section 4.17). This is what a caller that chooses its own split (pik's
-#: row-parallel leaf trees: ``leaf_k = 1376``, ``64``) needs. It is NOT the published table's
-#: alignment: :data:`SEGMENT_ALIGN` is policy and does not move, so :func:`supported` still declines a
-#: weight whose K the POLICY cannot express.
-EXECUTION_ALIGN = 16
+#: row-parallel leaf trees: ``leaf_k = 1376``, ``64``) needs. It is the schedule's block. The dispatch
+#: granularity :data:`SEGMENT_ALIGN` is separate, so :func:`supported` still declines a weight whose K
+#: this leaf's production dispatch does not serve.
+EXECUTION_ALIGN = REDUCER_BLOCK
 
 
 def execution_supported(K: int, N: int, segment_k: int) -> bool:
-    """Whether the leaf can run an EXECUTION plan with this segment size at all (no table involved)."""
+    """Whether the leaf can run an EXECUTION plan with this segment size at all."""
     return (segment_k > 0 and segment_k % EXECUTION_ALIGN == 0 and K % segment_k == 0
             and N >= DECODE_TILE_N and N % 2 == 0)
 
@@ -254,7 +229,7 @@ _CONFIGS = {
     # 40-54 % of the machine idle on a weight whose N is not a multiple of 128 times a wave count.
     # Everything here is a NEW TILE SHAPE the existing epilogue already expresses -- BN a multiple
     # of 64 (one 128-byte store subtile) and, at BM 64, BN exactly 64 (the interleaved
-    # tensor-memory atom). Nothing here is numerical: every one runs the published segment table as
+    # tensor-memory atom). Nothing here is numerical: every one runs the policy's schedule as
     # a whole tree and the plan relation compares its bits against every other family's.
     ("p64", 0, 1, ONCHIP): "p64_s1",           # 256x64 pair
     ("p64", 0, 2, ONCHIP): "p64_s2",
@@ -692,13 +667,13 @@ def plan_for(M: int, K: int, N: int, dtype, *, family: str | None = None,
 
 
 def legal_plans(M: int, K: int, N: int, dtype) -> list[Plan]:
-    """Every compiled plan that serves this shape under the published S."""
+    """Every compiled plan that serves this shape under the policy's segment count."""
     split = segment_count(K, dtype)
     return plans_at_split(M, K, N, split)
 
 
 def plans_at_split(M: int, K: int, N: int, split: int) -> list[Plan]:
-    """Every compiled plan for this shape at an explicit split, ignoring the published table."""
+    """Every compiled plan for this shape at an explicit split (an execution split, not the policy's)."""
     out: list[Plan] = []
     if split < 1 or K % split or (K // split) % EXECUTION_ALIGN:
         return out
@@ -767,133 +742,3 @@ def root_plan_for(M: int, K: int, N: int, dtype) -> Plan:
         raise ValueError(f"no compiled whole-tree publisher at split {p.split} for M={M} K={K} N={N}")
     roots.sort(key=lambda r: (_KEY_OF[r.config][0] != fam, _KEY_OF[r.config][1] != 0, r.config))
     return roots[0]
-
-
-def write_table(rows: list[SegmentEntry], path: Path | None = None) -> dict:
-    """Publish ``segments.json`` from a list of entries. Regenerated, never hand-edited."""
-    from .spec import RECIPE_VERSION
-
-    t = {
-        "schema": "isoexec_mm_sm100_segments_v2",
-        "policy_version": POLICY_VERSION,
-        "recipe": RECIPE_VERSION,
-        "target_sm_count": TARGET_SM_COUNT,
-        "segment_align": SEGMENT_ALIGN,
-        "legal_splits": list(LEGAL_SPLITS),
-        "keyed_by": "K and dtype; never N, so a column shard or a packed projection is the same program",
-        "merge": "balanced adjacent-pair tree over segment index, fp32, one bf16 RNE root",
-        "rows": [e.as_row() for e in rows],
-    }
-    t["digest"] = table_digest(t)
-    (path or _TABLE_PATH).write_text(json.dumps(t, indent=2) + "\n")
-    published_table.cache_clear()
-    return t
-
-
-# ------------------------------------------------------------------ the published weight set
-# Every bf16 dense-GEMM weight the example models present, at every tensor-parallel degree the
-# census covers, plus the foundation matrix. The table publishes one row per distinct K of this set
-# (a row-parallel shard is a K of its own); the weights stay enumerated so the census tests can say
-# which deployed weight each K serves. Sites that are fp32 (the routers), or whose K the segment
-# alignment cannot express, or narrower than one store subtile, are absent: the leaf declines them.
-
-#: (K, per-site N at TP=1) from isoexec/models/*/profile.py::gemm_census, bf16 sites only.
-CENSUS_SITES = (
-    # Qwen 3.5 35B A3B, hidden 2048
-    (2048, 9216), (2048, 12352), (2048, 248320), (2048, 1024),
-    # Qwen 3.5 9B, hidden 4096
-    (4096, 10240), (4096, 12352), (4096, 248320), (4096, 24576),
-    # Qwen 3.6 27B, hidden 5120
-    (5120, 14336), (5120, 16480), (5120, 248320), (5120, 34816),
-)
-
-#: Sites the row-parallel and legacy tables name as (K, N); K is the shard there, so it moves
-#: with TP instead of N.
-ROW_PARALLEL_SITES = ((512, 2048), (1536, 4096), (2048, 2048), (14336, 5120), (4096, 4096))
-
-#: The foundation matrix of reference GEMM shapes, as (K, N).
-FOUNDATION_SITES = ((2048, 1152), (4096, 4096), (5120, 14336))
-
-CENSUS_TPS = (1, 2, 4, 8)
-
-#: Round 5 (README section 4.21, gap 17): the deployed weights of the models ``CENSUS_SITES`` does not
-#: name, as ``(K, N, axis, tp_set)`` at TP = 1. ``axis`` says what TP shards: ``"column"`` divides N,
-#: ``"row"`` divides K (the shard is K), ``"none"`` is replicated. Every ``tests._helpers.RL_CENSUS``
-#: weight is generated by exactly one entry here or by the round-4 lists above; the S of each new
-#: row is what the SAME policy computes (``POLICY_VERSION`` 2), so no existing row moves.
-AXIS_SITES = (
-    # Qwen3.5-9B row-parallel mlp.fc2: K = 12288 / tp (the 1536 shard was already published).
-    (12288, 4096, "row", CENSUS_TPS),
-    # GLM-4.7-Flash, hidden 2048: TP 1 and 2 are qualified; TP8 is impossible (20 MLA q heads do
-    # not divide 8) and TP4 is not qualified.
-    (2048, 768, "none", (1,)),        # mla.q_down, replicated
-    (2048, 576, "none", (1,)),        # mla.kv_down, replicated
-    (768, 5120, "column", (1, 2)),    # mla.q_up, K = q_lora_rank 768
-    (2048, 20480, "column", (1, 2)),  # layer-0 dense mlp.fc1
-    (2048, 3072, "column", (1, 2)),   # shared-expert fc1
-    (5120, 2048, "row", (1, 2)),      # attn.o, K = 20 heads x 256
-    (10240, 2048, "row", (1, 2)),     # layer-0 dense mlp.fc2
-    (3072, 2048, "row", (1, 2)),      # shared-expert fc2
-    (2048, 154880, "column", (1, 2)), # lm_head
-    # MiMo-7B, hidden 4096, deployed TP4 (its README).
-    (4096, 6144, "column", (4,)),     # attn.qkv
-    (4096, 22016, "column", (4,)),    # mlp.fc1
-    (11008, 4096, "row", (4,)),       # mlp.fc2: K = 2752 at TP4, declined by SEGMENT_ALIGN (policy)
-    (4096, 151680, "column", (4,)),   # lm_head
-)
-
-
-#: Round 8 (README section 4.32): the audited model forward weights, as (K, N) at their deployed shard,
-#: so the digest covers every K they run under.
-MODEL_SITES = (
-    (4096, 64), (4096, 128), (5120, 512), (5120, 1280), (1280, 4096), (1536, 4096),
-    (8192, 4096), (4096, 8192), (512, 32768), (1280, 32768), (6144, 25600), (4096, 154880),
-)
-
-
-def _axis_weights() -> set[tuple[int, int]]:
-    out = set()
-    for K, N, axis, tps in AXIS_SITES:
-        for tp in tps:
-            if axis == "column" and N % tp == 0:
-                out.add((K, N // tp))
-            elif axis == "row" and K % tp == 0:
-                out.add((K // tp, N))
-            elif axis == "none":
-                out.add((K, N))
-    return out
-
-
-def default_weight_set() -> list[tuple[int, int]]:
-    """Every ``(K, N)`` the table publishes a row for, de-duplicated and sorted."""
-    out = set(FOUNDATION_SITES)
-    for K, N in CENSUS_SITES:
-        for tp in CENSUS_TPS:
-            if N % tp == 0:
-                out.add((K, N // tp))
-    for K, N in ROW_PARALLEL_SITES:
-        for tp in CENSUS_TPS:
-            if K % tp == 0:
-                out.add((K // tp, N))
-    out |= _axis_weights()
-    out |= set(MODEL_SITES)
-    return sorted(k for k in out if supported(k[0], k[1]))
-
-
-def default_k_set() -> list[int]:
-    """Every K the table publishes a row for: the distinct K of :func:`default_weight_set`."""
-    return sorted({K for K, _N in default_weight_set()})
-
-
-def regenerate(path: Path | None = None) -> dict:
-    """Publish ``segments.json`` from the policy over :func:`default_k_set`."""
-    rows = [SegmentEntry(K=K, dtype="bf16", split=segment_count_by_policy(K, "bf16"))
-            for K in default_k_set()]
-    return write_table(rows, path)
-
-
-if __name__ == "__main__":  # python -m isoexec.ops.mm.mm_sm100.segments
-    t = regenerate()
-    print(f"published {len(t['rows'])} rows, digest {t['digest']}, policy v{t['policy_version']}")
-    for K, d, S in t["rows"]:
-        print(f"  K={K:6d} {d} S={S} segment_k={K // S}")

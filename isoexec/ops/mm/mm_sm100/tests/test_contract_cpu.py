@@ -1,8 +1,7 @@
-"""Declarations and the segment table, with no CUDA and no build."""
+"""Declarations and the K schedule, with no CUDA and no build."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -29,76 +28,115 @@ def test_impls_are_declared_only_after_the_battery_passes():
         assert impl.version == spec.IMPL_VERSION == 2, impl
 
 
-#: Everything the segment policy is allowed to read. The point of the list is that N, M, the token
-#: count, the phase, the grid, the CTA count, the TP degree and the live device are not on it: N is
-#: what a column shard and a packed projection change without changing the weight.
-_POLICY_INPUTS = {"K", "dtype_name", "ValueError", "LEGAL_SPLITS"}
+# ------------------------------------------------------------ the schedule is the policy's output
+
+def _deployed_weights():
+    """Every (K, N) the example models present at their deployed TP degrees, plus the SkyRL model sites."""
+    from isoexec.ops.mm.mm_sm100.tests._helpers import RL_CENSUS
+
+    return sorted({(K, N) for N, K, _label in RL_CENSUS} | set(_MODEL_SITES))
 
 
-def test_segment_count_reads_only_K_and_dtype():
-    """S is a function of the contraction length, never of the weight's width."""
+#: The audited model forward weights (K, N) at their deployed shard (README section 4.32).
+_MODEL_SITES = (
+    (4096, 64), (4096, 128), (5120, 512), (5120, 1280), (1280, 4096), (1536, 4096),
+    (8192, 4096), (4096, 8192), (512, 32768), (1280, 32768), (6144, 25600), (4096, 154880),
+)
+
+
+def test_the_kernel_schedule_is_the_schedule_policy_on_every_deployed_shape():
+    """Fails if a segment count or length the kernel runs differs from ``schedule_policy`` rule 3."""
+    from isoexec.ops import schedule_policy as P
+
+    assert seg.REDUCER_BLOCK == 16 and seg.REDUCER_SHORTEST is None
+    weights = _deployed_weights()
+    assert len(weights) > 40
+    for K, N in weights:
+        if K % seg.REDUCER_BLOCK:
+            with pytest.raises(ValueError):
+                seg.schedule(K)
+            continue
+        want = P.reduce(K, b=16)                      # no published constant: G = 1, S = K
+        assert want.G == 1 and want.S == K and want.merge == "tree"
+        assert seg.schedule(K) == want
+        assert seg.segment_count(K, "bf16") == want.G
+        assert seg.segment_k(K, "bf16") == want.S
+        if not seg.supported(K, N):
+            continue
+        for M in (1, 8, 32, 128, 256, 4096):
+            plan = seg.plan_for(M, K, N, "bf16")
+            assert (plan.split, plan.segment_k) == (want.G, want.S), (M, K, N, plan)
+            assert plan.groups * plan.spc == want.G
+            for other in seg.legal_plans(M, K, N, "bf16"):
+                assert (other.split, other.segment_k) == (want.G, want.S), (M, K, N, other)
+
+
+def test_a_row_parallel_weight_is_d_max_shards_of_the_policys_segments():
+    """k sharded: one tree over the d_max shards, each shard the policy's G segments of K / d_max."""
+    from isoexec.ops import schedule_policy as P
+
+    for K in (2048, 4096, 5120, 10240, 12288, 14336, 3072):
+        for d_max in (1, 2, 4, 8):
+            want = P.reduce(K // d_max, b=16)
+            assert seg.schedule(K, d_max) == want
+            assert seg.row_parallel_leaves(K, d_max) == d_max * want.G == d_max
+    with pytest.raises(ValueError):
+        seg.schedule(11008, 32)       # 344-term shards are not whole 16-term blocks
+    with pytest.raises(ValueError):
+        seg.schedule(4096, 3)         # degrees that are not powers of two are refused
+    with pytest.raises(ValueError):
+        seg.schedule(2056)            # not whole 16-term blocks
+
+
+def test_the_schedule_reads_only_K_and_d_max():
+    """S is a function of the contraction length and the declared degree, never of the weight's width."""
     import ast
     import builtins
     import inspect
     import textwrap
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(seg.segment_count_by_policy)))
+    tree = ast.parse(textwrap.dedent(inspect.getsource(seg.schedule)))
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
-    extra = names - _POLICY_INPUTS - set(dir(builtins))
-    assert not extra, f"segment_count_by_policy reads undeclared names: {sorted(extra)}"
-    for fn in (seg.segment_count_by_policy, seg.segment_count, seg.segment_k):
+    allowed = {"K", "d_max", "REDUCER_BLOCK", "REDUCER_SHORTEST", "schedule_policy", "reduce", "Segments"}
+    extra = names - allowed - set(dir(builtins))
+    assert not extra, f"schedule reads undeclared names: {sorted(extra)}"
+    for fn in (seg.schedule, seg.segment_count, seg.segment_k, seg.row_parallel_leaves):
         assert list(inspect.signature(fn).parameters)[0] == "K", fn.__name__
         assert "N" not in inspect.signature(fn).parameters, fn.__name__
 
-    # Same K, any call, any order: same answer.
-    for K in (2048, 4096, 5120, 14336):
-        first = seg.segment_count(K, "bf16")
-        for _ in range(3):
-            assert seg.segment_count(K, "bf16") == first
+
+def test_no_segment_table_is_left():
+    """The table, its loader, its digest and its policy version are gone; the schedule is a function."""
+    assert not (PKG / "segments.json").exists()
+    for name in ("published_table", "table_digest", "write_table", "regenerate", "POLICY_VERSION",
+                 "LEGAL_SPLITS", "segment_count_by_policy", "MEASURED_SPLITS", "default_k_set"):
+        assert not hasattr(seg, name), name
 
 
-def test_segment_size_divides_K_and_is_aligned():
-    for K in (1024, 2048, 4096, 5120, 14336, 2304, 4608, 2560, 7168, 3584):
-        S = seg.segment_count(K, "bf16")
-        assert S in seg.LEGAL_SPLITS
-        assert K % S == 0, (K, S)
-        assert (K // S) % seg.SEGMENT_ALIGN == 0, (K, S)
+def test_the_schedule_digest_covers_everything_the_schedule_reads(monkeypatch):
+    base = seg.schedule_digest()
+    assert seg.schedule_inputs() == {"policy": "7.1", "rule": 3, "block": 16, "shortest": None,
+                                     "merge": "tree", "root": "bf16_rne"}
+    monkeypatch.setattr(seg, "REDUCER_SHORTEST", 1024)
+    assert seg.schedule_digest() != base
+    monkeypatch.setattr(seg, "REDUCER_SHORTEST", None)
+    monkeypatch.setattr(seg.schedule_policy, "VERSION", "0")
+    assert seg.schedule_digest() != base
 
 
-def test_published_table_equals_the_policy_that_published_it():
-    table = seg.published_table()
-    assert table.get("policy_version") == seg.POLICY_VERSION
-    for K, dtype, S in table.get("rows", ()):
-        assert seg.segment_count_by_policy(K, dtype) == S, (K, dtype, S)
+def test_the_installed_schedule_policy_is_the_canonical_module():
+    """``isoexec/ops/schedule_policy.py`` is installed unchanged (policy_validation/port/schedule_policy.py)."""
+    import hashlib
+
+    from isoexec.ops import schedule_policy as P
+
+    assert P.VERSION == "7.1"
+    assert hashlib.sha256(Path(P.__file__).read_bytes()).hexdigest() == \
+        "4fd6a35a16435f8cdb93d93f8b5b37265c9af050fc275c490c59fe774a628aa3"
 
 
-def test_table_digest_covers_the_rows_and_the_policy_version():
-    base = {"policy_version": 1, "rows": [[2048, "bf16", 4]]}
-    same_order_swapped = {"policy_version": 1, "rows": [[2048, "bf16", 4]]}
-    assert seg.table_digest(base) == seg.table_digest(same_order_swapped)
-    changed_split = {"policy_version": 1, "rows": [[2048, "bf16", 2]]}
-    assert seg.table_digest(base) != seg.table_digest(changed_split)
-    changed_policy = {"policy_version": 2, "rows": [[2048, "bf16", 4]]}
-    assert seg.table_digest(base) != seg.table_digest(changed_policy)
-
-
-def test_published_json_is_wellformed_and_carries_its_own_digest():
-    path = PKG / "segments.json"
-    if not path.is_file():
-        pytest.skip("segments.json has not been published yet")
-    table = json.loads(path.read_text())
-    assert table["schema"] == "isoexec_mm_sm100_segments_v2"
-    assert table["recipe"] == spec.RECIPE_VERSION
-    assert table["target_sm_count"] == seg.TARGET_SM_COUNT
-    assert table["digest"] == seg.table_digest(table)
-    seen = set()
-    for K, dtype, S in table["rows"]:
-        assert (K, dtype) not in seen, f"duplicate K {(K, dtype)}"
-        seen.add((K, dtype))
-
-
-def test_every_plan_for_a_shape_shares_one_segment_table():
+def test_every_plan_for_a_shape_shares_one_schedule():
     """Plans differ in ownership only: same split, same segment size, groups * spc == split."""
     for K, N in ((2048, 1152), (4096, 4096), (5120, 14336), (14336, 5120), (2048, 9216)):
         S = seg.segment_count(K, "bf16")
@@ -270,15 +308,16 @@ def test_the_battery_manifest_names_this_battery_with_a_claim():
     assert rows[0].claim.strip()
 
 
-def test_the_record_a_peer_compares_pins_the_table_and_not_only_the_id():
-    """The impl id does not pin the arithmetic: S per weight is data, so the digest travels too."""
+def test_the_record_a_peer_compares_pins_the_schedule_and_not_only_the_id():
+    """The impl id does not pin the arithmetic: what the schedule reads travels as a digest too."""
     from .. import integration
 
     rec = integration.record()
     assert rec["impl_id"] == "sm100_tcgen05_segtree"
     assert rec["recipe_version"] == seg_recipe()
-    assert rec["segment_table_digest"] == seg.table_digest()
-    assert rec["segment_policy_version"] == seg.POLICY_VERSION
+    assert rec["schedule_digest"] == seg.schedule_digest()
+    assert rec["schedule_policy_version"] == "7.1"
+    assert "segment_table_digest" not in rec and "segment_policy_version" not in rec
 
 
 def seg_recipe() -> str:
@@ -319,11 +358,12 @@ def test_the_compiled_table_and_the_planner_name_the_same_configurations():
 
 # ------------------------------------------------------------ round 5: the collectives entry points
 
-def test_the_execution_alignment_is_the_umma_k_and_the_policy_alignment_does_not_move():
-    """Section 4.17 (d): an EXECUTION segment is any multiple of 16; the TABLE's rules are policy."""
-    assert seg.EXECUTION_ALIGN == 16
+def test_the_execution_alignment_is_the_umma_k_and_the_dispatch_alignment_does_not_move():
+    """Section 4.17 (d): an EXECUTION segment is any multiple of 16 (the reducer's block); the
+    production dispatch serves K % 256 == 0."""
+    assert seg.EXECUTION_ALIGN == seg.REDUCER_BLOCK == 16
     assert seg.SEGMENT_ALIGN == 256
-    # the policy still declines what it declined
+    # the dispatch still declines what it declined
     assert not seg.supported(5504, 4096) and not seg.supported(2752, 4096)
     assert not seg.supported(128, 2048)
     # the execution surface serves pik's shipped leaves
@@ -349,10 +389,10 @@ def test_plans_at_split_serve_sub_256_segments_and_refuse_sub_16_ones():
     assert seg.plans_at_split(512, 2056, 1152, 1) == []      # 2056 is not a multiple of 16
 
 
-def test_every_prefill_family_has_a_publishing_twin_at_the_splits_the_table_publishes():
+def test_every_prefill_family_has_a_publishing_twin_at_the_policys_split_and_an_execution_split():
     """`run_plan(..., root_dtype=float32)` must work on whatever plan the production rule picks."""
     for fam in seg._TILE_GEOM:
-        for split in sorted(set(seg.LEGAL_SPLITS) | {2}):  # the published S and an execution split
+        for split in (seg.schedule(4096).G, 2):  # the policy's G and an execution split
             if seg._MAX_SPC.get(fam, 0) < split or (fam, 0, split, seg.ONCHIP) not in seg._CONFIGS:
                 continue
             plan = seg.Plan(config=seg._CONFIGS[(fam, 0, split, seg.ONCHIP)],
@@ -394,24 +434,16 @@ def test_run_plan_exposes_the_four_entry_points_with_the_old_behaviour_by_defaul
     assert 'py::arg("combine") = true' in src and 'py::arg("publish_bf16") = false' in src
 
 
-# ------------------------------------------------------------ the published K set
+# ------------------------------------------------------------ the deployed census
 
-def test_the_table_publishes_one_row_per_census_K_and_regenerates_from_the_policy():
-    rows = seg.published_table()["rows"]
-    assert sorted(rows) == sorted([K, "bf16", seg.segment_count_by_policy(K, "bf16")]
-                                  for K in seg.default_k_set())
-    assert {K for K, _N in seg.default_weight_set()} == {K for K, _d, _s in rows}
-
-
-def test_every_deployed_census_weight_has_a_published_row_unless_the_policy_declines_it():
+def test_every_deployed_census_weight_is_served_unless_the_dispatch_declines_it():
     from isoexec.ops.mm.mm_sm100.tests._helpers import RL_CENSUS
 
-    pub = {k for k, _d, _s in seg.published_table()["rows"]}
     for N, K, label in RL_CENSUS:
         if seg.supported(K, N):
-            assert K in pub, label
+            assert seg.plan_for(1, K, N, "bf16").split == seg.schedule(K).G, label
         else:
-            # mimo.mlp.fc2@tp4, K = 2752: SEGMENT_ALIGN is policy and does not move this round
+            # mimo.mlp.fc2@tp4, K = 2752: the dispatch granularity (SEGMENT_ALIGN) declines it
             assert (K, N) == (2752, 4096), label
             assert seg.execution_supported(K, N, 1376)   # an execution plan can still serve it
 
@@ -436,18 +468,6 @@ def test_the_model_tile_table_only_names_compiled_whole_tree_plans_that_cover_th
                 assert seg.plan_for(M, K, N, torch.bfloat16).config == cfg
                 # an explicit override still reaches the rule, never the table
                 assert seg.plan_for(M, K, N, torch.bfloat16, spc=split).config in seg._CONFIGS.values()
-
-
-def test_policy_v4_publishes_one_segment_for_every_K():
-    """Policy v4: S reads K alone, and every published K is one ascending chain (S = 1). The per-(K, N)
-    splits of v3 are gone with the N term, and every audited model weight's K still has a row."""
-    table = seg.published_table()
-    assert table["policy_version"] == seg.POLICY_VERSION == 4
-    assert {S for _K, _d, S in table["rows"]} == {1} and seg.LEGAL_SPLITS == (1,)
-    assert not hasattr(seg, "MEASURED_SPLITS")
-    ks = {K for K, _d, _s in table["rows"]}
-    for K, N in seg.MODEL_SITES:
-        assert K in ks, (K, N)
 
 
 @pytest.mark.parametrize("supported,has_bias", [(False, False), (True, True)])

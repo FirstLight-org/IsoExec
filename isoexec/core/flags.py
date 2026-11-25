@@ -180,7 +180,7 @@ FLAGS: List[Flag] = [
         (TRAIN, ENGINE),
         notes="Not bit-equal to Triton or to cuBLASLt by contract (tcgen05 accumulation and the fixed per-weight "
         "K split move the bits by design), so a flip requires a gate re-freeze and both sides must agree on it. "
-        "The binding record is the impl id and ops/mm/mm_sm100/segments.json's digest "
+        "The binding record is the impl id and the K schedule's digest "
         "(ops/mm/mm_sm100/integration.py::record).",
     ),
     Flag(

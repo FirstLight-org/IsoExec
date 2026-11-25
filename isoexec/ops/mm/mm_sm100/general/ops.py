@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import torch
 
+from isoexec.ops import schedule_policy
+
+from ..segments import REDUCER_BLOCK, REDUCER_SHORTEST
 from ._extension import extension
 
 RECIPE_CHAIN = "sm100_tcgen05_chain_v1"
-RECIPE_KSEGTREE = "sm100_tcgen05_ksegtree_v1"
+#: v2: the segment count of an MN-major operand is the schedule policy's (one segment per shard, as
+#: every tensor-core sum). v1 split K >= 16384 into up to 16 segments of at least 8192 terms by a rule
+#: of this file; that rule and its two constants are removed. The kernel's tree over segments stays
+#: compiled in csrc/gen.cu and no caller passes a split above 1.
+RECIPE_KSEGTREE = "sm100_tcgen05_ksegtree_v2"
 #: deployment constant for the tile choice only (ownership; the bits never read it)
 _SLOTS = 148
-#: segment floor and cap of the K-split rule (arithmetic: changing either is a new recipe version)
-SEGMENT_MIN_K = 8192
-MAX_SPLIT = 16
+#: The reducer (block 16, no published shortest segment) is ``mm_sm100/segments.py``'s, imported above:
+#: one place for the operator. This kernel's K atom of 64 is its dispatch granularity, not a schedule input.
 
 __all__ = ["RECIPE_CHAIN", "RECIPE_KSEGTREE", "bmm", "mm", "plan", "recipe_for", "split_for", "supported"]
 
@@ -66,17 +72,8 @@ def supported(a: torch.Tensor, b: torch.Tensor) -> bool:
 
 
 def split_for(K: int, a_mn: bool, b_mn: bool) -> int:
-    """The declared segment count: 1 for K-major x K-major; else the largest power of two
-    <= MAX_SPLIT with K / S >= SEGMENT_MIN_K. Reads K and the layout only."""
-    if not (a_mn or b_mn):
-        return 1
-    s = 1
-    while s * 2 <= MAX_SPLIT and K // (s * 2) >= SEGMENT_MIN_K:
-        s *= 2
-    atoms = K // 64
-    seg = -(-atoms // s)
-    assert -(-atoms // seg) == s, (K, s)
-    return s
+    """The segment count of the K reduction: the schedule policy's G (rule 3) for every layout."""
+    return schedule_policy.reduce(K, b=REDUCER_BLOCK, L=REDUCER_SHORTEST).G
 
 
 def recipe_for(a: torch.Tensor, b: torch.Tensor) -> str:
