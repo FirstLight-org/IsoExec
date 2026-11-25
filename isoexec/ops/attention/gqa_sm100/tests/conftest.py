@@ -15,9 +15,12 @@ DECLARATIONS = {"declared": None, "batch1": 1}
 
 @pytest.fixture(params=list(DECLARATIONS))
 def declaration(request, monkeypatch):
-    from isoexec.ops.attention.gqa_sm100 import spec
+    from isoexec.ops.attention.gqa_sm100 import ops, spec
 
     batch = DECLARATIONS[request.param]
     if batch is not None:
         monkeypatch.setattr(spec, "SMALLEST_BATCH", batch)
-    return request.param
+        ops.bind_schedule()          # the policy runs when the schedule is bound, never on a call
+    yield request.param
+    monkeypatch.undo()
+    ops.bind_schedule()

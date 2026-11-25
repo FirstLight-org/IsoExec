@@ -170,10 +170,32 @@ def default_scale(head_dim: int) -> float:
     return 1.0 / math.sqrt(head_dim)
 
 
+#: The recipe's span per head dim, evaluated ONCE when the schedule is bound (module import, or
+#: :func:`bind_schedule` after a declaration changed). The per-call paths read this dict and never call the policy.
+_BOUND_SPAN: dict[int, int] = {}
+
+
+def bind_schedule() -> dict[int, int]:
+    """Evaluate the schedule policy at spec.py's declarations and bind the result: ``{head_dim: span}``.
+
+    Called at import. A process that changes a declaration (the tests' second declaration) calls it again;
+    nothing on a forward call does."""
+    spans = {d: seg_for(d, spec.LONGEST_CONTEXT) for d in HEAD_DIMS}
+    _BOUND_SPAN.clear()
+    _BOUND_SPAN.update(spans)
+    return dict(spans)
+
+
 def segment_span(head_dim: int) -> int:
     """The recipe's segment span at ``head_dim``: the policy's S at the declarations of spec.py
-    (``LONGEST_CONTEXT``, ``SMALLEST_BATCH``, ``MODEL_KV_HEADS``)."""
-    return seg_for(head_dim, spec.LONGEST_CONTEXT)
+    (``LONGEST_CONTEXT``, ``SMALLEST_BATCH``, ``MODEL_KV_HEADS``), as bound by :func:`bind_schedule`."""
+    try:
+        return _BOUND_SPAN[head_dim]
+    except KeyError:
+        raise ValueError(f"no leaf for head_dim={head_dim}") from None
+
+
+bind_schedule()
 
 
 @lru_cache(None)
@@ -392,6 +414,7 @@ __all__ = [
     "SOFTMAX_SEGMENT_CAP",
     "SOFTMAX_SHORTEST_SEGMENT",
     "backward_kernel",
+    "bind_schedule",
     "default_scale",
     "gqa_sm100_fwd",
     "paged_fwd",

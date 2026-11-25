@@ -128,10 +128,28 @@ def test_every_call_site_hands_the_kernel_segment_span(module):
             ast.dump(seg)
 
 
+def test_the_policy_is_evaluated_when_the_schedule_is_bound_and_never_on_a_call(monkeypatch):
+    """``segment_span`` (what every call site reads) is a dict lookup; ``schedule_policy`` runs in ``bind_schedule``."""
+    calls = []
+    real = schedule_policy.reduce
+    monkeypatch.setattr(schedule_policy, "reduce", lambda *a, **k: (calls.append(a), real(*a, **k))[1])
+    for d in spec.HEAD_DIMS:
+        for _ in range(3):
+            assert ops.segment_span(d) == 10240
+    assert not calls, "segment_span called the policy"
+    assert ops.bind_schedule() == {128: 10240, 256: 10240} and len(calls) == len(spec.HEAD_DIMS)
+    tree = ast.parse((PACKAGE / "ops.py").read_text())
+    span = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "segment_span")
+    names = {n.attr if isinstance(n, ast.Attribute) else getattr(n, "id", "") for n in ast.walk(span)}
+    assert not names & {"schedule_policy", "schedule_for", "seg_for", "reduce", "workers"}, names
+    with pytest.raises(ValueError):
+        ops.segment_span(64)
+
+
 def test_no_table_and_no_literal_span():
     assert not hasattr(ops, "SEG_TOKENS") and not hasattr(spec, "SEG_CONTEXT")
     tree = ast.parse((PACKAGE / "ops.py").read_text())
-    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in ("schedule_for", "seg_for", "segment_span")):
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in ("schedule_for", "seg_for", "segment_span", "bind_schedule")):
         literals = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, int)
                     and not isinstance(n.value, bool)]
         assert not literals, (fn.name, literals)
