@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Row-invariant fp32 log-softmax / sampled logprob on SM100 (arithmetic version 1; recipe in ops.py).
+// Row-invariant fp32 log-softmax / sampled logprob on SM100 (arithmetic version 3: the schedule of
+// isoexec/ops/schedule_policy.py; stated in schedule.py and reference.py).
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -8,14 +9,29 @@
 #include <stdint.h>
 #include <type_traits>
 
+// ---- The numerical schedule of the log-sum-exp ---------------------------------------------------
+// The vocabulary is G = d_max consecutive shards of L = V / G columns (a TP rank holds G / world whole
+// shards). Inside a shard: segments of S consecutive columns, the last one short, combined by the
+// adjacent tree (pair (0,1), (2,3), ...; an unpaired last partial moves up); then the adjacent tree over
+// the G shards. S and G are not written here: logprobs_sm100/schedule.py takes them from
+// isoexec/ops/schedule_policy.py (rule 3, scalar step) and the declared d_max and passes them to the
+// compiler.
+#if !defined(LOGPROBS_SM100_SEGMENT) || !defined(LOGPROBS_SM100_SHARDS)
+#error "logprobs_sm100: build through _extension.py; schedule.py supplies the segment length and d_max"
+#endif
+
 namespace logprobs_sm100 {
 namespace {
 
 using bf16 = __nv_bfloat16;
-constexpr int STRIP = 8;    // columns per strip (recipe)
-constexpr int LANES = 256;  // lanes per leaf (recipe); strip q of a leaf belongs to lane q % LANES
-constexpr int G = 8;        // leaves per full vocabulary row (recipe)
+constexpr int SEG = LOGPROBS_SM100_SEGMENT;  // S: columns of a segment (schedule)
+constexpr int G = LOGPROBS_SM100_SHARDS;     // d_max: vocabulary shards of a full row (declaration)
+constexpr int STRIP = 8;                     // columns per load (execution; a shard is whole strips)
+constexpr int LANES = 256;                   // threads of a (row, shard) CTA (execution)
+constexpr int MAXB = 128;                    // segments one thread may own (execution; stack depth 8)
 constexpr float NINF = -__builtin_huge_valf();
+static_assert(SEG % STRIP == 0 && SEG >= STRIP && SEG <= 64, "logprobs_sm100: a segment is 1-8 whole strips");
+static_assert(G >= 1 && G <= 32 && (G & (G - 1)) == 0, "logprobs_sm100: d_max must be a power of two <= 32");
 
 template <class T> __device__ __forceinline__ float widen(T v) {
   if constexpr (std::is_same_v<T, bf16>)
@@ -36,98 +52,127 @@ template <class T, bool TEMP> __device__ __forceinline__ float value(T raw, floa
     return widen(raw);
 }
 
-// Leaf state (M_g, S_g): each lane runs the online normalizer over its strips ascending, columns
-// ascending, fp32 throughout:
-//   v > m            : s = s * expf(m - v) + 1;  m = v
-//   v != -inf (else) : s = s + expf(v - m)
-// then S_g = ascending chain over lanes of s_l * expf(m_l - M_g) (a lane with m_l == -inf and
-// s_l == +0 is absent and contributes +0), M_g = max_l m_l. NaN never wins the max and poisons s.
-// ``Hook`` observes every column of the leaf (raw widened value, column within the leaf) and changes
-// nothing the leaf state computes; the default hook is empty.
-struct NoHook {
-  __device__ __forceinline__ void operator()(float, int) const {}
+// A partial (m, s[, a]) of a set of columns: m = their maximum (-inf for none; NaN never wins),
+// s = sum exp(v - F), a = sum exp(v - F) * (v - F) (entropy only; a -inf column adds +0), with
+// F = m, or +0 when m == -inf so that an all -inf set keeps s == +0.
+struct Part {
+  float m, s, a;
 };
 
-//
-// ENT also carries, per lane, a = sum exp(v - m) * (v - m) relative to the running max (rescaled on
-// a new max: a = exp(m - v) * (a + s * (m - v))), folded per leaf the same ascending lane chain:
-// A_g = chain_l exp(m_l - M_g) * (a_l + s_l * (m_l - M_g)). M_g and S_g are evaluated by the very same
-// statements with or without ENT (and with any Hook), so the logprob outputs do not depend on either.
-template <class T, bool TEMP, bool PACKED, bool ENT = false, class Hook = NoHook>
-__device__ __forceinline__ void leaf_state_body(const T *__restrict__ x, int64_t stride, int L,
-                                                float *__restrict__ mout, float *__restrict__ sout,
-                                                int gl, const float *__restrict__ temp,
-                                                float *__restrict__ aout = nullptr, Hook &&hook = Hook{}) {
-  int row = blockIdx.x, g = blockIdx.y;
-  const auto *xs = reinterpret_cast<const pack8<T> *>(x + int64_t(row) * stride + int64_t(g) * L);
-  int strips = L / STRIP;
-  __shared__ float lmax[LANES];
-  __shared__ float lsum[LANES];
-  __shared__ float smax[1];
-  float t = 1.f;
-  if constexpr (TEMP)
-    t = *temp;
-  float m = NINF, s = 0.f, a = 0.f;
-  for (int q = threadIdx.x; q < strips; q += LANES) {
-    pack8<T> p = xs[q];
+// One segment: columns ascending, fp32. m = fmaxf chain from -inf; s (and a) = add.rn chains from +0.
+template <class T, bool TEMP, bool ENT>
+__device__ __forceinline__ Part segment(const pack8<T> *__restrict__ xs, int nstrip, float t) {
+  float v[SEG];
+  float m = NINF;
 #pragma unroll
-    for (int j = 0; j < STRIP; ++j) {
-      hook(widen(p.v[j]), q * STRIP + j);
-      float v = value<T, TEMP>(p.v[j], t);
-      if (v > m) {
-        if constexpr (ENT) {
-          if (m == NINF) {
-            a = 0.f;
-          } else {
-            float d = __fsub_rn(m, v);
-            a = __fmul_rn(expf(d), __fadd_rn(a, __fmul_rn(s, d)));
-          }
-        }
-        s = __fadd_rn(__fmul_rn(s, expf(__fsub_rn(m, v))), 1.f);
-        m = v;
-      } else if (v != NINF) {
-        float d = __fsub_rn(v, m);
-        float e = expf(d);
-        s = __fadd_rn(s, e);
-        if constexpr (ENT)
-          a = __fadd_rn(a, __fmul_rn(e, d));
+  for (int k = 0; k < SEG / STRIP; ++k) {
+    if (k < nstrip) {
+      pack8<T> p = xs[k];
+#pragma unroll
+      for (int j = 0; j < STRIP; ++j) {
+        v[k * STRIP + j] = value<T, TEMP>(p.v[j], t);
+        m = fmaxf(m, v[k * STRIP + j]);
       }
     }
   }
-  lmax[threadIdx.x] = m;
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    float mm = NINF;
-    for (int l = 0; l < LANES; ++l)
-      mm = lmax[l] > mm ? lmax[l] : mm;
-    smax[0] = mm;
-  }
-  __syncthreads();
-  float M = smax[0];
-  bool absent = m == NINF && s == 0.f;
-  lsum[threadIdx.x] = absent ? 0.f : __fmul_rn(s, expf(__fsub_rn(m, M)));
-  __shared__ float lent[ENT ? LANES : 1];
-  if constexpr (ENT) {
-    float d = __fsub_rn(m, M);
-    lent[threadIdx.x] = absent ? 0.f : __fmul_rn(expf(d), __fadd_rn(a, __fmul_rn(s, d)));
-  }
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    float S = lsum[0];
-    for (int l = 1; l < LANES; ++l)
-      S = __fadd_rn(S, lsum[l]);
-    if constexpr (ENT) {
-      float A = lent[0];
-      for (int l = 1; l < LANES; ++l)
-        A = __fadd_rn(A, lent[l]);
-      aout[int64_t(row) * gl + g] = A;
+  float F = m == NINF ? 0.f : m;
+  float s = 0.f, a = 0.f;
+#pragma unroll
+  for (int k = 0; k < SEG / STRIP; ++k) {
+    if (k < nstrip) {
+#pragma unroll
+      for (int j = 0; j < STRIP; ++j) {
+        float d = __fsub_rn(v[k * STRIP + j], F);
+        float e = expf(d);
+        s = __fadd_rn(s, e);
+        if constexpr (ENT)
+          a = __fadd_rn(a, v[k * STRIP + j] == NINF ? 0.f : __fmul_rn(e, d));
+      }
     }
+  }
+  return {m, s, a};
+}
+
+// The reducer's merge, left operand first: both partials are rescaled to the larger maximum and added.
+// A side with m == -inf holds s == +0 (or NaN from a NaN column, which propagates) and adds s * 0.
+template <bool ENT> __device__ __forceinline__ void merge(Part &l, const Part &r) {
+  float M = fmaxf(l.m, r.m);
+  float F = M == NINF ? 0.f : M;
+  float dl = __fsub_rn(l.m, F), dr = __fsub_rn(r.m, F);
+  float el = expf(dl), er = expf(dr);
+  if constexpr (ENT) {
+    float al = l.m == NINF ? __fmul_rn(l.s, 0.f) : __fmul_rn(el, __fadd_rn(l.a, __fmul_rn(l.s, dl)));
+    float ar = r.m == NINF ? __fmul_rn(r.s, 0.f) : __fmul_rn(er, __fadd_rn(r.a, __fmul_rn(r.s, dr)));
+    l.a = __fadd_rn(al, ar);
+  }
+  l.s = __fadd_rn(__fmul_rn(l.s, el), __fmul_rn(r.s, er));
+  l.m = M;
+}
+
+// Shard state: the partial of shard g of the row, i.e. the adjacent tree over its ceil(L / S) segments.
+// Realisation: thread i owns the aligned block of B consecutive segments [i B, i B + B) (B a power of
+// two chosen by the host so that at most LANES blocks exist) and merges them in tree order with a
+// binary-counter stack; the blocks' partials then meet in shared memory, lower block on the left, a
+// block with no right neighbour moving up unchanged. B and LANES decide who computes what, not what.
+template <class T, bool TEMP, bool PACKED, bool ENT = false>
+__device__ __forceinline__ void leaf_state_body(const T *__restrict__ x, int64_t stride, int L,
+                                                float *__restrict__ mout, float *__restrict__ sout,
+                                                int gl, const float *__restrict__ temp, int B,
+                                                float *__restrict__ aout = nullptr) {
+  int row = blockIdx.x, g = blockIdx.y, i = threadIdx.x;
+  const auto *xs = reinterpret_cast<const pack8<T> *>(x + int64_t(row) * stride + int64_t(g) * L);
+  const int strips = L / STRIP, per = SEG / STRIP;
+  const int nseg = (strips + per - 1) / per, nblk = (nseg + B - 1) / B;
+  __shared__ float pm[LANES];
+  __shared__ float ps[LANES];
+  __shared__ float pa[ENT ? LANES : 1];
+  float t = 1.f;
+  if constexpr (TEMP)
+    t = *temp;
+  Part p{NINF, 0.f, 0.f};
+  if (i < nblk) {
+    const int l0 = i * B, nl = min(B, nseg - l0);
+    Part st[8];
+    int top = 0;
+    for (int l = 0; l < nl; ++l) {
+      const int q = (l0 + l) * per;
+      Part cur = segment<T, TEMP, ENT>(xs + q, min(per, strips - q), t);
+      for (int k = l; k & 1; k >>= 1) { // the left sibling is on the stack: merge(left, this)
+        --top;
+        merge<ENT>(st[top], cur);
+        cur = st[top];
+      }
+      st[top++] = cur;
+    }
+    p = st[top - 1];
+    for (int k = top - 2; k >= 0; --k) { // a short block: unpaired nodes move up to their left neighbour
+      merge<ENT>(st[k], p);
+      p = st[k];
+    }
+    pm[i] = p.m;
+    ps[i] = p.s;
+    if constexpr (ENT)
+      pa[i] = p.a;
+  }
+  for (int step = 1; step < LANES; step *= 2) {
+    __syncthreads();
+    if (i % (2 * step) == 0 && i + step < nblk) {
+      merge<ENT>(p, Part{pm[i + step], ps[i + step], ENT ? pa[i + step] : 0.f});
+      pm[i] = p.m;
+      ps[i] = p.s;
+      if constexpr (ENT)
+        pa[i] = p.a;
+    }
+  }
+  if (i == 0) {
+    if constexpr (ENT)
+      aout[int64_t(row) * gl + g] = p.a;
     if constexpr (PACKED) {
-      mout[int64_t(row) * 2 * G + g] = M;
-      mout[int64_t(row) * 2 * G + G + g] = S;
+      mout[int64_t(row) * 2 * G + g] = p.m;
+      mout[int64_t(row) * 2 * G + G + g] = p.s;
     } else {
-      mout[int64_t(row) * gl + g] = M;
-      sout[int64_t(row) * gl + g] = S;
+      mout[int64_t(row) * gl + g] = p.m;
+      sout[int64_t(row) * gl + g] = p.s;
     }
   }
 }
@@ -135,53 +180,51 @@ __device__ __forceinline__ void leaf_state_body(const T *__restrict__ x, int64_t
 template <class T, bool TEMP>
 __global__ __launch_bounds__(LANES) void leaf_state(const T *__restrict__ x, int64_t stride, int L,
                                                     float *__restrict__ mout, float *__restrict__ sout,
-                                                    int gl, const float *__restrict__ temp) {
-  leaf_state_body<T, TEMP, false>(x, stride, L, mout, sout, gl, temp);
+                                                    int gl, const float *__restrict__ temp, int B) {
+  leaf_state_body<T, TEMP, false>(x, stride, L, mout, sout, gl, temp, B);
 }
 
 template <class T, bool TEMP>
 __global__ __launch_bounds__(LANES) void leaf_state_ent(const T *__restrict__ x, int64_t stride, int L,
                                                         float *__restrict__ mout, float *__restrict__ sout,
                                                         float *__restrict__ aout, int gl,
-                                                        const float *__restrict__ temp) {
-  leaf_state_body<T, TEMP, false, true>(x, stride, L, mout, sout, gl, temp, aout);
+                                                        const float *__restrict__ temp, int B) {
+  leaf_state_body<T, TEMP, false, true>(x, stride, L, mout, sout, gl, temp, B, aout);
 }
 
 template <class T, bool TEMP>
 __global__ __launch_bounds__(LANES) void leaf_state_split(const T *__restrict__ x, int64_t stride, int L,
                                                           float *__restrict__ leaves,
-                                                          const float *__restrict__ temp) {
-  leaf_state_body<T, TEMP, true>(x, stride, L, leaves, nullptr, G, temp);
+                                                          const float *__restrict__ temp, int B) {
+  leaf_state_body<T, TEMP, true>(x, stride, L, leaves, nullptr, G, temp, B);
 }
 
-// The row merge (shared by merge_rows and the fused full-row write so both evaluate one expression).
-__device__ __forceinline__ void merge_leaves(const float *mg, const float *sg, float &Mout, double &lsout) {
-  float M = NINF;
+// The row's partial from its G shard partials: the adjacent tree with the same merge, lower shard on
+// the left. (Shared by merge_rows, entropy_rows and the fused full-row write: one expression.)
+template <bool ENT>
+__device__ __forceinline__ Part row_root(const float *mg, const float *sg, const float *ag) {
+  Part w[G];
 #pragma unroll
   for (int g = 0; g < G; ++g)
-    M = mg[g] > M ? mg[g] : M;
-  double w[G];
-#pragma unroll
-  for (int g = 0; g < G; ++g) {
-    if (mg[g] == NINF)
-      w[g] = sg[g] == 0.f ? 0.0 : double(__builtin_nan(""));
-    else
-      w[g] = double(sg[g]) * exp(double(mg[g]) - double(M));
-  }
+    w[g] = Part{mg[g], sg[g], ENT ? ag[g] : 0.f};
 #pragma unroll
   for (int step = 1; step < G; step *= 2)
 #pragma unroll
     for (int g = 0; g + step < G; g += 2 * step)
-      w[g] = w[g] + w[g + step];
-  Mout = M;
-  lsout = M == NINF ? double(__builtin_nan("")) : log(w[0]);
+      merge<ENT>(w[g], w[g + step]);
+  return w[0];
 }
 
-// Row merge over the G leaves: w_g = double(S_g) * exp(double(M_g) - double(M)) (absent leaf, i.e.
-// M_g == -inf and S_g == +0: +0; M_g == -inf with NaN S_g: NaN), balanced tree with lower leaves on the
-// left, logS = log(w) in double (NaN when M == -inf). Published per row: M, L32 = RN32(logS) and, for
-// the backward, lse = M + logS (double). Sampled logprob = (v_t - M) - L32 in fp32: the expression the
-// full-row write evaluates at that column.
+// (M, log S): logS = log(double(S)) (NaN when M == -inf: no finite column).
+__device__ __forceinline__ void merge_leaves(const float *mg, const float *sg, float &Mout, double &lsout) {
+  Part r = row_root<false>(mg, sg, nullptr);
+  Mout = r.m;
+  lsout = r.m == NINF ? double(__builtin_nan("")) : log(double(r.s));
+}
+
+// Row merge over the G shard partials. Published per row: M, L32 = RN32(logS) and, for the backward,
+// lse = M + logS (double). Sampled logprob = (v_t - M) - L32 in fp32: the expression the full-row write
+// evaluates at that column.
 template <class T, bool TEMP, int SRC>  // SRC: 0 none, 1 gather from x, 2 caller-supplied raw values
 __global__ __launch_bounds__(32) void merge_rows(
     const float *__restrict__ mleaf, const float *__restrict__ sleaf, float *__restrict__ rM,
@@ -216,10 +259,8 @@ __global__ __launch_bounds__(32) void merge_rows(
   }
 }
 
-// Row entropy over the G leaves (a metric, not part of the scoring contract; deterministic and TP
-// invariant because the leaves are fixed vocabulary slices merged in a fixed order). In double:
-// e_g = exp(M_g - M), S = tree(S_g * e_g), A = tree(e_g * (A_g + S_g * (M_g - M))), H = log(S) - A / S,
-// with the balanced lower-left tree merge_leaves uses. Absent leaves (M_g == -inf, S_g == +0) add 0.
+// Row entropy (a metric, not part of the scoring contract; deterministic and TP invariant because it
+// is the same tree over the same shards): H = log(S) - A / S in double from the row's (M, S, A).
 __global__ __launch_bounds__(32) void entropy_rows(const float *__restrict__ mleaf,
                                                    const float *__restrict__ sleaf,
                                                    const float *__restrict__ aleaf,
@@ -227,32 +268,8 @@ __global__ __launch_bounds__(32) void entropy_rows(const float *__restrict__ mle
   int row = blockIdx.x * 32 + threadIdx.x;
   if (row >= rows)
     return;
-  const float *mg = mleaf + int64_t(row) * G, *sg = sleaf + int64_t(row) * G, *ag = aleaf + int64_t(row) * G;
-  float M = NINF;
-#pragma unroll
-  for (int g = 0; g < G; ++g)
-    M = mg[g] > M ? mg[g] : M;
-  double w[G], u[G];
-#pragma unroll
-  for (int g = 0; g < G; ++g) {
-    if (mg[g] == NINF) {
-      w[g] = sg[g] == 0.f ? 0.0 : double(__builtin_nan(""));
-      u[g] = w[g];
-    } else {
-      double d = double(mg[g]) - double(M);
-      double e = exp(d);
-      w[g] = double(sg[g]) * e;
-      u[g] = e * (double(ag[g]) + double(sg[g]) * d);
-    }
-  }
-#pragma unroll
-  for (int step = 1; step < G; step *= 2)
-#pragma unroll
-    for (int g = 0; g + step < G; g += 2 * step) {
-      w[g] = w[g] + w[g + step];
-      u[g] = u[g] + u[g + step];
-    }
-  ent[row] = M == NINF ? __builtin_nanf("") : float(log(w[0]) - u[0] / w[0]);
+  Part r = row_root<true>(mleaf + int64_t(row) * G, sleaf + int64_t(row) * G, aleaf + int64_t(row) * G);
+  ent[row] = r.m == NINF ? __builtin_nanf("") : float(log(double(r.s)) - double(r.a) / double(r.s));
 }
 
 // Full row write: out = (v - M) - L32 (fp32). Elementwise, so the thread layout is free.
@@ -351,6 +368,9 @@ __global__ __launch_bounds__(256) void grad_rows(TO *__restrict__ dx, int64_t ds
 
 using namespace logprobs_sm100;
 
+// (segment length S, vocabulary shards d_max) this extension was compiled with.
+std::tuple<int, int> schedule_cuda() { return {SEG, G}; }
+
 namespace {
 
 void check_rows(const at::Tensor &x) {
@@ -358,6 +378,16 @@ void check_rows(const at::Tensor &x) {
   TORCH_CHECK(x.dtype() == at::kFloat || x.dtype() == at::kBFloat16, "logprobs_sm100: fp32/bf16 rows");
   TORCH_CHECK(x.size(0) <= 1 || x.size(1) == 0 || x.stride(1) == 1, "logprobs_sm100: row stride(1) must be 1");
   TORCH_CHECK(uintptr_t(x.data_ptr()) % 16 == 0, "logprobs_sm100: rows must be 16-byte aligned");
+}
+
+// Segments per thread for a shard of L columns: the smallest power of two >= 4 (128 columns a thread, the
+// measured choice) that leaves at most LANES blocks. Execution only.
+int block_segments(int L) {
+  int nseg = (L + SEG - 1) / SEG, B = 4;
+  while ((nseg + B - 1) / B > LANES)
+    B *= 2;
+  TORCH_CHECK(B <= MAXB, "logprobs_sm100: a shard of ", L, " columns is larger than one CTA reduces");
+  return B;
 }
 
 const float *temp_ptr(const c10::optional<at::Tensor> &temperature) {
@@ -370,7 +400,7 @@ const float *temp_ptr(const c10::optional<at::Tensor> &temperature) {
 
 }  // namespace
 
-// Leaf states of the local rows: x [rows, V_local] holds `leaves_local` whole leaves.
+// Shard states of the local rows: x [rows, V_local] holds `leaves_local` whole shards ("leaves" in the API).
 void leaf_states_cuda(const at::Tensor &x, int64_t leaves_local, at::Tensor mleaf, at::Tensor sleaf,
                       const c10::optional<at::Tensor> &temperature, const c10::optional<at::Tensor> &aleaf) {
   check_rows(x);
@@ -391,7 +421,7 @@ void leaf_states_cuda(const at::Tensor &x, int64_t leaves_local, at::Tensor mlea
 #define LEAFE(T, TEMP)                                                                             \
   return leaf_state_ent<T, TEMP><<<grid, LANES, 0, stream>>>(                                      \
       reinterpret_cast<const T *>(x.data_ptr()), x.stride(0), L, mleaf.data_ptr<float>(),          \
-      sleaf.data_ptr<float>(), ap, int(leaves_local), tp);
+      sleaf.data_ptr<float>(), ap, int(leaves_local), tp, block_segments(L));
     if (xbf && tp) LEAFE(bf16, true)
     if (xbf && !tp) LEAFE(bf16, false)
     if (!xbf && tp) LEAFE(float, true)
@@ -401,7 +431,7 @@ void leaf_states_cuda(const at::Tensor &x, int64_t leaves_local, at::Tensor mlea
 #define LEAF(T, TEMP)                                                                              \
   return leaf_state<T, TEMP><<<grid, LANES, 0, stream>>>(                                          \
       reinterpret_cast<const T *>(x.data_ptr()), x.stride(0), L, mleaf.data_ptr<float>(),          \
-      sleaf.data_ptr<float>(), int(leaves_local), tp);
+      sleaf.data_ptr<float>(), int(leaves_local), tp, block_segments(L));
   if (xbf && tp) LEAF(bf16, true)
   if (xbf && !tp) LEAF(bf16, false)
   if (!xbf && tp) LEAF(float, true)
@@ -420,7 +450,7 @@ void merge_rows_cuda(const at::Tensor &mleaf, const at::Tensor &sleaf, at::Tenso
   int rows = mleaf.size(0);
   if (rows == 0)
     return;
-  TORCH_CHECK(mleaf.size(1) == G && sleaf.size(1) == G, "logprobs_sm100: merge needs all G leaves");
+  TORCH_CHECK(mleaf.size(1) == G && sleaf.size(1) == G, "logprobs_sm100: merge needs all G shard partials");
   const float *tp = temp_ptr(temperature);
   int src = sampled.has_value() ? (x.has_value() ? 1 : 2) : 0;
   bool xbf = x.has_value() && x->dtype() == at::kBFloat16;
@@ -476,7 +506,7 @@ at::Tensor full_rows_cuda(const at::Tensor &x, const c10::optional<at::Tensor> &
   auto out = at::empty({rows, V}, fopt);
   if (rows == 0)
     return out;
-  TORCH_CHECK(V % (G * STRIP) == 0, "logprobs_sm100: vocab must be a multiple of 64");
+  TORCH_CHECK(V % (G * STRIP) == 0, "logprobs_sm100: vocab must be whole 8-column strips per shard");
   int L = V / G;
   auto leaves = at::empty({rows, 2 * G}, fopt);  // [M_0..M_7, S_0..S_7] per row
   const float *tp = temp_ptr(temperature);
@@ -486,7 +516,7 @@ at::Tensor full_rows_cuda(const at::Tensor &x, const c10::optional<at::Tensor> &
 #define FULL(T, TEMP)                                                                                \
   {                                                                                                  \
     leaf_state_split<T, TEMP><<<dim3(rows, G), LANES, 0, stream>>>(                                  \
-        reinterpret_cast<const T *>(x.data_ptr()), x.stride(0), L, lp, tp);                          \
+        reinterpret_cast<const T *>(x.data_ptr()), x.stride(0), L, lp, tp, block_segments(L));       \
     merge_write_rows<T, TEMP><<<dim3(rows, G), 256, 0, stream>>>(                                    \
         out.data_ptr<float>(), out.stride(0), reinterpret_cast<const T *>(x.data_ptr()), x.stride(0),\
         L, lp, tp);                                                                                  \

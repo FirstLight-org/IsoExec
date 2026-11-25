@@ -8,21 +8,17 @@ from isoexec.ops.table import OpTable
 
 
 def test_bound_scoring_recipe_refuses_a_later_process_pin_change(monkeypatch):
+    """The binding still refuses to run under a pin other than the one it was placed for. Only one recipe is
+    declared now, so the changed pin is simulated."""
     from isoexec.ops.logprobs.logprobs_sm100 import ops
 
     monkeypatch.setattr(_dispatch, "ARCH", "sm100")
-    original = ops.RECIPE
-    try:
-        ops.select_recipe(1)
-        bound = OpTable().bind("logprobs.log_softmax", site="model.score")
-        assert bound.impl == ops.impl_id(1)
-        ops.select_recipe(2)
-        with pytest.raises(RuntimeError, match="recipe changed after placement"):
-            bound.fn(torch.empty(1), None, 1.0)
-        fresh = OpTable().bind("logprobs.log_softmax", site="model.score2")
-        assert fresh.impl == ops.impl_id(2)
-    finally:
-        ops.select_recipe(original)
+    bound = OpTable().bind("logprobs.log_softmax", site="model.score")
+    assert bound.impl == ops.impl_id(ops.RECIPE_VERSION)
+    monkeypatch.setitem(ops.IMPL_BY_RECIPE, ops.RECIPE_VERSION + 1, "sm100_some_later_recipe")
+    monkeypatch.setattr(ops, "RECIPE", ops.RECIPE_VERSION + 1)
+    with pytest.raises(RuntimeError, match="recipe changed after placement"):
+        bound.fn(torch.empty(1), None, 1.0)
 
 
 def test_sm100_head_preserves_native_bf16_gemm_rounding(monkeypatch):

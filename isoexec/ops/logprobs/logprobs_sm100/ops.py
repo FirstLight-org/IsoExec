@@ -6,27 +6,23 @@ import torch
 import torch.distributed as dist
 
 from isoexec.ops.logprobs.logprobs_sm100._extension import extension
-from isoexec.ops.logprobs.logprobs_sm100._extension_v2 import extension as extension_v2
 from isoexec.ops.logprobs.logprobs_sm100.spec import (  # noqa: F401  (re-exported here)
-    DEFAULT_RECIPE_BY_CLASS,
     IMPL_BY_RECIPE,
     LEAVES,
     RECIPE_VERSION,
-    RECIPE_VERSION_V2,
     STRIP,
 )
 
 _FLOATS = (torch.float32, torch.bfloat16)
 
-_EXTENSIONS = {RECIPE_VERSION: extension, RECIPE_VERSION_V2: extension_v2}
+_EXTENSIONS = {RECIPE_VERSION: extension}
 
 RECIPE: int = RECIPE_VERSION
 
 
 def default_recipe(dtype, vocab: int) -> int:
-    """The measured default for one deployment class, or v1 for a class v2 was never measured on."""
-    name = {torch.bfloat16: "bf16", torch.float32: "fp32"}.get(dtype, dtype)
-    return DEFAULT_RECIPE_BY_CLASS.get((name, int(vocab)), RECIPE_VERSION)
+    """The recipe of a deployment class: one schedule serves every (dtype, vocabulary)."""
+    return RECIPE_VERSION
 
 
 def select_recipe(recipe: int | None = None, *, dtype=None, vocab: int | None = None) -> int:
@@ -115,7 +111,8 @@ def full_logprobs(logits: torch.Tensor, *, temperature=None, out: torch.Tensor |
 
 def leaf_states(logits: torch.Tensor, leaves_local: int = LEAVES, *, temperature=None,
                 recipe: int | None = None):
-    """``(M_g, S_g)`` fp32 ``[rows, leaves_local]`` for a row block holding ``leaves_local`` whole leaves."""
+    """``(M_g, S_g)`` fp32 ``[rows, leaves_local]``: the partials of the ``leaves_local`` whole vocabulary shards
+    a row block holds (``schedule.py``)."""
     _check(logits)
     x = _rows(logits)
     rows = x.shape[0]

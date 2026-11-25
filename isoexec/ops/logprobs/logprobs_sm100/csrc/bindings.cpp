@@ -15,7 +15,10 @@ at::Tensor full_rows_cuda(const at::Tensor &x, const c10::optional<at::Tensor> &
 void grad_rows_cuda(at::Tensor dx, const at::Tensor &x, const at::Tensor &lse, const at::Tensor &gout,
                     const at::Tensor &local_target, int64_t leaves_local);
 
+std::tuple<int, int> schedule_cuda();
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("schedule", &schedule_cuda);
   m.def("leaf_states", &leaf_states_cuda, py::arg("x"), py::arg("leaves_local"), py::arg("mleaf"), py::arg("sleaf"),
         py::arg("temperature"), py::arg("aleaf") = py::none());
   m.def("entropy_rows", &entropy_rows_cuda);
