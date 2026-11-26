@@ -19,10 +19,17 @@ class _MmFn(torch.autograd.Function):
     """Use the installed trainer GEMM for forward and matching deterministic gradient operations."""
 
     @staticmethod
-    def forward(ctx, x, w):
+    def setup_context_for_backward(ctx, x, w):
+        """Leave ``ctx`` as :meth:`backward` reads it: saved ``(x, w)``, the gradient-accumulation sink
+        ``wsink`` and the TP link ``tp_link``. Every subclass ``forward`` (one per GEMM provider) calls it
+        on the operands the backward differentiates against, before any provider-specific padding."""
         ctx.save_for_backward(x, w)
         ctx.wsink = fusable(w) if w.requires_grad else None
         ctx.tp_link = _consume_tp_link(x)
+
+    @staticmethod
+    def forward(ctx, x, w):
+        _MmFn.setup_context_for_backward(ctx, x, w)
         return _mm().matmul_persistent(x, w.t())
 
     @staticmethod
@@ -70,9 +77,7 @@ def _vendored_kernel():
 class _VendoredMmFn(_MmFn):
     @staticmethod
     def forward(ctx, x, w):
-        ctx.save_for_backward(x, w)
-        ctx.wsink = fusable(w) if w.requires_grad else None
-        ctx.tp_link = _consume_tp_link(x)
+        _MmFn.setup_context_for_backward(ctx, x, w)
         return _vendored_kernel()(x, w.t())
 
 
