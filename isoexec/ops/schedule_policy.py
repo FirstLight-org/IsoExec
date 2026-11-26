@@ -1,4 +1,4 @@
-"""The numerical-schedule policy (design version 7.2): three rules, no tables.
+"""The numerical-schedule policy (design version 7.3): three rules, no tables.
 
 Canonical copy: project-x/policy_validation/port/schedule_policy.py. It is installed unchanged as
 isoexec/ops/schedule_policy.py; kernels take every segment count and segment length from here.
@@ -14,23 +14,25 @@ by d_max), with exact block b:
   rule 1  reducer has no merge (recurrence, sparse-attention tile):  segments of b, one continued chain
   rule 2  sum over data-selected coordinates:                        one segment per coordinate, chain
   rule 3  otherwise G equal segments per shard, adjacent tree inside the shard, then over the d_max shards:
-              G = pow2floor(min(p, cap, n // L)), at least 1
+              G = pow2floor(min(p, max_segments, n // min_segment)), at least 1
               S = b * ceil(n / (b * G))
 
-L, cap and the occupancy behind p are the policy's cost parameters for a reducer, measured on a GPU
-generation: L is the shortest segment worth a partial result of its own, p the workers free for the segments
-of one output. A reducer without them (L absent) gets G = 1: one segment per shard. So does a deployment that
+min_segment, max_segments and the occupancy behind p are the policy's cost parameters for a reducer, measured
+on a GPU generation: min_segment is the shortest segment worth a partial result of its own, max_segments the
+most partial results the kernel holds for one output, p the workers free for the segments of one output. A
+reducer without them (min_segment absent) gets G = 1: one segment per shard. So does a deployment that
 declares no target batch (p absent): it is scheduled for throughput, where the outputs of a batch already
 fill the device.
 
-7.2 against 7.1: the form "L without occupancy gives S = L" is gone. The scalar sums that used it (the sum of
-squares of a norm, the log-sum-exp of the output) are one segment per shard; their interleaved lanes are the
-reducer's own DAG. The smallest batch is now an optional target batch.
+7.2 against 7.1: the form "a shortest segment without occupancy gives S = that length" is gone. The scalar
+sums that used it (the sum of squares of a norm, the log-sum-exp of the output) are one segment per shard;
+their interleaved lanes are the reducer's own DAG. The smallest batch is now an optional target batch.
+7.3 against 7.2: names only (L is min_segment, cap is max_segments); every schedule is unchanged.
 """
 from dataclasses import dataclass
 from typing import Optional
 
-VERSION = "7.2"
+VERSION = "7.3"
 
 
 def pow2floor(x: int) -> int:
@@ -63,14 +65,15 @@ def selected() -> Segments:                             # rule 2
     return Segments(1, None, "chain")
 
 
-def reduce(n: int, b: int = 1, L: Optional[int] = None, p: Optional[int] = None,
-           cap: Optional[int] = None) -> Segments:      # rule 3
+def reduce(n: int, b: int = 1, min_segment: Optional[int] = None, p: Optional[int] = None,
+           max_segments: Optional[int] = None) -> Segments:      # rule 3
     if n < 1 or b < 1:
         raise ValueError(f"n = {n}, b = {b}")
     G = 1
-    if L is not None:
-        if L < 1 or L % b:
-            raise ValueError(f"L = {L} is not whole blocks of {b}")
+    if min_segment is not None:
+        if min_segment < 1 or min_segment % b:
+            raise ValueError(f"min_segment = {min_segment} is not whole blocks of {b}")
         if p is not None:
-            G = pow2floor(max(1, min(p, n // L) if cap is None else min(p, cap, n // L)))
+            G = min(p, n // min_segment)
+            G = pow2floor(max(1, G if max_segments is None else min(G, max_segments)))
     return Segments(b * -(-n // (b * G)), G, "tree")

@@ -69,7 +69,7 @@ A row with border `B` is made of `n = ceil(B / SEG)` segments
 ```
 
 `SEG` is **fixed** and is the output of the schedule policy (`isoexec/ops/schedule_policy.py`, design
-version 7.2, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
+version 7.3, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
 length, KV length, chunk boundary, split count, grid or SM count.
 
 ```

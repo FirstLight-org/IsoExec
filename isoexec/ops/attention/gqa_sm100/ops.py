@@ -4,7 +4,7 @@ autograd core the trainer binds.
 The forward's numerical program is stated in README.md. Two things in this module are part of the
 op's identity and nothing else is:
 
-* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.2, rule 3) applied to the
+* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.3, rule 3) applied to the
   policy's cost parameters for this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
   :func:`occupancy`) and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
   recipe version bump.
@@ -61,11 +61,11 @@ LEAF_AUTO, LEAF_GENERAL, LEAF_DECODE = 0, 1, 2
 #: to ``DECODE_ROWS / ratio`` tokens per request.
 DECODE_ROWS = 16
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.2, rule 3; measured) -------
+# --- the policy's cost parameters for the softmax reducer (design version 7.3, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table.
 
-#: L_r, the shortest segment worth a fresh start, in keys. Measured:
+#: min_segment, the shortest segment worth a fresh start, in keys. Measured:
 #: policy_validation/gqa_sm100/sweep_roundd.json (256 equal, 128 slower by 1.2-2.3x at batch 1-2).
 SOFTMAX_SHORTEST_SEGMENT = 512
 
@@ -113,8 +113,8 @@ def schedule_for(head_dim: int, max_context: int, *, target_batch: int | None | 
     kv_heads = spec.MODEL_KV_HEADS if kv_heads is None else kv_heads
     occupied = None if target_batch is None else occupancy(head_dim, kv_heads, target_batch)
     p = schedule_policy.workers(DEVICE_SMS, occupied)
-    return schedule_policy.reduce(int(max_context), b=KEY_TILE, L=SOFTMAX_SHORTEST_SEGMENT, p=p,
-                                  cap=SOFTMAX_SEGMENT_CAP)
+    return schedule_policy.reduce(int(max_context), b=KEY_TILE, min_segment=SOFTMAX_SHORTEST_SEGMENT, p=p,
+                                  max_segments=SOFTMAX_SEGMENT_CAP)
 
 
 def seg_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
