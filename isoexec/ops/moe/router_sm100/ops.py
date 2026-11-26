@@ -289,7 +289,7 @@ __all__ = ["GROUPED", "LOGITS_REDUCER_BLOCK", "LOGITS_REDUCER_SHORTEST", "RENORM
 #: the token-segment length of dW's fixed segment tree (moe_fp8_sm100/SPEC.md §8.3's SEG_T): a
 #: deployment-fixed constant published per (op, shape) -- here a function of E only, never of T.
 #: Measured (README "Backward"): 512 wins at E = 64 (shorter chains, more CTAs), 1024 at E >= 256.
-#: The backward runs only in the trainer and is not scheduled by the policy (design 7.3: the policy covers the
+#: The backward runs only in the trainer and is not scheduled by the policy (design 7.4: the policy covers the
 #: forward pass). dW's sum over the tokens that selected an expert keeps this kernel's own fixed order:
 #: segments of exactly ``seg_t_for(E)`` tokens counted from token 0, the last one short, merged by a tree.
 SEG_T = 1024

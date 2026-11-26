@@ -1,6 +1,6 @@
 """CPU: the kernel's schedule parameters are the schedule policy's output on the deployed shapes.
 
-``isoexec.ops.schedule_policy`` (design version 7.3) is the one place a segment count or length comes
+``isoexec.ops.schedule_policy`` (design version 7.4) is the one place a segment count or length comes
 from. This module fails when
 
 * ``ops.segment_span`` (the span every call site hands the kernel) differs from rule 3 recomputed here
@@ -76,7 +76,7 @@ def declare(monkeypatch):
 
 
 def test_the_policy_module_is_version_7_2():
-    assert schedule_policy.VERSION == "7.3"
+    assert schedule_policy.VERSION == "7.4"
     assert schedule_policy.workers(ops.DEVICE_SMS) == schedule_policy.workers(ops.DEVICE_SMS, None) == 1
 
 
@@ -193,7 +193,7 @@ def test_two_parties_with_different_target_batches_refuse_to_start(declare):
 
     declare(None)
     trainer = json.loads(json.dumps(target_batch.schedule_record()))     # as it crosses the acknowledgement file
-    assert trainer["policy"] == "7.3" and trainer["gqa_sm100"]["target_batch"] is None
+    assert trainer["policy"] == "7.4" and trainer["gqa_sm100"]["target_batch"] is None
     assert trainer["gqa_sm100"]["seg_tokens"] == {"128": 10240, "256": 10240}
     target_batch.require_same_schedule(trainer, json.loads(json.dumps(target_batch.schedule_record())), who="engine")
     for batch, field in ((16, "gqa_sm100.seg_tokens.128"), (1, "gqa_sm100.seg_tokens.128"),

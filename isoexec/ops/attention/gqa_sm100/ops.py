@@ -4,7 +4,7 @@ autograd core the trainer binds.
 The forward's numerical program is stated in README.md. Two things in this module are part of the
 op's identity and nothing else is:
 
-* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.3, rule 3) applied to the
+* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.4, rule 3) applied to the
   policy's cost parameters for this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
   :func:`occupancy`) and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
   recipe version bump.
@@ -61,7 +61,7 @@ LEAF_AUTO, LEAF_GENERAL, LEAF_DECODE = 0, 1, 2
 #: to ``DECODE_ROWS / ratio`` tokens per request.
 DECODE_ROWS = 16
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.3, rule 3; measured) -------
+# --- the policy's cost parameters for the softmax reducer (design version 7.4, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table.
 

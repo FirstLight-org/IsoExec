@@ -1,12 +1,13 @@
-"""The numerical-schedule policy (design version 7.3): three rules, no tables.
+"""The numerical-schedule policy (design version 7.4): three rules, no tables.
 
 Canonical copy: project-x/policy_validation/port/schedule_policy.py. It is installed unchanged as
 isoexec/ops/schedule_policy.py; kernels take every segment count and segment length from here.
 Mirrors alloy_new/policy.py; the port's CPU test compares the two on every deployed shape.
 
 A reducer is the fixed way one segment is reduced: a DAG over the segment's terms that depends only on their
-positions inside the segment (a chain of blocks, interleaved lanes, an MMA accumulation). The policy never
-looks inside it. It decides only how a reduction is cut into segments and how the segments merge.
+positions inside the segment (a chain of blocks, interleaved lanes, an MMA accumulation). The policy decides
+how a reduction is cut into segments, how the segments merge, and whether a segment is reduced sequentially
+or on interleaved lanes.
 
 For one reduction over n positions of a shard (n = axis length, capacity or declared longest length, divided
 by d_max), with exact block b:
@@ -17,8 +18,13 @@ by d_max), with exact block b:
               G = pow2floor(min(p, max_segments, n // min_segment)), at least 1
               S = b * ceil(n / (b * G))
 
-min_segment, max_segments and the occupancy behind p are the policy's cost parameters for a reducer, measured
-on a GPU generation: min_segment is the shortest segment worth a partial result of its own, max_segments the
+Lanes: a reducer that steps one term on one thread gets as many lanes as the threads it has for one output
+(lane l of L takes the terms l, l + L, ...: neighbouring threads read neighbouring terms). A reducer that
+steps a whole block with one instruction of all its threads, and a reducer without a merge, are sequential
+(L = 1). Lanes stay inside a segment, so they are independent of the three rules.
+
+min_segment, max_segments, the occupancy behind p and the threads behind L are the hardware specifications
+of a reducer on a GPU generation: min_segment is the shortest segment worth a partial result of its own, max_segments the
 most partial results the kernel holds for one output, p the workers free for the segments of one output. A
 reducer without them (min_segment absent) gets G = 1: one segment per shard. So does a deployment that
 declares no target batch (p absent): it is scheduled for throughput, where the outputs of a batch already
@@ -28,11 +34,12 @@ fill the device.
 sums that used it (the sum of squares of a norm, the log-sum-exp of the output) are one segment per shard;
 their interleaved lanes are the reducer's own DAG. The smallest batch is now an optional target batch.
 7.3 against 7.2: names only (L is min_segment, cap is max_segments); every schedule is unchanged.
+7.4 against 7.3: lanes() is added; every schedule is unchanged.
 """
 from dataclasses import dataclass
 from typing import Optional
 
-VERSION = "7.3"
+VERSION = "7.4"
 
 
 def pow2floor(x: int) -> int:
@@ -48,6 +55,18 @@ def workers(sms: int, occupancy: Optional[int] = None) -> int:
     if occupancy < 1:
         raise ValueError(f"occupancy {occupancy}")
     return max(1, sms // occupancy)
+
+
+def lanes(threads: Optional[int] = None) -> int:
+    """L for one segment: the number of interleaved lanes. threads is the number of threads the reducer has for
+    one output when it steps one term on one thread; None for a reducer that steps a block with one instruction
+    of all its threads or that has no merge, which is sequential (L = 1). A reducer whose lanes must be equal
+    runs the largest count up to L that its segment admits."""
+    if threads is None:
+        return 1
+    if threads < 1:
+        raise ValueError(f"threads {threads}")
+    return threads
 
 
 @dataclass(frozen=True)

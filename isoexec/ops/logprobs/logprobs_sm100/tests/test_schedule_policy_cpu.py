@@ -31,7 +31,7 @@ def _const(text: str, name: str) -> int:
 
 
 def test_policy_version():
-    assert policy.VERSION == "7.3"
+    assert policy.VERSION == "7.4"
 
 
 @pytest.mark.parametrize("vocab", VOCABS)
@@ -70,6 +70,14 @@ def test_the_lane_count_equals_the_kernels_constants(version):
     assert text.count("<<<grid, LANES, 0, stream>>>") == 2
     assert "leaf_state_split<T, TEMP><<<dim3(rows, G), LANES, 0, stream>>>" in text and "int L = V / G;" in text
     assert "__launch_bounds__(LANES) void leaf_state(" in text
+
+
+def test_the_lane_count_is_the_policys_and_is_256_at_every_vocabulary():
+    """[7.4] L = ``policy.lanes(THREADS)``, THREADS = 256 (eight warps): 256, as before, on every segment."""
+    assert schedule.THREADS == 256 and schedule.LANES == policy.lanes(schedule.THREADS) == policy.lanes(256) == 256
+    for vocab in VOCABS:
+        s = schedule.segment(vocab).S
+        assert all(red.lanes(s) == 256 for red in schedule.REDUCERS.values()), vocab
 
 
 @pytest.mark.parametrize("version", (1, 2))

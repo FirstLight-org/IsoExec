@@ -1,4 +1,4 @@
-"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy (design 7.3).
+"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy (design 7.4).
 
 Nothing here is on a call path: the kernels (``csrc/logprobs.cu``, ``csrc/logprobs_v2.cu``) are the tree's own
 and read nothing from this module. It states their schedule as data, and ``tests/test_schedule_policy_cpu.py``
@@ -7,13 +7,14 @@ fails if the kernels' constants or the recipe table stop agreeing with it.
 The reduction: one row's ``log sum_v exp(x[v])`` over the vocabulary axis. The vocabulary is the axis TP shards:
 a rank of a world of ``w`` holds ``V / w`` contiguous columns, and ``w`` must divide 8 (``ops.py::supports``),
 so ``d_max = 8`` and the 8 "leaves" of the kernels are the 8 shards at ``d_max`` (a rank at ``w < 8`` computes
-its ``8 / w`` leaves separately). The reducers publish no cost parameter, so rule 3 of
+its ``8 / w`` leaves separately). The segment rule has no hardware specification here, so rule 3 of
 :mod:`isoexec.ops.schedule_policy` gives ONE segment per shard: ``n = V / 8``, ``G = 1``, ``S = V / 8``, and the
-shards combine by an adjacent tree. Everything below the segment is the reducer's own fixed DAG, which depends
-only on a term's position inside the segment:
+shards combine by an adjacent tree. The lane count comes from ``policy.lanes``: a lane steps one strip on one
+thread, and the kernels have 256 threads (eight warps) for one row, so ``L = policy.lanes(256)``. Everything
+below the segment is the reducer's own fixed DAG, which depends only on a term's position inside the segment:
 
     strip        8 consecutive columns (one 16-byte load)
-    lanes        256, whatever the segment length; a lane l >= S / 8 has no strip
+    lanes        L = policy.lanes(THREADS) = 256, whatever the segment length; a lane l >= S / 8 has no strip
     membership   lane l owns strips l, l + 256, l + 512, ... : columns 8 * (l + 256 i) + j, j = 0..7
     lane order   strip ascending, then column ascending; fp32
     v2 (two passes)   M = the segment's exact max (fmaxf; NaN never wins); F = M, or +0 when M == -inf;
@@ -45,8 +46,10 @@ from isoexec.ops import schedule_policy as policy
 VOCAB_SHARDS = 8
 #: Columns per strip.
 STRIP = 8
-#: Lanes per segment.
-LANES = 256
+#: Threads for one row (eight warps); a lane steps one strip on one thread.
+THREADS = 256
+#: Lanes per segment: the policy's lane count for :data:`THREADS`.
+LANES = policy.lanes(THREADS)
 
 
 @dataclass(frozen=True)
@@ -108,7 +111,7 @@ def supported(vocab: int) -> bool:
 
 
 def segment(vocab: int) -> policy.Segments:
-    """Rule 3 with no cost parameter: one segment per shard of the vocabulary axis at ``d_max``."""
+    """Rule 3 with no hardware specification: one segment per shard of the vocabulary axis at ``d_max``."""
     if not supported(vocab):
         raise ValueError(f"logprobs_sm100: vocabulary {vocab} is not a multiple of {VOCAB_SHARDS * STRIP}")
     return policy.reduce(vocab // VOCAB_SHARDS)
@@ -124,5 +127,5 @@ def shard_tree(shards: int = VOCAB_SHARDS) -> tuple[tuple[tuple[int, int], ...],
     return tuple(levels)
 
 
-__all__ = ["BINDING", "DEFAULT_VERSION", "LANES", "LaneReducer", "REDUCERS", "STRIP", "V1", "V2", "VOCAB_SHARDS",
-           "reducer", "segment", "shard_tree", "supported"]
+__all__ = ["BINDING", "DEFAULT_VERSION", "LANES", "LaneReducer", "REDUCERS", "STRIP", "THREADS", "V1", "V2",
+           "VOCAB_SHARDS", "reducer", "segment", "shard_tree", "supported"]

@@ -62,7 +62,7 @@ EXEC_OVERRIDE_VARIANTS = [
 MAX_TREE_LEAVES = 1024
 EMPTY_LSE = float(torch.tensor(-1e30, dtype=torch.float32) / torch.tensor(1.4426950408889634, dtype=torch.float32))
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.3, rule 3; measured) -------
+# --- the policy's cost parameters for the softmax reducer (design version 7.4, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table. This reducer has no cap.
 

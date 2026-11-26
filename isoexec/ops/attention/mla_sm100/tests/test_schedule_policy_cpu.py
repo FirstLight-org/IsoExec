@@ -1,6 +1,6 @@
 """CPU: the kernel's schedule parameters are the schedule policy's output on the deployed shapes.
 
-``isoexec.ops.schedule_policy`` (design version 7.3) is the one place a segment count or length comes
+``isoexec.ops.schedule_policy`` (design version 7.4) is the one place a segment count or length comes
 from. This module fails when
 
 * ``fwd.segment_span`` (the span the trainer adapter and the SM100 resolution admit) differs from rule 3
@@ -55,7 +55,7 @@ def declare(monkeypatch):
 
 
 def test_the_policy_module_is_version_7_2():
-    assert schedule_policy.VERSION == "7.3"
+    assert schedule_policy.VERSION == "7.4"
     assert schedule_policy.workers(fwd.DEVICE_SMS) == schedule_policy.workers(fwd.DEVICE_SMS, None) == 1
 
 

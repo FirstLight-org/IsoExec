@@ -48,7 +48,7 @@ PAGE = 64
 #: CTA with the accumulator in TMEM, latent-tile multicast, two-CTA NOT a decode lever) and must not
 #: change what is evaluated.
 
-# --- declarations the schedule policy reads (design version 7.3; fwd.schedule_for) --------------------
+# --- declarations the schedule policy reads (design version 7.4; fwd.schedule_for) --------------------
 # Fixed when the schedule is bound, not per-call inputs, so the trainer and every engine read the same
 # segment span whatever their own batch, length or tensor-parallel degree. No model or deployment config
 # of this tree states the longest context or the head count for MLA (no model of the tree runs MLA), so

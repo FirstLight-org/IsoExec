@@ -92,7 +92,7 @@ def _instantiated(macro: str) -> set[tuple[int, int]]:
 
 
 def test_policy_version():
-    assert policy.VERSION == "7.3"
+    assert policy.VERSION == "7.4"
 
 
 @pytest.mark.parametrize("n", SUPPORTED)
@@ -126,6 +126,21 @@ def test_the_lane_function_equals_the_v2_table_on_every_entry():
         assert (schedule.V2.lanes(n), schedule.V2.visits(n)) == _header_v2(n) == R2.lanes(n), n
         if n not in schedule.V2_SWEPT:
             assert schedule.V2.lanes(n) == schedule.V1.lanes(n), n
+
+
+def test_the_lane_count_is_the_policys_and_every_width_keeps_its_lanes():
+    """[7.4] The most lanes are ``policy.lanes(threads)``: 32 (one warp) for v1, 128 (four warps) for v2 at the swept
+    widths. On every width of :data:`SUPPORTED` the lanes are what they were: the largest power of two <= the 7.3
+    literal cap (32, or 128 at a swept width) that divides n / 8, for both reducers and for the bound one."""
+    assert (schedule.V1.threads, schedule.V1.threads_elsewhere) == (32, 32)
+    assert (schedule.V2.threads, schedule.V2.threads_elsewhere) == (128, 32)
+    assert schedule.V1.cap == schedule.V1.cap_elsewhere == schedule.V2.cap_elsewhere == policy.lanes(32) == 32
+    assert schedule.V2.cap == policy.lanes(128) == 128
+    for n in SUPPORTED:
+        was = {1: schedule.pow2_dividing(n // 8, 32),
+               2: schedule.pow2_dividing(n // 8, 128 if n in schedule.V2_SWEPT else 32)}
+        assert schedule.V1.lanes(n) == was[1] and schedule.V2.lanes(n) == was[2], n
+        assert schedule.lanes(n)[0] == was[schedule.BINDING.get(n, schedule.DEFAULT_VERSION)], n
 
 
 def test_the_binding_is_the_headers():

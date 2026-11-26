@@ -36,7 +36,7 @@ RECIPE = "sm100_gqa_segtree_v2"
 #: unchanged.
 RECIPE_VERSION = 3
 
-# --- declarations the schedule policy reads (design version 7.3; ops.schedule_for) --------------------
+# --- declarations the schedule policy reads (design version 7.4; ops.schedule_for) --------------------
 # Fixed when the schedule is bound, not per-call inputs, so the trainer and every engine read the same
 # segment span whatever their own batch, length or tensor-parallel degree. This tree's deployment config
 # (isoexec.config.IsoExecConfig) carries an engine-only ``max_model_len``, so the longest context and
