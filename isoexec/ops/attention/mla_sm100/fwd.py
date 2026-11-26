@@ -62,11 +62,11 @@ EXEC_OVERRIDE_VARIANTS = [
 MAX_TREE_LEAVES = 1024
 EMPTY_LSE = float(torch.tensor(-1e30, dtype=torch.float32) / torch.tensor(1.4426950408889634, dtype=torch.float32))
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.2, rule 3; measured) -------
+# --- the policy's cost parameters for the softmax reducer (design version 7.3, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table. This reducer has no cap.
 
-#: L_r, the shortest segment worth a fresh start, in keys. Measured:
+#: min_segment, the shortest segment worth a fresh start, in keys. Measured:
 #: policy_validation/mla_sm100/pv_sweep_b.log (64 slower than 256 in every cell; 128 equal only at
 #: batch 1 / 8k), pv_sweep.log.
 SOFTMAX_SHORTEST_SEGMENT = 256
@@ -104,7 +104,7 @@ def schedule_for(max_context: int, *, target_batch: int | None | str = DECLARED,
     model_heads = spec.MODEL_HEADS if model_heads is None else model_heads
     occupied = None if target_batch is None else occupancy(model_heads, target_batch)
     p = schedule_policy.workers(DEVICE_SMS, occupied)
-    return schedule_policy.reduce(int(max_context), b=PAGE, L=SOFTMAX_SHORTEST_SEGMENT, p=p)
+    return schedule_policy.reduce(int(max_context), b=PAGE, min_segment=SOFTMAX_SHORTEST_SEGMENT, p=p)
 
 
 def seg_tokens_for(h_q: int, max_seqlen_k: int, *, target_batch: int | None | str = DECLARED,

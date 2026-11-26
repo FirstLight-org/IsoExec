@@ -1,6 +1,6 @@
 """CPU: the kernel's schedule parameters are the schedule policy's output on the deployed shapes.
 
-``isoexec.ops.schedule_policy`` (design version 7.2) is the one place a segment count or length comes
+``isoexec.ops.schedule_policy`` (design version 7.3) is the one place a segment count or length comes
 from. This module fails when
 
 * ``ops.segment_span`` (the span every call site hands the kernel) differs from rule 3 recomputed here
@@ -76,7 +76,7 @@ def declare(monkeypatch):
 
 
 def test_the_policy_module_is_version_7_2():
-    assert schedule_policy.VERSION == "7.2"
+    assert schedule_policy.VERSION == "7.3"
     assert schedule_policy.workers(ops.DEVICE_SMS) == schedule_policy.workers(ops.DEVICE_SMS, None) == 1
 
 
@@ -128,8 +128,9 @@ def test_the_deployed_span_is_the_policys(label, hq, hk, d, batch, declare):
     got = ops.schedule_for(d, spec.LONGEST_CONTEXT, kv_heads=hk)
     assert (got.G, got.S, got.merge) == (g, s, "tree")
     occupied = None if batch is None else ops.occupancy(d, hk, batch)
-    want = schedule_policy.reduce(spec.LONGEST_CONTEXT, b=ops.KEY_TILE, L=ops.SOFTMAX_SHORTEST_SEGMENT,
-                                  p=schedule_policy.workers(ops.DEVICE_SMS, occupied), cap=ops.SOFTMAX_SEGMENT_CAP)
+    want = schedule_policy.reduce(spec.LONGEST_CONTEXT, b=ops.KEY_TILE, min_segment=ops.SOFTMAX_SHORTEST_SEGMENT,
+                                  p=schedule_policy.workers(ops.DEVICE_SMS, occupied),
+                                  max_segments=ops.SOFTMAX_SEGMENT_CAP)
     assert got == want
     # the span the call sites hand the kernel is the one at the declared model KV heads (spec.MODEL_KV_HEADS)
     deployed = ops.schedule_for(d, spec.LONGEST_CONTEXT)
@@ -153,7 +154,7 @@ def test_every_declaration_follows_rule_3(d, hk):
 
 
 def test_the_policy_at_a_target_batch_of_one_is_the_span_the_table_had():
-    """The removed max-context table was this rule at a target batch of 1 (cap 16 binding)."""
+    """The removed max-context table was this rule at a target batch of 1 (max_segments 16 binding)."""
     for d in (128, 256):
         assert [ops.seg_for(d, n, target_batch=1) for n in (8192, 32768, 131072)] == [512, 2048, 8192]
         assert ops.seg_for(d, 2048, target_batch=1) == 512   # the table had 128: below L, dropped
@@ -192,7 +193,7 @@ def test_two_parties_with_different_target_batches_refuse_to_start(declare):
 
     declare(None)
     trainer = json.loads(json.dumps(target_batch.schedule_record()))     # as it crosses the acknowledgement file
-    assert trainer["policy"] == "7.2" and trainer["gqa_sm100"]["target_batch"] is None
+    assert trainer["policy"] == "7.3" and trainer["gqa_sm100"]["target_batch"] is None
     assert trainer["gqa_sm100"]["seg_tokens"] == {"128": 10240, "256": 10240}
     target_batch.require_same_schedule(trainer, json.loads(json.dumps(target_batch.schedule_record())), who="engine")
     for batch, field in ((16, "gqa_sm100.seg_tokens.128"), (1, "gqa_sm100.seg_tokens.128"),
