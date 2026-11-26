@@ -1,4 +1,4 @@
-"""CPU: the sparse attention's schedule parameters are the schedule policy's output (design 7.1, rule 1).
+"""CPU: the sparse attention's schedule parameters are the schedule policy's output (design 7.2, rule 1).
 
 The tile reducer has no merge, so the policy returns segments of the reducer's block folded by ONE continued chain
 (``schedule_policy.no_merge``); nothing else is a schedule decision of this operator, and the policy is not called on
@@ -19,7 +19,7 @@ ATT = PKG.parent
 
 def test_rule_1_is_blocks_of_64_positions_in_one_continued_chain():
     seg = schedule_policy.no_merge(spec.TILE_SLOTS)
-    assert schedule_policy.VERSION == "7.1"
+    assert schedule_policy.VERSION == "7.2"
     assert (seg.S, seg.G, seg.merge) == (64, None, "continued")
     assert domain.BLOCK == seg.S
 
