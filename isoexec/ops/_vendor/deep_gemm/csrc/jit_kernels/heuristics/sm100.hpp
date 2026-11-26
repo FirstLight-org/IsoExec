@@ -72,6 +72,10 @@ struct SM100ArchSpec {
                 if (desc.m <= 32) block_m_candidates = {32};
                 else if (desc.m <= 64) block_m_candidates = {64};
                 else block_m_candidates = {128};
+                // IsoExec register partials (two epilogue warpgroups) store one 128-row M wave
+                // (sm100_store_cd_leaf_regs asserts STORE_BLOCK_M == 128): block M 128 at every M
+                if (desc.num_leaves > 1 and heuristics_runtime->get_leaf_register_partials())
+                    block_m_candidates = {128};
 
                 // Small block size for small shape
                 if (16 % heuristics_runtime->get_block_n_multiple_of() == 0)

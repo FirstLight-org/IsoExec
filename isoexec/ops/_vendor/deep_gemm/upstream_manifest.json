@@ -159,14 +159,15 @@
    "source": "deep_gemm",
    "upstream_path": "csrc/jit_kernels/heuristics/sm100.hpp",
    "upstream_sha256": "0d658df9eacacbc3648bde7c3ab895ca64eac2618ce8e98791926cee246da6eb",
-   "sha256": "9534e7740bbaab1fececb66064442d5742a54021eb30c788b9c91f14949a66e5",
+   "sha256": "6adfb341f189f50922e9ed5f7d62fae22af80d828ac3349e7e93fe2601a2df33",
    "modified": true,
    "modifications": [
     "Leaf-tree GEMMs: non-swapped layouts only, one accumulator per leaf must fit tensor memory.",
     "IsoExec progressive leaf fold: leaf-tree layouts need (2 + log2(L/2)) x UMMA_N tensor-memory columns instead of L x UMMA_N.",
     "IsoExec leaf trees: an explicit block-N multiple steps by 16 (wave-filling widths such as 80); default candidates unchanged.",
     "IsoExec padded swap-AB tile: the 64-row swap candidate on explicit request (block-N multiple 64), 1-CTA; the B stage counted at 128 rows. The CD staging is counted at 128 columns too (the kernel's STORE_BLOCK_N).",
-    "IsoExec register partials: leaf-tree filter with two TMEM slots, UMMA N <= 96, store halves of 16-column multiples; 384-thread launch config on request."
+    "IsoExec register partials: leaf-tree filter with two TMEM slots, UMMA N <= 96, store halves of 16-column multiples; 384-thread launch config on request.",
+    "IsoExec register partials: block M 128 at every M (the register-partial store is one 128-row M wave)."
    ]
   },
   {
