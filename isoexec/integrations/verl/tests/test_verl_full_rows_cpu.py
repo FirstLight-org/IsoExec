@@ -145,16 +145,33 @@ def test_acks_and_optimizer_gates(root):
     from isoexec.integrations.verl.trainer import verify_acks, verify_optimizer
     from isoexec.integrations.verl.worker_extension import ack_directory
 
+    from isoexec.ops.attention.target_batch import schedule_record
+
     directory = ack_directory(root, 0)
     directory.mkdir(parents=True)
-    for rank in range(2):
+
+    def ack(rank, **changed):
         (directory / f"replica0-dp0-rank{rank}.json").write_text(json.dumps({
             "replica_rank": 0, "dp_rank": 0, "rank": rank, "version": 0,
             "runner_class": "vllm.v1.worker.gpu.model_runner.GPUModelRunner", "parameter_sha256": f"h{rank}",
+            "attention_schedule": schedule_record(), **changed,
         }))
+
+    for rank in range(2):
+        ack(rank)
     assert verify_acks(root, 0, 2)["workers"] == 2
     with pytest.raises(Refusal):
         verify_acks(root, 0, 4)
+    # an engine worker that bound another attention schedule (another target batch) is refused at the sync
+    other = schedule_record()
+    other["mla_sm100"] = {**other["mla_sm100"], "target_batch": 64, "seg_tokens": 5120}
+    ack(1, attention_schedule=other)
+    with pytest.raises(Refusal, match="attention_schedule.mla_sm100.seg_tokens.*rank 1"):
+        verify_acks(root, 0, 2)
+    ack(1, attention_schedule=None)
+    with pytest.raises(Refusal, match="attention_schedule.missing"):
+        verify_acks(root, 0, 2)
+    ack(1)
     for rank in range(2):
         fd.append_receipt(root, f"optimizer-rank{rank:04d}.jsonl", {
             "event": "optimizer_step", "step": 1, "grad_norm": 1.5, "changed": True, "rank": rank,
