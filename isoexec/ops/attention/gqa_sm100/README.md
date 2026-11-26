@@ -69,31 +69,47 @@ A row with border `B` is made of `n = ceil(B / SEG)` segments
 ```
 
 `SEG` is **fixed** and is the output of the schedule policy (`isoexec/ops/schedule_policy.py`, design
-version 7.1, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
+version 7.2, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
 length, KV length, chunk boundary, split count, grid or SM count.
 
 ```
-G   = pow2floor(min(p, cap, n // L_r)), at least 1        segments of a row of the declared longest context
+G   = pow2floor(min(p, cap, n // L)), at least 1          segments of a row of the declared longest context
 SEG = 128 * ceil(n / (128 * G))
-p   = 148 // (smallest batch * model KV heads * SMs per item)
+p   = 1                                                    no target batch declared (the default)
+p   = 148 // (target batch * model KV heads * SMs per item)   a target batch declared
 ```
 
 | input | value | where |
 |---|---|---|
-| `L_r`, shortest segment | 512 keys (measured) | `ops.SOFTMAX_SHORTEST_SEGMENT` |
+| `L`, shortest segment worth a partial result | 512 keys (measured) | `ops.SOFTMAX_SHORTEST_SEGMENT` |
 | `cap`, segments of one output in flight | 16 (tuned; `params.h FOLD_MAX_RUN`) | `ops.SOFTMAX_SEGMENT_CAP` |
 | SMs per work item | 2 at head dim 256 (a CTA pair), 1 at 128 | `ops.SMS_PER_ITEM` |
 | `n`, longest declared context | 10240 (the production `max_model_len` of the seam batteries) | `spec.LONGEST_CONTEXT` |
-| smallest declared batch | 128 | `spec.SMALLEST_BATCH` |
-| model KV heads | 2 (the smallest of the release models) | `spec.MODEL_KV_HEADS` |
+| target batch (optional) | none by default; `ISOEXEC_TARGET_BATCH` in the launch environment | `spec.TARGET_BATCH` |
+| model KV heads (read only with a target batch) | 2 (the smallest of the release models) | `spec.MODEL_KV_HEADS` |
 
-**At these declarations `p = 1`, so `G = 1` and `SEG = 10240` at both head dims** (`ops.segment_span`):
-a row of up to 10240 keys is one segment. The declarations are constants of the recipe, so the trainer
-and every engine read the same SEG whatever their own batch or maximum length. A row longer than 10240
-keys is served exactly, with more segments (the combine admits up to 4096). The head-dim-256 decode leaf
-holds a segment of at most 128 tiles (16384 keys) and refuses a longer SEG. One SEG serves one batch
-regime: a deployment that decodes at batch 1-4 is slower with this SEG than with the 640 the rule gives
-at a smallest batch of 1 (the removed max-context table held 2048, the same rule at a context of 32768).
+`L`, `cap` and the occupancy behind `p` are the policy's cost parameters for this reducer, measured on
+B200. **With no target batch `p = 1`, so `G = 1` and `SEG = 10240` at both head dims**
+(`ops.segment_span`): a row of up to 10240 keys is one segment. A row longer than 10240 keys is served
+exactly, with more segments (the combine admits up to 4096). The head-dim-256 decode leaf holds a
+segment of at most 128 tiles (16384 keys) and refuses a longer SEG.
+
+The target batch says which decode batch the schedule is tuned for, nothing else. Every batch size,
+including 1, runs under any declaration and gives the same bits as every other batch size under that
+declaration. Declared, the rule gives at the longest context of 10240:
+
+| target batch | SEG at head dim 256 | SEG at head dim 128 |
+|---|---|---|
+| none (default) | 10240 | 10240 |
+| 128 | 10240 | 10240 |
+| 64 | 10240 | 10240 |
+| 16 | 5120 | 2560 |
+| 1 | 640 | 640 |
+
+Two declarations with different SEG are two numerical programs. The trainer and every engine read the
+declaration from the one launch environment (`ops/attention/target_batch.py`); the verl engine workers
+report the schedule they bound in each weight acknowledgement, and the first sync refuses a difference.
+(The removed max-context table held 2048, this rule at a target batch of 1 and a context of 32768.)
 
 ### 1.4 The leaf program: one segment, one packed query tile
 
@@ -206,7 +222,7 @@ Everything here is free: the relations battery forces the alternatives and requi
 | | |
 |---|---|
 | dispatch | `ops/_dispatch.py`: the `gqa` seam selects `attention.gqa_sm100` on `sm100`. `attention.core.gqa` resolves to `integration.trainer_core` (`sm100_gqa_segtree_v2_varlen`); the vLLM adapter binds `integration.paged_core` (`sm100_gqa_segtree_v2_paged`). |
-| SEG | the schedule policy at `spec.LONGEST_CONTEXT = 10240`, `spec.SMALLEST_BATCH = 128` -> `SEG = 10240` at both head dims (section 1.3), a constant of the recipe. |
+| SEG | the schedule policy at `spec.LONGEST_CONTEXT = 10240` and the optional `spec.TARGET_BATCH` (none by default) -> `SEG = 10240` at both head dims (section 1.3), fixed when the schedule is bound. |
 | engine cache | the CUSTOM vLLM backend (`ops/attention/varlen_backend.py`) reads `integration.PAGE_MULTIPLE` (kernel block sizes `MultipleOf(128)`, preferred block size rounded up to 128, which vLLM's hybrid page alignment then keeps) and `integration.KV_CACHE_LAYOUTS` (`LBNHC`, vLLM's default and the block-compact layout hybrid models need), so the engine allocates pages this kernel reads in place. The kernel writes the engine's output buffer in place. |
 | trainer install | `integration.install()` builds the extension, checks the CuTe DSL install (section 4) and returns the receipt (`recipe`, `seg_tokens`, the backward per head dim, `fa4_commit`). |
 
@@ -348,7 +364,7 @@ dim 128 FA4's `deterministic=True` costs 8 to 15 % against its non-deterministic
 
 | file | |
 |---|---|
-| `spec.py` | the declarations: recipe, version, the schedule policy's inputs (longest context, smallest batch, model KV heads), twin class, hazards |
+| `spec.py` | the declarations: recipe, version, the schedule policy's inputs (longest context, the optional target batch, model KV heads), twin class, hazards |
 | `ops.py` | the forward entry (`gqa_sm100_fwd`), the trainer/engine wrappers, FA4's backward, the autograd core, the CuTe DSL check |
 | `integration.py` | the op-table face: `trainer_core`, `paged_core`, `install`, the engine cache contract |
 | `reference.py` | the float64 oracle and the tree's structure in host Python |

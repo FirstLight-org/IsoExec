@@ -28,7 +28,7 @@ D = 256
 SCALE = ops.default_scale(D)
 MAX_K = 10240
 #: Contexts on and off the tile (128) and segment (640 under ``batch1``) boundaries, up to sixteen segments there;
-#: test_schedule_boundary_gpu.py covers the declared span's boundaries.
+#: test_schedule_boundary_gpu.py covers the default span's boundaries.
 CONTEXTS = (1, 2, 127, 128, 129, 300, 639, 640, 641, 1280, 1281, 2047, 2048, 2049, 4095, 4097, 6000, 8192, 10240)
 RATIOS = [(16, 4), (8, 2), (4, 1), (16, 2), (2, 1), (16, 1), (16, 16)]
 

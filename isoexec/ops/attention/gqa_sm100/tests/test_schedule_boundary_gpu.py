@@ -1,11 +1,14 @@
-"""Invariance at the DECLARED segment span's own boundaries, raw bits.
+"""Invariance at the DEFAULT segment span's own boundaries (no target batch declared), raw bits.
 
-The declared span is ``S = ops.segment_span(d)`` (one segment of ``spec.LONGEST_CONTEXT`` keys). The other
+The default span is ``S = ops.segment_span(d)`` (one segment of ``spec.LONGEST_CONTEXT`` keys). The other
 GPU modules' lengths stay below it, so this module puts rows on both sides of every boundary the
 declaration has: ``S - 1``, ``S``, ``S + 1`` keys, a second segment with a short tail, the longest
 declared context, and a row of more than two segments. For each: trainer rows == paged prefill rows ==
 chunked prefill rows == prefill + decode steps, alone and inside batches with shorter and longer
 neighbours at every position, repeated calls, both head-dim-256 leaves and every decode split.
+
+The same matrix then runs with a target batch of 16 and of 1 declared (spans 5120 / 2560 and 640): the
+declaration moves the boundaries, and under each one every batch size and position gives the same bits.
 """
 
 from __future__ import annotations
@@ -24,15 +27,29 @@ from isoexec.ops.attention.gqa_sm100.tests._harness import bit_equal, cu, draw, 
 GEOMETRIES = [("d256-2q1kv", 2, 1, 256), ("d256-4q1kv", 4, 1, 256), ("d128-2q2kv", 2, 2, 128)]
 
 
-def _span(d):
+#: label -> target batch (``None``: none declared, the default) and the span it gives per head dim
+TARGETS = {"default": (None, {128: 10240, 256: 10240}), "target16": (16, {128: 2560, 256: 5120}),
+           "target1": (1, {128: 640, 256: 640})}
+
+
+@pytest.fixture(params=list(TARGETS))
+def target(request, monkeypatch):
+    monkeypatch.setattr(spec, "TARGET_BATCH", TARGETS[request.param][0])
+    ops.bind_schedule()
+    yield request.param
+    monkeypatch.undo()
+    ops.bind_schedule()
+
+
+def _span(d, target):
     s = ops.segment_span(d)
-    assert s == spec.LONGEST_CONTEXT == 10240
+    assert s == TARGETS[target][1][d] == ops.seg_for(d, spec.LONGEST_CONTEXT, target_batch=TARGETS[target][0])
     return s
 
 
 def _lengths(s):
-    """Rows on both sides of the declared span: S-1, S (the longest declared), S+1, a short tail, three segments."""
-    return [s - 1, s, s + 1, s + 130, 2 * s + 5]
+    """Rows on both sides of the span: S-1, S, S+1, a short tail, three segments, the longest declared context."""
+    return [s - 1, s, s + 1, s + 130, 2 * s + 5] + ([spec.LONGEST_CONTEXT] if s != spec.LONGEST_CONTEXT else [])
 
 
 def _same(a, b, what):
@@ -47,8 +64,8 @@ def _paged(q_rows, kc, vc, table, q_lens, k_lens, d, **kw):
 
 
 @pytest.mark.parametrize(("label", "hq", "hk", "d"), GEOMETRIES, ids=[g[0] for g in GEOMETRIES])
-def test_rows_at_the_declared_span_boundaries(label, hq, hk, d):
-    s = _span(d)
+def test_rows_at_the_span_boundaries(label, hq, hk, d, target):
+    s = _span(d, target)
     lens = _lengths(s)
     scale = ops.default_scale(d)
     starts = [0, *torch.tensor(lens).cumsum(0).tolist()[:-1]]
@@ -116,9 +133,9 @@ def test_rows_at_the_declared_span_boundaries(label, hq, hk, d):
 
 
 @pytest.mark.parametrize("d", (128, 256))
-def test_a_boundary_decode_row_does_not_depend_on_its_batch(d):
+def test_a_boundary_decode_row_does_not_depend_on_its_batch(d, target):
     """A decode row with S + 1 keys alone, and first, middle and last in batches of 4, 128 and 256 short rows."""
-    s = _span(d)
+    s = _span(d, target)
     hq, hk = 2, 1
     long = s + 1
     lens = [long] + [(53 * i) % 900 + 1 for i in range(1, 256)]

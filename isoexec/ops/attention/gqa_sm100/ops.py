@@ -4,9 +4,9 @@ autograd core the trainer binds.
 The forward's numerical program is stated in README.md. Two things in this module are part of the
 op's identity and nothing else is:
 
-* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.1, rule 3) applied to this
-  reducer's published constants (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``, :func:`occupancy`)
-  and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
+* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.2, rule 3) applied to the
+  policy's cost parameters for this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
+  :func:`occupancy`) and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
   recipe version bump.
 * ``KEY_TILE`` -- the KV tile width, fixed at 128.
 
@@ -61,7 +61,7 @@ LEAF_AUTO, LEAF_GENERAL, LEAF_DECODE = 0, 1, 2
 #: to ``DECODE_ROWS / ratio`` tokens per request.
 DECODE_ROWS = 16
 
-# --- the softmax reducer's published constants (design version 7.1, rule 3) ---------------------------
+# --- the policy's cost parameters for the softmax reducer (design version 7.2, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table.
 
@@ -92,22 +92,35 @@ def occupancy(head_dim: int, kv_heads: int, batch: int) -> int:
     return batch * kv_heads * SMS_PER_ITEM[head_dim]
 
 
-def schedule_for(head_dim: int, max_context: int, *, min_batch: int | None = None,
+#: ``target_batch=DECLARED``: take the deployment's declaration (``spec.TARGET_BATCH``, which may be ``None``).
+DECLARED = "declared"
+
+
+def schedule_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
                  kv_heads: int | None = None) -> schedule_policy.Segments:
-    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, cap, n // L_r))`` segments of
-    ``S = 128 * ceil(n / (128 * G))`` keys, adjacent tree, with ``n = max_context`` and
-    ``p = DEVICE_SMS // occupancy`` at the declared smallest batch. ``min_batch`` and ``kv_heads`` default
-    to the declarations in spec.py."""
-    min_batch = spec.SMALLEST_BATCH if min_batch is None else min_batch
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, cap, n // L))`` segments of
+    ``S = 128 * ceil(n / (128 * G))`` keys, adjacent tree, with ``n = max_context``.
+
+    ``target_batch`` is optional. ``None`` (no target batch) gives ``p = workers(DEVICE_SMS) = 1``: one segment
+    of ``max_context`` keys. A batch gives ``p = DEVICE_SMS // occupancy`` at that batch. Left out, it is the
+    deployment's declaration (``spec.TARGET_BATCH``); ``kv_heads`` defaults to ``spec.MODEL_KV_HEADS``."""
+    if head_dim not in SMS_PER_ITEM:
+        raise ValueError(f"no leaf for head_dim={head_dim}")
+    if isinstance(target_batch, str):
+        if target_batch != DECLARED:
+            raise ValueError(f"target_batch must be a batch, None or DECLARED (got {target_batch!r})")
+        target_batch = spec.TARGET_BATCH
     kv_heads = spec.MODEL_KV_HEADS if kv_heads is None else kv_heads
-    p = schedule_policy.workers(DEVICE_SMS, occupancy(head_dim, kv_heads, min_batch))
+    occupied = None if target_batch is None else occupancy(head_dim, kv_heads, target_batch)
+    p = schedule_policy.workers(DEVICE_SMS, occupied)
     return schedule_policy.reduce(int(max_context), b=KEY_TILE, L=SOFTMAX_SHORTEST_SEGMENT, p=p,
                                   cap=SOFTMAX_SEGMENT_CAP)
 
 
-def seg_for(head_dim: int, max_context: int, *, min_batch: int | None = None, kv_heads: int | None = None) -> int:
+def seg_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
+            kv_heads: int | None = None) -> int:
     """The segment span for this geometry and declaration: ``schedule_for(...).S``."""
-    return schedule_for(head_dim, max_context, min_batch=min_batch, kv_heads=kv_heads).S
+    return schedule_for(head_dim, max_context, target_batch=target_batch, kv_heads=kv_heads).S
 
 
 def segment_count(border: int, seg: int) -> int:
@@ -178,7 +191,7 @@ _BOUND_SPAN: dict[int, int] = {}
 def bind_schedule() -> dict[int, int]:
     """Evaluate the schedule policy at spec.py's declarations and bind the result: ``{head_dim: span}``.
 
-    Called at import. A process that changes a declaration (the tests' second declaration) calls it again;
+    Called at import. A process that changes a declaration (the tests' other target batches) calls it again;
     nothing on a forward call does."""
     spans = {d: seg_for(d, spec.LONGEST_CONTEXT) for d in HEAD_DIMS}
     _BOUND_SPAN.clear()
@@ -188,7 +201,7 @@ def bind_schedule() -> dict[int, int]:
 
 def segment_span(head_dim: int) -> int:
     """The recipe's segment span at ``head_dim``: the policy's S at the declarations of spec.py
-    (``LONGEST_CONTEXT``, ``SMALLEST_BATCH``, ``MODEL_KV_HEADS``), as bound by :func:`bind_schedule`."""
+    (``LONGEST_CONTEXT``, the optional ``TARGET_BATCH``, ``MODEL_KV_HEADS``), as bound by :func:`bind_schedule`."""
     try:
         return _BOUND_SPAN[head_dim]
     except KeyError:
@@ -409,6 +422,7 @@ __all__ = [
     "LEAF_AUTO",
     "LEAF_DECODE",
     "LEAF_GENERAL",
+    "DECLARED",
     "DEVICE_SMS",
     "SMS_PER_ITEM",
     "SOFTMAX_SEGMENT_CAP",

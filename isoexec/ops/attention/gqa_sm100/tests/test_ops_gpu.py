@@ -153,7 +153,8 @@ def test_install_receipt_names_the_recipe_and_the_backward(declaration):
 
     receipt = integration.install(deterministic_backward=True)
     assert receipt["impl"] == spec.TRAINER_IMPL and receipt["recipe"] == spec.RECIPE
-    span = {"declared": 10240, "batch1": 640}[declaration]  # the schedule policy's, at each declaration
+    span = {"default": 10240, "batch1": 640}[declaration]  # the schedule policy's, at each declaration
     assert receipt["seg_tokens"] == {128: span, 256: span}
+    assert receipt["target_batch"] == {"default": None, "batch1": 1}[declaration]
     assert receipt["backward"] == {128: "FA4-sm100-deterministic", 256: "FA4-sm100-hd256-2cta"}
     assert receipt["fa4_commit"] == spec.FA4_COMMIT
