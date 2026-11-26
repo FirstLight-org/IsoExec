@@ -1,6 +1,6 @@
 # GLM Kimi Delta Attention on SM100 (`kda.glm`, impl `sm100_kda_v1`)
 
-## Schedule (design version 7.1)
+## Schedule (design version 7.2)
 
 The recurrence reducer has no merge, so rule 1 of `isoexec/ops/schedule_policy.py` applies: segments of the exact
 block, anchored at absolute position 0 of the sequence, one continued chain. `isoexec/ops/kda/schedule.py` holds the
