@@ -289,10 +289,9 @@ __all__ = ["GROUPED", "LOGITS_REDUCER_BLOCK", "LOGITS_REDUCER_SHORTEST", "RENORM
 #: the token-segment length of dW's fixed segment tree (moe_fp8_sm100/SPEC.md §8.3's SEG_T): a
 #: deployment-fixed constant published per (op, shape) -- here a function of E only, never of T.
 #: Measured (README "Backward"): 512 wins at E = 64 (shorter chains, more CTAs), 1024 at E >= 256.
-#: In the schedule policy's terms this is the published shortest segment L of dW's scalar reducer (a sum over
-#: the tokens that selected an expert): rule 3 without an occupancy gives segments of exactly L, the last one
-#: short, merged by a tree -- ``backward_segment_tokens``. The policy has ONE L per reducer; this one is two
-#: values keyed on E, which is recorded here as it was measured and not derived.
+#: The backward runs only in the trainer and is not scheduled by the policy (design 7.2: the policy covers the
+#: forward pass). dW's sum over the tokens that selected an expert keeps this kernel's own fixed order:
+#: segments of exactly ``seg_t_for(E)`` tokens counted from token 0, the last one short, merged by a tree.
 SEG_T = 1024
 
 
@@ -301,8 +300,8 @@ def seg_t_for(num_experts: int) -> int:
 
 
 def backward_segment_tokens(num_tokens: int, num_experts: int) -> int:
-    """Tokens per segment of dW's tree: ``schedule_policy.reduce(T, b = 16, L = seg_t_for(E))`` (S = L)."""
-    return schedule_policy.reduce(max(int(num_tokens), 1), b=16, L=seg_t_for(num_experts)).S
+    """Tokens per segment of dW's tree: ``seg_t_for(E)``, whatever the number of tokens."""
+    return seg_t_for(num_experts)
 
 
 def route_backward(dp: torch.Tensor, x: torch.Tensor, router_w: torch.Tensor, logits: torch.Tensor,
