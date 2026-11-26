@@ -6,10 +6,7 @@
 
 namespace norms_sm100 {
 
-// Execution geometry of one row: L threads, each holding K 16-byte loads (N = 8 * L * K). It decides which thread
-// loads which segment and nothing else. The numerical schedule (segments of S consecutive columns from
-// isoexec/ops/schedule_policy.py, adjacent tree; common.cuh::segment_tree) does not read L or K, so a different
-// geometry gives the same bits.
+// Changing this table changes the arithmetic and requires a recipe version bump.
 struct Lanes {
   int L, K;
 };
@@ -17,20 +14,10 @@ struct Lanes {
 inline bool fwd_supported(int64_t n) { return n > 0 && (n % 256 == 0 || n == 128 || n == 384); }
 
 inline Lanes fwd_lanes(int64_t n) {
-  switch (n) { // widths timed with one row per 64- or 128-thread CTA
-  case 1536:
-    return {64, 3};
-  case 4096:
-  case 5120:
-  case 7168:
-    return {128, int(n / 1024)};
-  default:
-    break;
-  }
   if (n % 256 == 0)
     return {32, int(n / 256)};
   TORCH_CHECK(n == 128 || n == 384, "norms_sm100: unsupported width ", n,
-              " (the forward covers N % 256 == 0, 128 and 384)");
+              " (forward recipe v1 covers N % 256 == 0, 128 and 384)");
   return {16, int(n / 128)};
 }
 
@@ -41,6 +28,53 @@ inline Lanes bwd_lanes(int64_t n) {
     return {32, int(n / 256)};
   TORCH_CHECK(n == 128 || n == 384, "norms_sm100: unsupported width ", n);
   return {16, int(n / 128)};
+}
+
+inline Lanes fwd_lanes_v2(int64_t n, int lmax) {
+  TORCH_CHECK(fwd_supported(n) && n % 8 == 0, "norms_sm100: unsupported width ", n, " for recipe v2");
+  int64_t e = n / 8; // leaves per row; L * K == e
+  int L = 1;
+  while (L * 2 <= lmax && e % int64_t(L * 2) == 0)
+    L *= 2;
+  return {L, int(e / L)};
+}
+
+inline int fwd_v2_lmax(int64_t n) {
+  switch (n) {
+  case 128:
+  case 384:
+  case 512:
+  case 768:
+  case 1536:
+  case 2048:
+  case 4096:
+  case 5120:
+  case 7168:
+    return 128; // measured; see the table above. The rule then gives 16/16/64/32/128/128/128.
+  default:
+    return 32; // unswept width: v2 resolves to v1's own lanes rather than to an unmeasured fold
+  }
+}
+
+inline int fwd_recipe_default(int64_t n) {
+  switch (n) {
+  case 1536:
+  case 4096:
+  case 5120:
+  case 7168:
+    return 2;
+  default:
+    return 1;
+  }
+}
+
+inline int fwd_recipe(int64_t n) { return fwd_recipe_default(n); }
+
+inline Lanes fwd_lanes_active(int64_t n) {
+  if (fwd_recipe(n) != 2)
+    return fwd_lanes(n);
+  int lmax = fwd_v2_lmax(n);
+  return fwd_lanes_v2(n, lmax);
 }
 
 enum FwdVar {
@@ -112,7 +146,6 @@ inline bool aligned16(const at::Tensor &z) {
   return uintptr_t(z.data_ptr()) % 16 == 0 && (z.stride(0) * 2) % 16 == 0 && (z.stride(1) * 2) % 16 == 0;
 }
 
-// Backward plans (outside the policy; the band count is numerical, as in the base tree).
 struct Bands {
   int64_t bands;
   int iters;

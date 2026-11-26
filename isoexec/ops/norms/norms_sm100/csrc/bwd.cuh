@@ -5,13 +5,6 @@
 
 namespace norms_sm100 {
 
-// THE BACKWARD IS OUTSIDE THE POLICY. The row dot and the weight gradient below are this tree's existing deterministic
-// program (strided lanes and the descending-XOR fold; bands by row count), unchanged. Only the trainer runs the
-// backward; the design's guarantee is that engine and trainer return the same bits on what both compute; the weight
-// gradient reduces over the batch, which the design does not cover (no data parallelism over a reduction); and the
-// investigation validated forward schedules only. The forward, the fused add and the gated out-norm run the policy's
-// schedule (common.cuh::segment_tree).
-
 
 // Alternate buffers so the next row cannot overwrite a slower warp's current fold.
 template <int L> __device__ __forceinline__ float row_fold(float acc, int buf) {

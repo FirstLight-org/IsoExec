@@ -7,12 +7,15 @@ import torch
 from isoexec.core.registry import Registry
 from isoexec.ops.logprobs.logprobs_sm100 import integration, ops
 from isoexec.ops.logprobs.logprobs_sm100.spec import (
+    DEFAULT_RECIPE_BY_CLASS,
     IMPL,
     IMPL_BY_RECIPE,
+    IMPL_V2,
     IMPLS,
     LANES,
     LEAVES,
     RECIPE_VERSION,
+    RECIPE_VERSION_V2,
     STRIP,
 )
 
@@ -21,26 +24,38 @@ def test_standalone_declaration():
     reg = Registry.from_impls(IMPLS)
     assert set(reg.ops) == {"logprobs.head", "logprobs.lm_head_slice", "logprobs.log_softmax"}
     impl = reg.ops["logprobs.log_softmax"].impls[IMPL]
-    assert impl.version == ops.RECIPE_VERSION == 3
+    assert impl.version == ops.RECIPE_VERSION == 1
     assert impl.supported_archs == frozenset({"sm100"})
     assert not impl.twin_class
 
 
-def test_one_schedule_is_declared_and_claims_no_twin_class():
-    """Versions 1 and 2 (per-dtype, per-vocabulary recipes) are retired: one identity, one version."""
+def test_both_recipes_are_declared_and_neither_claims_a_twin_class():
+    """Recipe v2 is a NEW impl id declared ALONGSIDE v1, at its own version."""
     reg = Registry.from_impls(IMPLS)
     impls = reg.ops["logprobs.log_softmax"].impls
-    assert set(impls) == {IMPL} == {"sm100_lse_segments_v3"}
-    assert impls[IMPL].version == RECIPE_VERSION == 3
-    assert impls[IMPL].supported_archs == frozenset({"sm100"}) and not impls[IMPL].twin_class
-    assert IMPL_BY_RECIPE == {3: IMPL}
+    assert set(impls) == {IMPL, IMPL_V2} == {"sm100_online_leaf8_v1", "sm100_twopass_leaf8_v2"}
+    assert impls[IMPL].version == RECIPE_VERSION == 1
+    assert impls[IMPL_V2].version == RECIPE_VERSION_V2 == 2
+    for spec_ in impls.values():
+        assert spec_.supported_archs == frozenset({"sm100"})
+        assert not spec_.twin_class
+    assert IMPL_BY_RECIPE == {1: IMPL, 2: IMPL_V2}
     assert not Registry.from_impls(IMPLS).lint()
 
 
-def test_the_recipe_does_not_depend_on_dtype_or_vocab():
-    for V in (248320, 154880, 151680, 129280, 4096, 64):
-        for dtype in ("bf16", "fp32", torch.bfloat16, torch.float32):
-            assert ops.default_recipe(dtype, V) == RECIPE_VERSION
+def test_the_default_recipe_rule_is_keyed_on_dtype_and_vocab_and_never_on_rows():
+    """Do-item 2's rule, as a declaration."""
+    assert all(isinstance(k, tuple) and len(k) == 2 for k in DEFAULT_RECIPE_BY_CLASS)
+    assert {k[0] for k in DEFAULT_RECIPE_BY_CLASS} == {"bf16", "fp32"}
+    assert {k[1] for k in DEFAULT_RECIPE_BY_CLASS} == {248320, 154880, 151680}
+    assert set(DEFAULT_RECIPE_BY_CLASS.values()) <= {RECIPE_VERSION, RECIPE_VERSION_V2}
+    for V in (248320, 154880, 151680):
+        assert ops.default_recipe("bf16", V) == RECIPE_VERSION_V2
+        assert ops.default_recipe(torch.bfloat16, V) == RECIPE_VERSION_V2
+        assert ops.default_recipe("fp32", V) == RECIPE_VERSION
+        assert ops.default_recipe(torch.float32, V) == RECIPE_VERSION
+    assert ops.default_recipe("bf16", 4096) == RECIPE_VERSION
+    assert ops.default_recipe("bf16", 64) == RECIPE_VERSION
 
 
 def test_the_pin_is_a_process_setting_and_the_declared_impl_id_follows_it():
@@ -50,9 +65,11 @@ def test_the_pin_is_a_process_setting_and_the_declared_impl_id_follows_it():
     try:
         assert ops.select_recipe(RECIPE_VERSION) == RECIPE_VERSION
         assert integration.IMPL == IMPL
-        assert ops.select_recipe(dtype="bf16", vocab=151680) == RECIPE_VERSION
+        assert ops.select_recipe(RECIPE_VERSION_V2) == RECIPE_VERSION_V2
+        assert integration.IMPL == IMPL_V2
+        assert ops.select_recipe(dtype="bf16", vocab=151680) == RECIPE_VERSION_V2
         assert ops.select_recipe(dtype="fp32", vocab=151680) == RECIPE_VERSION
-        for bad in (0, 1, 2, 4, "v3"):  # 1 and 2 named the retired recipes
+        for bad in (0, 3, "v2"):
             try:
                 ops.select_recipe(bad)
                 raise AssertionError(f"recipe {bad!r} must be refused")
@@ -70,7 +87,7 @@ def test_the_pin_is_a_process_setting_and_the_declared_impl_id_follows_it():
 def test_impl_id_is_never_the_sm90_spelling():
     from isoexec.ops.logprobs.logprobs_sm90.spec import IMPL as SM90_IMPL
 
-    assert IMPL == "sm100_lse_segments_v3"
+    assert IMPL == "sm100_online_leaf8_v1"
     assert IMPL != SM90_IMPL
 
 
@@ -125,7 +142,7 @@ def test_the_arch_selects_this_package(monkeypatch):
 
 
 def test_integration_exports_the_same_impl_id():
-    assert ops.RECIPE == RECIPE_VERSION, "the package default pin is the one recipe"
+    assert ops.RECIPE == RECIPE_VERSION, "the package default pin is recipe v1"
     assert integration.IMPL == IMPL
 
 

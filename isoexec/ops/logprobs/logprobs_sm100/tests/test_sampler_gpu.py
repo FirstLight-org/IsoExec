@@ -67,7 +67,7 @@ def _peaked(rows, seed):
     return x
 
 
-@pytest.fixture(params=[3], ids=["recipe_v3"])
+@pytest.fixture(params=[1, 2], ids=["recipe_v1", "recipe_v2"])
 def recipe(request, monkeypatch):
     monkeypatch.setattr(_lp(), "RECIPE", request.param)
     return request.param

@@ -8,6 +8,11 @@ import torch
 from isoexec.ops._testing import assert_hazard_exercised, bitwise_equal
 from isoexec.ops.norms.norms_sm100 import ops as O
 from isoexec.ops.norms.norms_sm100 import reference as R
+from isoexec.ops.norms.norms_sm100 import reference_v2 as R2
+
+
+def shipped_reference(n):
+    return R2 if n in R2.DEFAULT_V2 else R
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (10, 0), reason="requires B200/SM100"
@@ -18,6 +23,16 @@ WIDTHS = (2048, 4096, 5120, 768, 512, 128, 384, 1536, 7168)
 
 
 
+
+
+def test_every_width_is_covered_by_its_own_battery():
+    from isoexec.ops.norms.norms_sm100 import ops as _O
+    from isoexec.ops.norms.norms_sm100.tests import test_recipe_v2_gpu as V2
+
+    for n in WIDTHS:
+        version = _O.recipe_default(n)
+        assert version in (1, 2), n
+        assert n in (WIDTHS if version == 1 else V2.V2_WIDTHS), (n, version)
 
 
 def rows(m, n, *, scale=3.0, seed=0, device="cuda"):
@@ -57,7 +72,7 @@ def test_matches_the_declared_recipe(n, zero_centered):
     h = hazards(x)
     assert_hazard_exercised("signed_zero", h["signed_zero"] > 0)
     assert_hazard_exercised("subnormal", h["subnormal"] > 0)
-    assert bitwise_equal(O.rms_norm(x, w, EPS, zero_centered), R.rms_norm(x, w, EPS, zero_centered))
+    assert bitwise_equal(O.rms_norm(x, w, EPS, zero_centered), shipped_reference(n).rms_norm(x, w, EPS, zero_centered))
 
 
 def test_matches_the_declared_recipe_gated():
@@ -105,7 +120,7 @@ def test_zero_row_is_defined_and_invariant():
     x[7] = 0.0
     x[8] = -0.0
     y = O.rms_norm(x, w, EPS, True)
-    assert bitwise_equal(y, R.rms_norm(x, w, EPS, True))
+    assert bitwise_equal(y, shipped_reference(x.shape[-1]).rms_norm(x, w, EPS, True))
     alone = O.rms_norm(x[7:9].clone(), w, EPS, True)
     assert bitwise_equal(alone, y[7:9])
 
@@ -393,7 +408,7 @@ def test_forward_execution_plans_are_bitwise_identical(n, plan_reset):
     x, w = rows(2048, n, seed=40), weight(n, zero_centered=True)
     r = None
     ref_y, ref_h, ref_rstd = ext.raw_rms_fwd(x, r, w, EPS, True)
-    oracle = R
+    oracle = shipped_reference(n)
     ry = oracle.rms_norm(x, w, EPS, True)
     assert bitwise_equal(ref_y, ry)
 
@@ -411,7 +426,7 @@ def test_fused_add_forward_execution_plans_are_bitwise_identical(n, plan_reset):
     x, w = rows(2048, n, seed=40), weight(n, zero_centered=True)
     r = rows(2048, n, seed=44)
     ref_y, ref_h, ref_rstd = ext.raw_rms_fwd(x, r, w, EPS, True)
-    oracle = R
+    oracle = shipped_reference(n)
     ry, rh = oracle.add_rms_norm(x, r, w, EPS, True)
     assert bitwise_equal(ref_y, ry)
     assert bitwise_equal(ref_h, rh)
@@ -431,7 +446,7 @@ def test_backward_execution_plans_are_bitwise_identical(n, m, plan_reset):
     x, w = rows(m, n, seed=41), weight(n, zero_centered=True, dtype=torch.float32)
     dy = rows(m, n, seed=42)
     _, _, rstd = ext.raw_rms_fwd(x, None, w, EPS, True)
-    ref_dx, ref_dw = bwd_reference(dy, x, w, True, None)
+    ref_dx, ref_dw = bwd_reference(dy, x, w, True, None, O.recipe_default(n))
     for _ in range(3):
         dx, dw = ext.raw_rms_bwd(dy, x, rstd, w, None, True, 0)
         assert bitwise_equal(dx, ref_dx), (n, m, "dx")

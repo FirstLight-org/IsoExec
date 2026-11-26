@@ -6,27 +6,33 @@ from isoexec.core.registry import ImplSpec
 
 ARCH = "sm100"
 
-#: d_max of the vocabulary axis: a full row is LEAVES consecutive shards; a TP rank holds LEAVES / world of them.
 LEAVES = 8
-#: columns per load (execution; a shard must be whole strips)
 STRIP = 8
-#: threads of a (row, shard) CTA (execution)
 LANES = 256
 
 ACCUM = "fp32"
 
-#: One numerical schedule (``schedule.py``; isoexec/ops/schedule_policy.py, design version 7.1) for every
-#: vocabulary and logits dtype. Versions 1 (online normalizer) and 2 (two passes), both on 256 strided lanes per
-#: leaf and selected per (dtype, vocabulary), are retired with their identities.
-RECIPE_VERSION = 3
-IMPL = "sm100_lse_segments_v3"
+RECIPE_VERSION = 1
+IMPL = "sm100_online_leaf8_v1"
 
-IMPL_BY_RECIPE: dict[int, str] = {RECIPE_VERSION: IMPL}
+RECIPE_VERSION_V2 = 2
+IMPL_V2 = "sm100_twopass_leaf8_v2"
+
+IMPL_BY_RECIPE: dict[int, str] = {RECIPE_VERSION: IMPL, RECIPE_VERSION_V2: IMPL_V2}
 
 #: The engine's decode sampler (``sampler.py``): Gumbel-max token draw with Philox noise keyed by
 #: (seed, step offset, row, column); its logprobs are the pinned recipe's, rank and top-1 re-evaluate
 #: that recipe's full-row expression. An engine-side step, not a placement op, so it is not in IMPLS.
 SAMPLER_IMPL = "sm100_gumbel_philox_v1"
+
+DEFAULT_RECIPE_BY_CLASS: dict[tuple[str, int], int] = {
+    ("bf16", 248320): RECIPE_VERSION_V2,   # Qwen3.5 9B / 35B-A3B / 3.6-27B
+    ("bf16", 154880): RECIPE_VERSION_V2,   # GLM4.7-flash
+    ("bf16", 151680): RECIPE_VERSION_V2,   # MiMo-7B
+    ("fp32", 248320): RECIPE_VERSION,
+    ("fp32", 154880): RECIPE_VERSION,
+    ("fp32", 151680): RECIPE_VERSION,
+}
 
 _SM100 = frozenset({"sm100"})
 
@@ -58,4 +64,5 @@ IMPLS: tuple[ImplSpec, ...] = (
         twin_class="logprobs.row_select",
     ),
     ImplSpec(op="logprobs.log_softmax", impl_id=IMPL, version=RECIPE_VERSION, supported_archs=_SM100),
+    ImplSpec(op="logprobs.log_softmax", impl_id=IMPL_V2, version=RECIPE_VERSION_V2, supported_archs=_SM100),
 )

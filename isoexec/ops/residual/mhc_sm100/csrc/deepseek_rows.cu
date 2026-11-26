@@ -4,7 +4,7 @@
 // Replaces, bit for bit, the row-local kernels of one mHC boundary:
 //   merge_fwd_kernel<CAST = false>   (deepseek_mhc_sm100.expand: x_new = bf16(post*out + sum_s comb[s]*x_s), all fp32)
 //   v41::rms_quant_5120_kernel<true> (attention/deepseek_v41_cache_sm100 paged.cu: collapse of x_new with the SHIFTED pre,
-//                                     norms_sm100 RMSNorm at N = 5120, optional quant_g32 FP8 1x32 UE8M0 encoding)
+//                                     norms_sm100 recipe v2 RMSNorm at N = 5120, optional quant_g32 FP8 1x32 UE8M0 encoding)
 // The mHC coefficients of the new streams (proj_kernel + tail_kernel, split_fwd.cu) are NOT computed here: the collapse
 // uses the previous sublayer's (shifted) pre, so nothing here waits for them and the caller may run them concurrently.
 //
@@ -13,10 +13,9 @@
 //    acc = add.rn(acc, mul.rn(comb[s][d], x_s[h])) for s = 1, 2, 3; x_new = rn_bf16(add.rn(t1, acc)).
 //  * collapse, column h: o = mul.rn(p0, xn0); o = add.rn(o, mul.rn(p_s, xn_s)) for s = 1, 2, 3; v = rn_bf16(o)
 //    (xn = the bf16 x_new just stored, or the input streams without the expand).
-//  * RMSNorm (norms_sm100's schedule, N = 5120; norm_segments.cuh): the row is 640 segments of 8 consecutive columns,
-//    segment c = 8c..8c+7, each a chain acc = add.rn(acc, mul.rn(v, v)) from +0, combined by the adjacent tree over
-//    c (an unpaired last partial moves up). Norm lane l (L = 128) forms the partials of segments l + 128k (k = 0..4);
-//    warp 0 runs the tree. The segment length is schedule_policy's, through norms_sm100/schedule.py.
+//  * RMSNorm (recipe v2, N = 5120): the row is 640 chunks of 8 columns, chunk c = 8c..8c+7; norm lane l (L = 128) owns
+//    chunks l + 128k (k = 0..4) and forms acc = add.rn(acc, mul.rn(v, v)) k-major, j-minor; wide_fold<128> (the four
+//    warp leaves sh[q*32 + j] folded (f0+f2),(f1+f3) then f0+f1, then the xor butterfly 16..1);
 //    rs = frsqrt_rn(add.rn(div.rn(acc, N), eps)); y = rn_bf16(mul.rn(mul.rn(v, rs), w)).
 //  * encoding: per 32-group (4 consecutive chunks) amax = fmaxf over |y| (order free), floor 1e-4, scale = 2^ceil(log2(
 //    amax / 448)) as UE8M0, code = e4m3_satfinite(clamp(div.rn(y, scale), +-448)).
@@ -34,7 +33,6 @@
 #include <cuda_fp8.h>
 
 #include "common.cuh"
-#include "norm_segments.cuh"
 
 namespace mhc {
 namespace dsrows {
@@ -57,7 +55,7 @@ __global__ void __launch_bounds__(CH / CPT) rows_kernel(const bf16 *__restrict__
   static_assert(CPT == 1 || CPT == 5, "CPT = 1 (smem-staged squares) or 5 (norm-lane layout)");
   const int64_t row = blockIdx.x;
   const int tid = threadIdx.x;
-  __shared__ float s_fold[KC * L];   // one partial per segment of the row
+  __shared__ float s_fold[L];
   __shared__ float s_rs;
   __shared__ __align__(16) float s_sq[CPT == 1 ? CH * 8 : 1];
 
@@ -141,21 +139,39 @@ __global__ void __launch_bounds__(CH / CPT) rows_kernel(const bf16 *__restrict__
   // norm lane l < 128: acc = add.rn(acc, v*v) over chunks l + 128k (k ascending), columns j ascending
   if constexpr (CPT == 1) __syncthreads();
   if (tid < L) {
+    float acc = 0.f;
+    if constexpr (CPT == 1) {
 #pragma unroll
-    for (int k = 0; k < KC; ++k) {
-      if constexpr (CPT == 1)
-        s_fold[k * L + tid] = norm_segments::segment_of_squares(s_sq + (size_t)(k * L + tid) * 8);
-      else
-        s_fold[k * L + tid] = norm_segments::segment_sq(v[k]);
+      for (int k = 0; k < KC; ++k) {
+        const float4 a = *reinterpret_cast<const float4 *>(s_sq + (size_t)(k * L + tid) * 8);
+        const float4 b = *reinterpret_cast<const float4 *>(s_sq + (size_t)(k * L + tid) * 8 + 4);
+        acc = __fadd_rn(acc, a.x); acc = __fadd_rn(acc, a.y); acc = __fadd_rn(acc, a.z); acc = __fadd_rn(acc, a.w);
+        acc = __fadd_rn(acc, b.x); acc = __fadd_rn(acc, b.y); acc = __fadd_rn(acc, b.z); acc = __fadd_rn(acc, b.w);
+      }
+    } else {
+#pragma unroll
+      for (int k = 0; k < KC; ++k)
+#pragma unroll
+        for (int j = 0; j < 8; ++j) acc = __fadd_rn(acc, __fmul_rn(v[k][j], v[k][j]));
     }
+    s_fold[tid] = acc;
   }
   if constexpr (CPT == 1) {
     asm volatile("bar.sync 1, 128;" ::: "memory");   // the four norm warps
   } else {
     __syncthreads();
   }
-  if (tid < 32) {   // the adjacent tree over the row's KC * L segments, by warp 0
-    const float acc = norm_segments::segment_tree_warp<KC * L>(s_fold);
+  if (tid < 32) {   // wide_fold<128>
+    constexpr int W = L / 32;
+    float f[W];
+#pragma unroll
+    for (int q = 0; q < W; ++q) f[q] = s_fold[q * 32 + tid];
+#pragma unroll
+    for (int s = W >> 1; s > 0; s >>= 1)
+#pragma unroll
+      for (int q = 0; q < s; ++q) f[q] = __fadd_rn(f[q], f[q + s]);
+    float acc = f[0];
+    for (int s = 16; s > 0; s >>= 1) acc = __fadd_rn(acc, __shfl_xor_sync(0xffffffffu, acc, s));
     if (tid == 0) s_rs = __frsqrt_rn(__fadd_rn(__fdiv_rn(acc, float(N)), eps));
   }
   __syncthreads();
@@ -226,7 +242,7 @@ __global__ void __cluster_dims__(KC, 1, 1) __launch_bounds__(L)
   const int c = kq * L + tid;
   const int64_t col = (int64_t)c * 8;
   __shared__ __align__(16) float s_sq[L * 8];
-  __shared__ float s_fold[KC * L];   // one partial per segment of the row
+  __shared__ float s_fold[L];
   __shared__ float s_rs;
 
   if (ENCODE && packed && row == rows - 1 && kq == 0)
@@ -302,14 +318,30 @@ __global__ void __cluster_dims__(KC, 1, 1) __launch_bounds__(L)
   asm volatile("barrier.cluster.arrive.release.aligned;\n\tbarrier.cluster.wait.acquire.aligned;" ::: "memory");
   {
     cg::cluster_group cluster = cg::this_cluster();
+    float acc = 0.f;
 #pragma unroll
-    for (int k = 0; k < KC; ++k)   // segment k L + tid lives in cluster rank k's staged squares
-      s_fold[k * L + tid] = norm_segments::segment_of_squares(cluster.map_shared_rank(s_sq, k) + (size_t)tid * 8);
+    for (int k = 0; k < KC; ++k) {
+      const float *q = cluster.map_shared_rank(s_sq, k) + (size_t)tid * 8;
+      const float4 a = *reinterpret_cast<const float4 *>(q);
+      const float4 b = *reinterpret_cast<const float4 *>(q + 4);
+      acc = __fadd_rn(acc, a.x); acc = __fadd_rn(acc, a.y); acc = __fadd_rn(acc, a.z); acc = __fadd_rn(acc, a.w);
+      acc = __fadd_rn(acc, b.x); acc = __fadd_rn(acc, b.y); acc = __fadd_rn(acc, b.z); acc = __fadd_rn(acc, b.w);
+    }
     asm volatile("barrier.cluster.arrive.release.aligned;" ::: "memory");   // done reading the peers' squares
+    s_fold[tid] = acc;
   }
   __syncthreads();
-  if (tid < 32) {   // the adjacent tree over the row's KC * L segments, by warp 0
-    const float acc = norm_segments::segment_tree_warp<KC * L>(s_fold);
+  if (tid < 32) {   // wide_fold<128>
+    constexpr int W = L / 32;
+    float f[W];
+#pragma unroll
+    for (int q = 0; q < W; ++q) f[q] = s_fold[q * 32 + tid];
+#pragma unroll
+    for (int s = W >> 1; s > 0; s >>= 1)
+#pragma unroll
+      for (int q = 0; q < s; ++q) f[q] = __fadd_rn(f[q], f[q + s]);
+    float acc = f[0];
+    for (int s = 16; s > 0; s >>= 1) acc = __fadd_rn(acc, __shfl_xor_sync(0xffffffffu, acc, s));
     if (tid == 0) s_rs = __frsqrt_rn(__fadd_rn(__fdiv_rn(acc, float(N)), eps));
   }
   __syncthreads();

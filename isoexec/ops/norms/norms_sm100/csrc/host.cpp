@@ -314,15 +314,19 @@ std::tuple<Tensor, Tensor, Tensor> raw_gated_bwd(const Tensor &dy, const Tensor 
 }
 
 std::tuple<int, int, int, int> recipe(int64_t n) {
-  Lanes f = fwd_lanes(n), b = bwd_lanes(n);
+  Lanes f = fwd_lanes_active(n), b = bwd_lanes(n);
   return {f.L, f.K, b.L, b.K};
 }
 
-// The forward segment length the kernels were compiled with.
-int schedule() { return hidden_segment(); }
+std::tuple<int, int, int, int> active_recipe(int64_t n) {
+  Lanes f = fwd_lanes_active(n);
+  return {fwd_recipe(n), f.L, f.K, 8 * f.K};
+}
+
+int recipe_default(int64_t n) { return fwd_recipe_default(n); }
 
 std::tuple<int, int, int, int64_t, int, int, int, int, int> plan(int64_t n, int64_t rows) {
-  FwdPlan f = fwd_plan(fwd_lanes(n), rows);
+  FwdPlan f = fwd_plan(fwd_lanes_active(n), rows);
   Bands b = bwd_bands(bwd_lanes(n), rows, n, false);
   FoldPlan fo = fold_plan(b.bands, n);
   return {f.threads, f.var, bwd_var(bwd_lanes(n), rows), b.bands, b.iters,
@@ -333,6 +337,8 @@ std::tuple<int, int, int, int64_t, int, int, int, int, int> plan(int64_t n, int6
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   using namespace norms_sm100;
+  m.attr("RECIPE_VERSION") = 1;             // v1, the forward/backward recipe this package shipped
+  m.attr("RECIPE_VERSIONS") = py::make_tuple(1, 2); // both declared forward recipes (plan.h)
   m.def("rms_norm", &rms_norm, py::arg("x"), py::arg("weight"), py::arg("eps"), py::arg("zero_centered"));
   m.def("rms_norm_round_scale", &rms_norm_round_scale, py::arg("x"), py::arg("weight"), py::arg("eps"));
   m.def("add_rms_norm", &add_rms_norm, py::arg("x"), py::arg("residual"), py::arg("weight"), py::arg("eps"),
@@ -344,7 +350,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("raw_gated_fwd", &raw_gated_fwd);
   m.def("raw_gated_bwd", &raw_gated_bwd);
   m.def("recipe", &recipe);
-  m.def("schedule", &schedule);
+  m.def("active_recipe", &active_recipe, py::arg("n"));
+  m.def("recipe_default", &recipe_default, py::arg("n"));
   m.def("fwd_supported", &fwd_supported);
   m.def("plan", &plan, py::arg("n"), py::arg("rows"));
 }

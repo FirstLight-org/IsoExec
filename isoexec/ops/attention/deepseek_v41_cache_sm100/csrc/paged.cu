@@ -18,7 +18,6 @@
 #include <cuda_runtime.h>
 #include <cmath>
 
-#include "norm_segments.cuh"
 #include "numerics.cuh"
 #include "pdl.cuh"
 #include <cstdlib>
@@ -577,10 +576,10 @@ __global__ void __launch_bounds__(32) qkv_post_split_kernel(
 
 // RMSNorm of a hidden row (N = 5120) with its BF16 output AND the checkpoint FP8 encoding of that
 // output in one launch (the attention input feeds an FP8 checkpoint GEMM). The norm is norms_sm100's
-// schedule at N = 5120 (norm_segments.cuh: segments of S consecutive columns, chains from +0, adjacent tree; S
-// from schedule_policy through norms_sm100/schedule.py), realised with K = 5 loads per lane and L = 128 lanes,
-// one row per CTA; rstd = frsqrt_rn(add.rn(div.rn(root, N), eps)), y = rn_bf16(mul.rn(mul.rn(v,
-// rstd), g)) with a BF16 weight); the encoding is quant_g32_vec4's per-group program
+// declared recipe v2 at N = 5120 (sm100_rms_v2: K = 5 chunks of 8 per lane, L = 128 lanes, one row per
+// CTA; lane chain acc = add.rn(acc, mul.rn(v, v)) k-major/j-minor, the wide_fold staging of the
+// descending-XOR butterfly, rstd = frsqrt_rn(add.rn(div.rn(root, N), eps)), y = rn_bf16(mul.rn(mul.rn(v,
+// rstd), g)) with a BF16 weight) restated verbatim; the encoding is quant_g32_vec4's per-group program
 // (a 32-group = 4 consecutive lanes of one chunk: amax over 32 values is order free).
 // COLLAPSE: the row is first collapsed from the four mHC streams x [T, 4, N] with the (shifted) pre
 // [T, 4] by mhc_sm100's collapse program (((p0*x0 + p1*x1) + p2*x2) + p3*x3, every product and sum
@@ -624,11 +623,25 @@ __global__ void __launch_bounds__(128) rms_quant_5120_kernel(
             for (int j = 0; j < 8; ++j) v[8 * k + j] = __bfloat162float(h[j]);
         }
     }
-    __shared__ float sh[K * L];     // sh[c]: the partial of segment c = k L + lane (columns 8c .. 8c + 7)
+    float acc = 0.f;
 #pragma unroll
-    for (int k = 0; k < K; ++k) sh[k * L + lane] = norm_segments::segment_sq(v + 8 * k);
-    __syncthreads();
-    const float acc = norm_segments::segment_tree_warp<K * L>(sh);
+    for (int c = 0; c < C; ++c) acc = __fadd_rn(acc, __fmul_rn(v[c], v[c]));
+    {   // wide_fold<128>
+        constexpr int W = L / 32;
+        __shared__ float sh[L];
+        sh[lane] = acc;
+        __syncthreads();
+        const int j = lane & 31;
+        float f[W];
+#pragma unroll
+        for (int q = 0; q < W; ++q) f[q] = sh[q * 32 + j];
+#pragma unroll
+        for (int s = W >> 1; s > 0; s >>= 1)
+#pragma unroll
+            for (int q = 0; q < s; ++q) f[q] = __fadd_rn(f[q], f[q + s]);
+        acc = f[0];
+        for (int s = 16; s > 0; s >>= 1) acc = __fadd_rn(acc, __shfl_xor_sync(0xffffffffu, acc, s));
+    }
     const float rs = __frsqrt_rn(__fadd_rn(__fdiv_rn(acc, float(N)), eps));
     bf16 *orow = out + row * N;
 #pragma unroll

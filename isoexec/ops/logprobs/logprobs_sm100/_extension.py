@@ -3,7 +3,6 @@
 from functools import lru_cache
 
 from isoexec.ops.build_cache import DIAGNOSTIC_FLAGS, build_sm100_extension
-from isoexec.ops.logprobs.logprobs_sm100.schedule import cuda_defines
 
 SOURCES = ("bindings.cpp", "logprobs.cu")
 
@@ -16,5 +15,5 @@ def extension():
         __file__,
         SOURCES,
         include_csrc=True,
-        extra_cuda_flags=(*DIAGNOSTIC_FLAGS, *cuda_defines()),
+        extra_cuda_flags=DIAGNOSTIC_FLAGS,
     )

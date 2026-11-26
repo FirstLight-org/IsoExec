@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from isoexec.ops.norms.norms_sm100._extension import extension
-from isoexec.ops.norms.norms_sm100.spec import RECIPE_VERSION
+from isoexec.ops.norms.norms_sm100.spec import RECIPE_VERSION, RECIPE_VERSIONS
 
 
 def supported_width(n: int) -> bool:
-    """Widths the forward covers (mirrors ``csrc/plan.h::fwd_supported`` without building anything)."""
+    """Forward recipe v1 widths (mirrors ``csrc/plan.h::fwd_supported`` without building anything)."""
     return n > 0 and (n % 256 == 0 or n in (128, 384))
 
 
@@ -27,8 +27,8 @@ def add_rms_norm(x, residual, weight, eps: float, zero_centered: bool):
 class _AddRMSNorm:
     """Autograd for the fused residual join + RMSNorm whose backward is the UNFUSED program's backward.
 
-    Forward is the fused kernel (``h = rn_bf16(x + residual)`` stored, then the RMS schedule on ``h``).
-    Backward is ``raw_rms_bwd`` -- the kernel ``RMSNormFn`` runs, same schedule -- followed by
+    Forward is the fused kernel (``h = rn_bf16(x + residual)`` stored, then the width's active RMS recipe
+    on ``h``). Backward is ``raw_rms_bwd`` -- the kernel ``RMSNormFn`` runs, same bands -- followed by
     the bf16 accumulation autograd does for the unfused ``h = residual + x; y = rms(h)``: the norm's
     input gradient rounded to bf16 first, then the residual gradient added in bf16.
     """
@@ -93,21 +93,21 @@ def gated_rms_norm(x, z, weight, eps: float, zero_centered: bool = True):
     return extension().gated_rms_norm(x, z, weight, eps, zero_centered)
 
 
-def schedule():
-    """The forward segment length the loaded kernels were compiled with."""
-    return extension().schedule()
-
-
 def recipe(n: int):
-    """``(fwd_lanes, fwd_chunks, bwd_lanes, bwd_chunks)`` for width ``n``: threads per row and 16-byte loads per
-    thread. Execution geometry only; the numerical schedule (``schedule.py``) does not read it."""
+    """``(fwd_lanes, fwd_chunks, bwd_lanes, bwd_chunks)`` for width ``n``; the first two are the recipe."""
     return extension().recipe(n)
 
 
-def plan(n: int, rows: int):
-    """Execution geometry at width ``n`` and ``rows`` rows (none of it numerical); see ``csrc/host.cpp::plan``."""
-    return extension().plan(n, rows)
+def active_recipe(n: int):
+    """``(version, L, K, chain)``: which forward recipe width ``n`` folds with right now."""
+    return extension().active_recipe(n)
 
 
-__all__ = ["RECIPE_VERSION", "add_rms_norm", "add_rms_norm_fused", "gated_rms_norm", "plan", "recipe",
-           "rms_norm", "rms_norm_round_scale", "schedule", "supported_width"]
+def recipe_default(n: int) -> int:
+    """The SHIPPED forward recipe version for width ``n`` (``csrc/plan.h::fwd_recipe_default``)."""
+    return extension().recipe_default(n)
+
+
+
+__all__ = ["RECIPE_VERSION", "RECIPE_VERSIONS", "active_recipe", "add_rms_norm", "add_rms_norm_fused", "gated_rms_norm",
+           "recipe", "recipe_default", "rms_norm", "rms_norm_round_scale", "supported_width"]

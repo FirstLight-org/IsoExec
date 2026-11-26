@@ -10,10 +10,13 @@ from isoexec.ops.norms.norms_sm100 import integration as I
 from isoexec.ops.norms.norms_sm100 import ops as O
 from isoexec.ops.norms.norms_sm100.spec import (
     ADD_RMS_IMPL,
+    ADD_RMS_IMPL_V2,
     GATED_IMPL,
     IMPLS,
     RECIPE_VERSION,
+    RECIPE_VERSION_V2,
     RMS_IMPL,
+    RMS_IMPL_V2,
 )
 
 
@@ -26,7 +29,8 @@ def test_declarations():
         "norms.mla",
         "norms.gated_out",
     }
-    SM100 = {RMS_IMPL: RECIPE_VERSION, GATED_IMPL: RECIPE_VERSION, ADD_RMS_IMPL: RECIPE_VERSION}
+    SM100 = {RMS_IMPL: RECIPE_VERSION, GATED_IMPL: RECIPE_VERSION, RMS_IMPL_V2: RECIPE_VERSION_V2,
+             ADD_RMS_IMPL: RECIPE_VERSION, ADD_RMS_IMPL_V2: RECIPE_VERSION_V2}
     for op in reg.ops.values():
         for impl in op.impls.values():
             assert impl.supported_archs == frozenset({"sm100"})
@@ -35,30 +39,29 @@ def test_declarations():
             assert not impl.twin_class
 
 
-def test_one_schedule_is_declared_at_every_rms_op():
+def test_both_forward_recipes_are_declared_at_every_rms_op():
     reg = Registry.from_impls(IMPLS)
     for op in ("norms.rms.pre_attn", "norms.rms.pre_mlp", "norms.rms.final"):
-        # the fused residual join + RMSNorm is declared at the residual stages only
-        assert set(reg.ops[op].impls) == {RMS_IMPL, ADD_RMS_IMPL}, op
-    assert set(reg.ops["norms.mla"].impls) == {RMS_IMPL}
+        # the fused residual join + RMSNorm is declared once per recipe, at the residual stages only
+        assert set(reg.ops[op].impls) == {RMS_IMPL, RMS_IMPL_V2, ADD_RMS_IMPL, ADD_RMS_IMPL_V2}, op
+    assert set(reg.ops["norms.mla"].impls) == {RMS_IMPL, RMS_IMPL_V2}
     assert set(reg.ops["norms.gated_out"].impls) == {GATED_IMPL}
 
 
-def test_the_identity_does_not_depend_on_the_width():
-    """Versions 1 and 2 were keyed on the width; the policy's schedule is one for every width."""
-    assert RECIPE_VERSION == 3
-    assert {I.rms_impl(n) for n in (128, 384, 2048, 1536, 4096, 5120, 7168)} == {RMS_IMPL}
-    assert {I.add_rms_impl(n) for n in (2048, 1536, 4096, 5120, 7168)} == {ADD_RMS_IMPL}
+def test_the_v2_impl_id_is_its_own_name():
+    assert RMS_IMPL_V2 == "sm100_rms_v2" and RMS_IMPL_V2 != RMS_IMPL
+    assert RECIPE_VERSION_V2 == 2 and RECIPE_VERSION_V2 != RECIPE_VERSION
 
 
 def test_impl_ids_are_never_the_sm90_spelling():
     """Impl ids follow the sm90 spelling with the new arch; the sm90 id itself is never reused."""
-    assert RMS_IMPL == "sm100_rms_v3" and GATED_IMPL == "sm100_gated_v3"
+    assert RMS_IMPL == "sm100_rms_v1" and GATED_IMPL == "sm100_gated_v1"
     from isoexec.ops.norms.norms_sm90.spec import ADD_RMS_IMPL as SM90_ADD
     from isoexec.ops.norms.norms_sm90.spec import GATED_IMPL as SM90_GATED
     from isoexec.ops.norms.norms_sm90.spec import RMS_IMPL as SM90_RMS
 
-    assert {RMS_IMPL, GATED_IMPL, ADD_RMS_IMPL}.isdisjoint({SM90_RMS, SM90_GATED, SM90_ADD})
+    assert {RMS_IMPL, GATED_IMPL, ADD_RMS_IMPL, ADD_RMS_IMPL_V2}.isdisjoint({SM90_RMS, SM90_GATED, SM90_ADD})
+    assert I.add_rms_impl(4096) == ADD_RMS_IMPL_V2 and I.add_rms_impl(2048) == ADD_RMS_IMPL
 
 
 def test_the_recipe_version_has_one_definition():
@@ -68,7 +71,7 @@ def test_the_recipe_version_has_one_definition():
 
 def test_the_mla_norm_is_declared_here():
     reg = Registry.from_impls(IMPLS)
-    assert set(reg.ops["norms.mla"].impls) == {RMS_IMPL}
+    assert set(reg.ops["norms.mla"].impls) == {RMS_IMPL, RMS_IMPL_V2}
 
 
 def test_recipe_widths():

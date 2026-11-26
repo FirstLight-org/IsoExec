@@ -25,8 +25,11 @@ void run_rms(const FwdArgs &a) {
   int64_t blocks = (a.M + rpb - 1) / rpb;
   auto stream = at::cuda::getCurrentCUDAStream();
 #define LAUNCH(V)                                                                                  \
-  if constexpr (K == 7 && L == 128 && V == VAR_KEEP)                                               \
-    rms_fwd_occ<K, L, MODE, WF, RES, true, V><<<dim3(blocks), p.threads, 0, stream>>>(              \
+  if constexpr (L > 32 && K == 7 && L == 128 && V == VAR_KEEP)                                    \
+    rms_fwd_v2_occ<K, L, MODE, WF, RES, true, V><<<dim3(blocks), p.threads, 0, stream>>>(           \
+        a.x, a.sx, a.r, a.sr, a.w, a.hout, a.out, a.rstd, a.M, rpb, a.eps);                        \
+  else if constexpr (L > 32)                                                                       \
+    rms_fwd_v2<K, L, MODE, WF, RES, true, V><<<dim3(blocks), p.threads, 0, stream>>>(               \
         a.x, a.sx, a.r, a.sr, a.w, a.hout, a.out, a.rstd, a.M, rpb, a.eps);                        \
   else                                                                                             \
     rms_fwd<K, L, MODE, WF, RES, true, V><<<dim3(blocks), p.threads, 0, stream>>>(                  \
@@ -83,10 +86,10 @@ void run_gated(const GatedArgs &a) {
         a.x, a.sx, a.z, a.szt, a.szh, a.w, a.out, a.rstd, a.M, a.hv, rpb, a.eps);
 }
 
-// (K, L) of every width fwd_lanes returns: N = 256 K at L = 32, 128 and 384 at L = 16, and the four timed widths.
 #define FWD_WIDTHS(X)                                                                              \
-  X(1, 32) X(2, 32) X(3, 32) X(4, 32) X(8, 32) X(24, 32) X(32, 32) X(1, 16) X(3, 16)               \
-  X(3, 64) X(4, 128) X(5, 128) X(7, 128)
+  X(1, 32) X(2, 32) X(3, 32) X(4, 32) X(8, 32) X(16, 32) X(20, 32) X(24, 32) X(32, 32) X(1, 16)    \
+  X(3, 16) X(1, 64) X(2, 128) X(4, 128) X(5, 128) X(1, 256) X(2, 256) X(1, 512)                    \
+  X(6, 32) X(28, 32) X(3, 64) X(7, 128)
 #define GATED_WIDTHS(X) X(1, 16) X(3, 16) X(2, 32)
 
 } // namespace
@@ -94,7 +97,7 @@ void run_gated(const GatedArgs &a) {
 void launch_rms_fwd(const at::Tensor &x, const at::Tensor &r, const at::Tensor &w,
                     const at::Tensor &hout, const at::Tensor &out, const at::Tensor &rstd,
                     double eps, int mode) {
-  Lanes l = fwd_lanes(x.size(1));
+  Lanes l = fwd_lanes_active(x.size(1));
   FwdArgs a{bf16_ptr(x),
             r.defined() ? bf16_ptr(r) : nullptr,
             x.stride(0),
@@ -124,8 +127,8 @@ void launch_rms_fwd(const at::Tensor &x, const at::Tensor &r, const at::Tensor &
   }
   FWD_WIDTHS(X)
 #undef X
-  TORCH_CHECK(false, "norms_sm100: width ", x.size(1), " (L=", l.L, ", K=", l.K,
-              ") has no instantiated forward kernel");
+  TORCH_CHECK(false, "norms_sm100: width ", x.size(1), " recipe v", fwd_recipe(x.size(1)),
+              " (L=", l.L, ", K=", l.K, ") has no instantiated forward kernel");
 }
 
 void launch_gated_fwd(const at::Tensor &x, const at::Tensor &z, const at::Tensor &w,
@@ -148,7 +151,5 @@ void launch_gated_fwd(const at::Tensor &x, const at::Tensor &z, const at::Tensor
 #undef X
   TORCH_CHECK(false, "norms_sm100: width ", x.size(1), " has no instantiated gated kernel");
 }
-
-int hidden_segment() { return HIDDEN_SEG; }
 
 } // namespace norms_sm100

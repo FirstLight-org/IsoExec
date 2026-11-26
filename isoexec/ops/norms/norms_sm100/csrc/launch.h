@@ -29,7 +29,4 @@ void launch_gated_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tenso
 
 void launch_dw_fold(const at::Tensor &partials, const at::Tensor &dw);
 
-// The forward segment length the kernels were compiled with (schedule.py passes it from schedule_policy).
-int hidden_segment();
-
 } // namespace norms_sm100

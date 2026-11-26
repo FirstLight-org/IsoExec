@@ -3,7 +3,6 @@
 from functools import lru_cache
 
 from isoexec.ops.build_cache import build_sm100_extension
-from isoexec.ops.norms.norms_sm100.schedule import cuda_defines
 
 SOURCES = ("host.cpp", "launch_fwd.cu", "launch_bwd.cu")
 
@@ -16,5 +15,5 @@ def extension():
         __file__,
         SOURCES,
         include_csrc=True,
-        extra_cuda_flags=("-Xptxas=-warn-spills", *cuda_defines()),
+        extra_cuda_flags=("-Xptxas=-warn-spills",),
     )
