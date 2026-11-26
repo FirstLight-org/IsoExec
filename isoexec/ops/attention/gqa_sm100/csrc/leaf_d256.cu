@@ -486,9 +486,9 @@ __global__ __launch_bounds__(THREADS_256, 1) void gqa_leaf_d256(
             // the MMA issuer waits only on values_ready in the steady state.
             if (lane == 0) {
                 bar_wait(&loaded_q, 0);
-                arrive_cluster(&query_ready);
+                arrive_cluster_release(&query_ready);
                 bar_wait(&loaded_k[0], 0);
-                arrive_cluster(&keys_ready[0]);
+                arrive_cluster_release(&keys_ready[0]);
             }
             for (int ordinal = 1; ordinal < 2 * total; ++ordinal) {
                 const bool is_key = (ordinal & 1) != 0 && ordinal < 2 * total - 1;
@@ -497,7 +497,7 @@ __global__ __launch_bounds__(THREADS_256, 1) void gqa_leaf_d256(
                 if (is_key) {
                     if (lane == 0) {
                         bar_wait(&loaded_k[slot], phase);
-                        arrive_cluster(&keys_ready[slot]);
+                        arrive_cluster_release(&keys_ready[slot]);
                     }
                     continue;
                 }
@@ -529,7 +529,7 @@ __global__ __launch_bounds__(THREADS_256, 1) void gqa_leaf_d256(
                 if (lane == 0) arrive_cluster_release(&values_ready[slot]);
             }
         } else if (thread == MMA_THREAD && rank == 0) {
-            bar_wait(&query_ready, 0);
+            bar_wait_cluster(&query_ready, 0);
 #ifdef GQA_D256_FOLD
             //: (segment, tile in segment) carried incrementally: the accumulator RESET is at every
             //: SEGMENT start (an item may hold a run of segments in this build).
@@ -544,7 +544,8 @@ __global__ __launch_bounds__(THREADS_256, 1) void gqa_leaf_d256(
                     const int u = g + ahead;
                     if (u >= total) continue;
                     const int slot = u % KV, phase = (u / KV) & 1;
-                    bar_wait(&keys_ready[slot], phase);
+                    bar_wait_cluster(&keys_ready[slot], phase);
+                    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                     qk_sequence256(tmem + uint32_t(slot * 128), descriptor(s.q, false),
                                    descriptor(s.k[slot], false), qk_instruction);
                     commit_pair(&qk_done[slot]);
@@ -555,8 +556,8 @@ __global__ __launch_bounds__(THREADS_256, 1) void gqa_leaf_d256(
                 // warps, which published it with fence::before_thread_sync.
                 asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                 bar_wait(&output_ready, g & 1);
-                asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                 bar_wait_cluster(&values_ready[slot], phase);
+                asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                 const uint32_t probability = tmem + uint32_t(slot * 128);
                 const uint64_t values = descriptor(s.v[slot], true);
 #ifndef GQA_D256_FOLD
