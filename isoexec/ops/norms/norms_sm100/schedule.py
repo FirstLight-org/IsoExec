@@ -1,4 +1,4 @@
-"""The numerical schedule of the norms_sm100 FORWARD sum of squares, stated through the policy (design 7.2).
+"""The numerical schedule of the norms_sm100 FORWARD sum of squares, stated through the policy (design 7.3).
 
 Nothing here is on a call path: the kernels (``csrc/``) are the tree's own and read nothing from this module.
 It states their schedule as data, and ``tests/test_schedule_policy_cpu.py`` fails if ``csrc/plan.h`` or

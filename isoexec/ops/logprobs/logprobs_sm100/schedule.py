@@ -1,4 +1,4 @@
-"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy (design 7.2).
+"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy (design 7.3).
 
 Nothing here is on a call path: the kernels (``csrc/logprobs.cu``, ``csrc/logprobs_v2.cu``) are the tree's own
 and read nothing from this module. It states their schedule as data, and ``tests/test_schedule_policy_cpu.py``
