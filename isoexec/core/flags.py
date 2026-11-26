@@ -103,6 +103,18 @@ FLAGS: List[Flag] = [
               "combine, gated by mla_sm100's rel_combine_tree_widths). A saturated-decode cut that does not fit "
               "refuses rather than cutting less.",
     ),
+    Flag(
+        "ISOEXEC_TARGET_BATCH", "", ("both",),
+        "optional target batch of the deployment: the decode batch the attention schedules are tuned for",
+        FUNCTION, (TRAIN, ENGINE),
+        notes="Empty or unset declares none: the schedule policy (ops/schedule_policy.py) then schedules for "
+              "throughput, one segment per row of the declared longest context (gqa_sm100, mla_sm100). A value "
+              "cuts a row into the segments the device has workers free for at that batch. Any batch size runs "
+              "under any value and is batch-invariant under it; two different values are two different numerical "
+              "programs, so it MUST match on the trainer and every engine. Both read it from the launch "
+              "environment (ops/attention/target_batch.py); the verl engine workers report the schedule they "
+              "bound in every weight acknowledgement and the first sync refuses a difference.",
+    ),
     # Master switch.
     Flag(
         "ISOEXEC",
@@ -1596,6 +1608,7 @@ NUMERICS_SWITCHES: Tuple[str, ...] = (
     "ISOEXEC_PIK_OWNER_ROUTE",
     "ISOEXEC_PIK_P2P",
     "ISOEXEC_SHARD_SAMPLER",
+    "ISOEXEC_TARGET_BATCH",
     "ISOEXEC_TRAINER_BUCKET_PACK",
     "ISOEXEC_WGRAD_FUSION",
     "PIK_AUTOTUNE_M_BUCKET_FLOOR",
