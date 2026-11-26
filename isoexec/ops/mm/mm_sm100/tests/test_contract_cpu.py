@@ -116,7 +116,7 @@ def test_no_segment_table_is_left():
 
 def test_the_schedule_digest_covers_everything_the_schedule_reads(monkeypatch):
     base = seg.schedule_digest()
-    assert seg.schedule_inputs() == {"policy": "7.1", "rule": 3, "block": 16, "shortest": None,
+    assert seg.schedule_inputs() == {"policy": "7.2", "rule": 3, "block": 16, "shortest": None,
                                      "merge": "tree", "root": "bf16_rne"}
     monkeypatch.setattr(seg, "REDUCER_SHORTEST", 1024)
     assert seg.schedule_digest() != base
@@ -131,9 +131,9 @@ def test_the_installed_schedule_policy_is_the_canonical_module():
 
     from isoexec.ops import schedule_policy as P
 
-    assert P.VERSION == "7.1"
+    assert P.VERSION == "7.2"
     assert hashlib.sha256(Path(P.__file__).read_bytes()).hexdigest() == \
-        "4fd6a35a16435f8cdb93d93f8b5b37265c9af050fc275c490c59fe774a628aa3"
+        "d4b5a777af9bfc0462308320a215385d1fda65f18aa9ade8136ae9c4e507a18e"
 
 
 def test_every_plan_for_a_shape_shares_one_schedule():
@@ -316,7 +316,7 @@ def test_the_record_a_peer_compares_pins_the_schedule_and_not_only_the_id():
     assert rec["impl_id"] == "sm100_tcgen05_segtree"
     assert rec["recipe_version"] == seg_recipe()
     assert rec["schedule_digest"] == seg.schedule_digest()
-    assert rec["schedule_policy_version"] == "7.1"
+    assert rec["schedule_policy_version"] == "7.2"
     assert "segment_table_digest" not in rec and "segment_policy_version" not in rec
 
 
