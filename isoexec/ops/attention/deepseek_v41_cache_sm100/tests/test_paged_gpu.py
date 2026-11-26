@@ -95,6 +95,43 @@ def test_paged_mixed_steps_equal_contiguous_full_sequence():
                 off += c
 
 
+def test_selected_lengths_are_passed_to_the_leaf_and_change_no_bit(monkeypatch):
+    """The schedule port: the engine path tells the leaf each row's occupied prefix of the selected list
+    (``paged.selected_lengths``: min(k, visible compressed keys)), so blocks of empty positions are not run. The same
+    steps with ``TRIM_SELECTED`` off (every block runs) give the same bits at every token, and the length is an
+    upper bound of every row's occupied prefix."""
+    from isoexec.ops.attention.sparse_sm100 import dualrail
+
+    runs = {}
+    for trim in (False, True):
+        monkeypatch.setattr(paged, "TRIM_SELECTED", trim)
+        seen = []
+        real = dualrail.dualrail_attn
+
+        def spy(q, kv, lists, scale, **kw):
+            if kw.get("extra_lists") is not None:
+                ln = kw.get("extra_topk_length")
+                seen.append((ln is not None, q.shape[0] >= paged.TRIM_MIN_ROWS))
+                if ln is not None:
+                    occupied = (kw["extra_lists"] >= 0).sum(1)
+                    last = torch.where(kw["extra_lists"] >= 0, torch.arange(kw["extra_lists"].shape[1], device="cuda")[None] + 1, 0).amax(1)
+                    assert bool((last <= ln).all()) and bool((occupied <= ln).all()), "a selected key lies past the length"
+            return real(q, kv, lists, scale, **kw)
+        monkeypatch.setattr(dualrail, "dualrail_attn", spy)
+        cfg, layers, xs = _setup(3)
+        win, comp, P = _tables(3, 5)
+        pools = _pools(cfg, 3, P)
+        slots = {0: 2, 1: 0, 2: 1}
+        runs[trim] = [_step(cfg, layers, xs, pools, plan, win, comp, slots) for plan in SCHEDULE]
+        # lengths go to launches of at least TRIM_MIN_ROWS rows (the schedule has prefill chunks and decode steps)
+        assert seen and all(passed == (trim and big) for passed, big in seen), (trim, seen[:8])
+        assert not trim or (any(big for _, big in seen) and any(not big for _, big in seen))
+        monkeypatch.setattr(dualrail, "dualrail_attn", real)
+    for a, b in zip(runs[False], runs[True]):
+        for x, y in zip(a, b):
+            assert _eq(x, y)
+
+
 def test_paged_tp_degree_invariance():
     cfg, layers, xs = _setup(3, seed=67)
     win, comp, P = _tables(3, 9)

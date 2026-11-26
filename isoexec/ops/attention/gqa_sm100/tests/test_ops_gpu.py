@@ -13,7 +13,8 @@ import torch
 
 from isoexec.core.arch import live_device_arch
 
-pytestmark = pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU")
+pytestmark = [pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU"),
+              pytest.mark.usefixtures("declaration")]
 
 #: Per-rank shapes of the release models' attention (test_seam_gpu.MODELS) at the TP sizes that
 #: give each distinct head ratio: (label, hq, hk, d).
@@ -147,11 +148,13 @@ def test_refusals():
         ops.varlen_attention(q, q[:, :1], q[:, :1], cu.long(), 64, 0.125)
 
 
-def test_install_receipt_names_the_recipe_and_the_backward():
+def test_install_receipt_names_the_recipe_and_the_backward(declaration):
     from isoexec.ops.attention.gqa_sm100 import integration, spec
 
     receipt = integration.install(deterministic_backward=True)
     assert receipt["impl"] == spec.TRAINER_IMPL and receipt["recipe"] == spec.RECIPE
-    assert receipt["seg_tokens"] == {128: 2048, 256: 2048}
+    span = {"default": 10240, "batch1": 640}[declaration]  # the schedule policy's, at each declaration
+    assert receipt["seg_tokens"] == {128: span, 256: span}
+    assert receipt["target_batch"] == {"default": None, "batch1": 1}[declaration]
     assert receipt["backward"] == {128: "FA4-sm100-deterministic", 256: "FA4-sm100-hd256-2cta"}
     assert receipt["fa4_commit"] == spec.FA4_COMMIT

@@ -14,6 +14,7 @@ _EXPORTS = {
     "kernel_fwd": "ops",
     "kernel_plan": "ops",
     "seg_tokens_for": "fwd",
+    "segment_span": "fwd",
     "profile_digest": "fwd",
 }
 

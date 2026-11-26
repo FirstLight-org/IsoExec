@@ -8,8 +8,8 @@ from isoexec.ops.attention.deepseek_v41_cache_sm100 import ops
 
 @pytest.fixture
 def env(monkeypatch):
-    monkeypatch.delenv("ISOEXEC_DSA_BWD", raising=False)
-    monkeypatch.delenv("ISOEXEC_DSA_BWD_ALLOW_NONDET", raising=False)
+    monkeypatch.delenv("ISOEXEC_SPARSE_BWD", raising=False)
+    monkeypatch.delenv("ISOEXEC_SPARSE_BWD_ALLOW_NONDET", raising=False)
     monkeypatch.setattr(ops, "BWD_PROVIDER", None)
     monkeypatch.setattr(ops, "BWD_TP_DEGREE", 1)
 
@@ -26,7 +26,7 @@ def test_default_and_fallback(env):
     assert ops.backward_provider() == "isoexec"
     cudnn(None, False)                          # no cuDNN DSA namespace
     assert ops.backward_provider() == "isoexec"
-    mp.setenv("ISOEXEC_DSA_BWD", "isoexec")
+    mp.setenv("ISOEXEC_SPARSE_BWD", "isoexec")
     cudnn(object(), True)
     assert ops.backward_provider() == "isoexec"
 
@@ -34,10 +34,10 @@ def test_default_and_fallback(env):
 def test_nondeterministic_refused(env):
     mp, cudnn = env
     cudnn(object(), True)
-    mp.setenv("ISOEXEC_DSA_BWD", "cudnn")
+    mp.setenv("ISOEXEC_SPARSE_BWD", "cudnn")
     with pytest.raises(ops.NondeterministicBackwardError):
         ops.backward_provider()
-    mp.setenv("ISOEXEC_DSA_BWD_ALLOW_NONDET", "1")
+    mp.setenv("ISOEXEC_SPARSE_BWD_ALLOW_NONDET", "1")
     assert ops.backward_provider() == "cudnn"
     for tp in (2, None):                         # TP > 1, or a multi-process run of unknown TP degree
         mp.setattr(ops, "BWD_TP_DEGREE", tp)
@@ -49,7 +49,7 @@ def test_nondeterministic_refused(env):
 
 def test_unknown_name_and_tags(env):
     mp, _ = env
-    mp.setenv("ISOEXEC_DSA_BWD", "fast")
+    mp.setenv("ISOEXEC_SPARSE_BWD", "fast")
     with pytest.raises(ValueError):
         ops.backward_provider()
     assert set(ops.BWD_PROGRAM_TAGS) == {"cudnn_det", "isoexec", "cudnn"}

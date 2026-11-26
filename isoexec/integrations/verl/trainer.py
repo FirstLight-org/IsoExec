@@ -129,6 +129,15 @@ def verify_acks(root: Path, version: int, expected: int) -> dict[str, Any]:
     identities = {(ack["replica_rank"], ack["dp_rank"], ack["rank"]) for ack in acks}
     if len(acks) != expected or len(identities) != expected or any(ack["version"] != version for ack in acks):
         raise Refusal(f"weight_sync.acks: version {version} has {len(acks)} worker acks, expected {expected}")
+    # Every engine worker bound the attention schedule this side's launch environment declares (the optional
+    # target batch among its inputs): a worker launched with another declaration computes other bits, so the
+    # sync refuses it here, at version 0 before the first rollout and again at every later version.
+    from isoexec.ops.attention.target_batch import require_same_schedule, schedule_record
+
+    mine = json.loads(json.dumps(schedule_record()))
+    for ack in acks:
+        require_same_schedule(mine, ack.get("attention_schedule"),
+                              who=f"engine worker replica {ack['replica_rank']} dp {ack['dp_rank']} rank {ack['rank']}")
     return {"workers": len(acks), "runner_classes": sorted({ack["runner_class"] for ack in acks}),
             "parameter_sha256": {f"r{a['replica_rank']}d{a['dp_rank']}k{a['rank']}": a["parameter_sha256"] for a in acks}}
 

@@ -81,7 +81,7 @@ ANY_ALLOC = re.compile(r"Allocator[12]Sm\b|tcgen05\.alloc\.cta_group|tmem::alloc
 ZERO_FREE = re.compile(r"\.free\(\s*0u?\s*,|tmem::teardown<[^>]*>\(\s*0u?\s*,|tmem::dealloc<[^>]*>\(\s*0u?\s*,"
                        r"|tcgen05\.dealloc\.cta_group::\d[^;]*;\"\s*::\s*\"r\"\(\s*0u?\s*\)")
 #: Files allowed a literal-0 dealloc: they allocate all 512 columns, which tcgen05.alloc can only satisfy at 0.
-ZERO_OK_512 = {"attention/dsa_sm100/csrc/dualrail/leaf.cuh", "attention/dsa_sm100/csrc/dualrail/split.cuh"}
+ZERO_OK_512 = {"attention/sparse_sm100/csrc/dualrail/leaf.cuh", "attention/sparse_sm100/csrc/dualrail/split.cuh"}
 
 
 def test_no_hard_coded_tmem_base():

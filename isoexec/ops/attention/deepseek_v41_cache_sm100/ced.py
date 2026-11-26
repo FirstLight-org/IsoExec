@@ -345,7 +345,7 @@ def attention_rows_gen(module, x, cfg, index, state, glob, rows, *, linear_fn, d
     q = ops.q_rope(q, D, table, ops.Pos(pos=pos, div=H))
 
     if index in cfg.index_source_layer_ids:
-        from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
+        from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
         cand_src, blk = cfg.candidate_source_layer_id, cfg.candidate_block_size
         with torch.no_grad():
             hi = cfg.index_n_heads
@@ -490,8 +490,8 @@ def query_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequant_f
     not applied: layer b's window keys are token-wise in the encoder output), ``wo_a``, ``wo_b``. The TP generator
     protocol of ``attention_paged_gen``: returns this rank's ``wo_b`` root."""
     yield from ()
-    from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
-    from isoexec.ops.attention.dsa_sm100.dualrail import dualrail_attn
+    from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
+    from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
 
     from . import paged
     check_boundary(cfg, index)
@@ -558,6 +558,7 @@ def query_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequant_f
         # the floor-free key: shared with the layers after b only when the batch carries no window floor
         main, extra = paged._per_step(batch, ("lists", window_key, ckey, gen, None), make_lists)
     o, _ = dualrail_attn(q.view(R, H, D), pools.window[index], main, D ** -0.5, sink=module.attn_sink,
-                         extra_kv=pools.comp[key], extra_lists=extra)
+                         extra_kv=pools.comp[key], extra_lists=extra,
+                         extra_topk_length=paged.selected_lengths(batch, pos, 1, cfg.index_topk))
     return ops.output_projection(module, o, cfg, table, ops.Pos(pos=pos, div=H), 1, R, linear_fn, dequant_fn,
                                  tp=tp).view(R, -1)

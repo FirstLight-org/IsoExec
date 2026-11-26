@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from isoexec.ops.attention.mla_sm100.fwd import mla_sm100_fwd, mla_sm100_plan
+from isoexec.ops.attention.mla_sm100.fwd import mla_sm100_fwd, mla_sm100_plan, segment_span
 
 __all__ = ["kernel_fwd", "kernel_plan", "mla_sm100_attention"]
 
@@ -30,7 +30,10 @@ LATENT, ROPE = 512, 64
 
 def mla_sm100_attention(q_nope, q_pe, c_kv, k_pe, w_uk, w_uv, *, seq_lens: Sequence[int],
                        scale: float, seg_tokens: int):
-    """Packed causal absorbed MLA: ``[T, H, nope]`` queries over their own sequences -> ``[T, H, v]``."""
+    """Packed causal absorbed MLA: ``[T, H, nope]`` queries over their own sequences -> ``[T, H, v]``.
+
+    ``seg_tokens`` must be :func:`segment_span` (the schedule policy's span at spec.py's declarations);
+    the parameter is kept so the binding records it, and any other value is refused."""
     if torch.is_grad_enabled() and any(t.requires_grad for t in (q_nope, q_pe, c_kv, k_pe, w_uk, w_uv)):
         raise RuntimeError("SM100 packed MLA is forward-only; no backward implementation is registered")
     if q_nope.ndim != 3:
@@ -51,8 +54,9 @@ def mla_sm100_attention(q_nope, q_pe, c_kv, k_pe, w_uk, w_uv, *, seq_lens: Seque
         raise ValueError("mla_sm100 operands must share one CUDA device")
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError("MLA softmax scale must be finite and positive")
-    if type(seg_tokens) is not int or seg_tokens <= 0 or seg_tokens % 128:
-        raise ValueError("seg_tokens must be a positive multiple of 128")
+    if type(seg_tokens) is not int or seg_tokens != segment_span():
+        raise ValueError(f"seg_tokens must be the schedule policy's span, {segment_span()} "
+                         f"(mla_sm100.segment_span(); got {seg_tokens!r}): it is not a caller's choice")
     lens = _lengths(seq_lens, tokens)
     lengths = torch.tensor(lens, device=q_nope.device, dtype=torch.int32)
     cu = torch.cat((lengths.new_zeros(1), lengths.cumsum(0, dtype=torch.int32)))

@@ -20,7 +20,8 @@ import torch
 
 from isoexec.core.arch import live_device_arch
 
-pytestmark = pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU")
+pytestmark = [pytest.mark.skipif(live_device_arch() != "sm100", reason="requires an SM100 GPU"),
+              pytest.mark.usefixtures("declaration")]
 
 #: (label, hq, hk, d): the unsplit layers; per-rank shapes come from ``_rank_heads``.
 MODELS = [
@@ -207,7 +208,7 @@ def test_a_decode_row_does_not_depend_on_its_batch(label, hq, hk, d):
 
 @pytest.mark.parametrize("n", (10240, 40000))
 def test_long_context_decode_matches_the_trainer_row(n):
-    """The production maximum (10240), and a context past SEG_CONTEXT, on the 35B engine geometry."""
+    """The production maximum (10240), and a context past ``spec.LONGEST_CONTEXT``, on the 35B engine geometry."""
     q, k, v = _qkv([n], 2, 1, 256, seed=11)
     scale = 256 ** -0.5
     t = _trainer(q, k, v, [n], scale)

@@ -15,7 +15,7 @@ Pools (engine-owned memory; ``PagedPools`` allocates them for tests and simple h
 Producer sharing is the full-sequence program's: consumers read their producer's pools; the window pool
 is per layer. A step is a packed varlen batch: sequences with ``p0`` cached tokens and ``n`` new tokens
 (prefill chunks and decode rows mixed, tokens of a sequence contiguous and in order). Attention is the
-dual-rail sink recipe (``sm100_dsa_sparse_dualrail_sink_v1``, recipe 3) reading the FP8 window pool as
+dual-rail sink recipe (``sm100_sparse_dualrail_sink_v1``, recipe 3) reading the FP8 window pool as
 its main list (W fixed slots) and the FP8 compressed pool as its extra list -- bit for bit the contiguous
 recipe-3 program (whose lists use the same fixed slots), so paged == contiguous == incremental == full.
 Everything is device-resident and shape-static for a given (tokens, sequences, group bounds): a decode
@@ -184,6 +184,37 @@ def floor_window_lists(lists, pos, floor):
     return torch.where(j < n.unsqueeze(1), kept, -1).to(torch.int32).contiguous()
 
 
+#: Schedule port (design 7.1, rule 1: blocks of 64 list positions, one continued chain; a block that holds only empty
+#: positions is skipped by a step program). The selected part of a row's list holds its ``min(k, ke)`` selected keys
+#: first (``ke``: the row's visible compressed keys) and empty positions after; the leaf is told that length and does
+#: not run the blocks past it. Same bits as running every block (sparse_sm100/tests/test_domains_gpu.py; the paged ==
+#: contiguous relations of tests/test_paged_gpu.py compare this path with the contiguous one, which runs every block);
+#: False runs every block.
+TRIM_SELECTED = True
+#: Launches below this many rows keep running every block (execution only: the bits are the same). B200, engine leaf
+#: call, FP8 window + compressed records (policy_validation/port/attn/sparse/bench): from 64 rows (the persistent plan)
+#: the length saves 4-7 us a launch where the list has empty blocks (0.66-0.79 of the time; 0.48-0.56 on 1056 trainer-
+#: shaped rows) and costs nothing where it has none; below, on the split plan, a launch gains nothing measurable and
+#: the step would pay the 6 us length launch.
+TRIM_MIN_ROWS = 64
+
+
+def selected_lengths(batch, pos, ratio, k):
+    """int32 ``[rows]``: an upper bound, exact without a candidate filter, of the occupied prefix of each row's
+    selected list -- ``min(k, ke)``. One clamp per step and ratio (``ke`` is the step's index bound, shared with the
+    index scores and the top-k); every layer of the step reads it. None when ``TRIM_SELECTED`` is off or the launch has
+    fewer than ``TRIM_MIN_ROWS`` rows."""
+    if not TRIM_SELECTED or pos.shape[0] < TRIM_MIN_ROWS:
+        return None
+
+    def make_ke():
+        ke = torch.empty(pos.shape[0], dtype=torch.int32, device=pos.device)
+        extension().index_bounds(pos.to(torch.int32).contiguous(), batch.valid, ratio, ke)
+        return ke
+    ke = _per_step(batch, ("ke", ratio), make_ke)
+    return _per_step(batch, ("selected_len", ratio, k), lambda: ke.clamp(max=k).contiguous())
+
+
 def _per_step(batch, key, make):
     """Step metadata shared by every layer of one step (block-table rows, attention lists, index bounds):
     computed by the first layer that needs it, then read by the others (``batch.step`` is cleared per
@@ -280,7 +311,7 @@ INDEX_KQ_STORE = True
 
 #: The leaf rotates the query's RoPE tail itself (and, with one output group per rank, applies the output's inverse
 #: RoPE): ``dualrail_attn(rope_q=True, rope_o=True)``, the same bits as ``ops.q_rope`` + ``ROW_OUT_INV_ROPE``
-#: (dsa_sm100 tests/test_dualrail_fused_rope_gpu.py); two launches per layer fewer. False: the separate launches.
+#: (sparse_sm100 tests/test_dualrail_fused_rope_gpu.py); two launches per layer fewer. False: the separate launches.
 LEAF_ROPE = True
 
 #: Index scores of prefill-shaped launches on the gathered route (``ops.index_scores(gather=True)``: the keys of the
@@ -298,7 +329,7 @@ INDEX_GATHER_MAX_KEYS = 1 << 20
 def index_gather_route(rows, seqs, table_rows, width):
     """The index-score route of one launch from its shape: ``rows`` query rows of ``seqs`` sequences (host shape)
     reading a ``table_rows``-row block table of ``width`` keys per row. Never data: an execution choice only."""
-    from isoexec.ops.attention.dsa_sm100 import index_logits
+    from isoexec.ops.attention.indexer_sm100 import index_logits
     keys = index_logits.gather_capacity(rows, table_rows, width)
     if not (rows > 0 and keys > 0 and 1 <= table_rows <= index_logits.MAX_GATHER_SEQS
             and table_rows * width < (1 << 31)):
@@ -661,7 +692,7 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
                            table=table, pos=ops.Pos(pos=gpos), codes=codes, sf=sf.view(R))
                 extension().paged_index_write(codes, sf, idest, pools.index[key])
         if index in cfg.index_source_layer_ids:
-            from isoexec.ops.attention.dsa_sm100 import topk as dsa_topk
+            from isoexec.ops.attention.indexer_sm100 import topk as dsa_topk
             def make_ke():          # (pos + 1) // r, 0 on padded rows: one integer launch
                 ke = torch.empty(N, dtype=torch.int32, device=dev)
                 extension().index_bounds(pos.to(torch.int32).contiguous(), batch.valid, r, ke)
@@ -767,9 +798,10 @@ def attention_paged_gen(module, x, cfg, index, pools, batch, *, linear_fn, dequa
     else:
         main, extra = _per_step(batch, ("lists", window_key, ckey if r else r, gen,
                                         None if floor is None else "floor"), make_lists)
-    from isoexec.ops.attention.dsa_sm100.dualrail import dualrail_attn
+    from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
     o, _ = dualrail_attn(q.view(N, H, D), pools.window[index], main, D ** -0.5, sink=module.attn_sink,
                          extra_kv=pools.comp[cfg.source_layer(index, "kv")] if r else None, extra_lists=extra,
+                         extra_topk_length=selected_lengths(batch, pos, r, cfg.index_topk) if r else None,
                          rope=(cos, sin, pos) if leaf_rope else None, rope_q=leaf_rope, rope_o=rope_o)
     return ops.output_projection(module, o, cfg, table, ops.Pos(pos=pos, div=H), 1, N, linear_fn, dequant_fn,
                                  tp=tp, o_roped=rope_o).view(N, -1)

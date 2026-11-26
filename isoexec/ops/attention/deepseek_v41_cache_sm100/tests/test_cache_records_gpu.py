@@ -177,7 +177,7 @@ def test_index_key_record_is_one_exponent_per_key():
 def test_leaf_on_records_equals_leaf_on_qdq_rows(H):
     """Dual-rail sink leaf: window records (main list) + compressed records (extra list) == the same leaf on the
     trainer's BF16 quantize/dequantize rows (one arena, extra rows offset), bit for bit."""
-    from isoexec.ops.attention.dsa_sm100.dualrail import dualrail_attn
+    from isoexec.ops.attention.sparse_sm100.dualrail import dualrail_attn
     cfg = _cfg()
     g = torch.Generator(device="cuda").manual_seed(H)
     S, Se, R = 1024, 512, 9

@@ -121,10 +121,15 @@ class IsoExecWorkerExtension(vLLMColocateWorkerExtension):
             model.finish_weight_update()
         torch.cuda.synchronize(self.device)
         self._isoexec_version += 1
+        from isoexec.ops.attention.target_batch import schedule_record
+
         ack = {
             **self.isoexec_runtime_identity(),
             "event": "weight_ack", "version": self._isoexec_version, "tensors_received": received,
             "parameter_sha256": local_parameter_sha256(model), "wall_time": time.time(),
+            # the attention schedules this worker bound (policy version, optional target batch, spans); the
+            # trainer side compares it with its own before the first rollout (trainer.verify_acks)
+            "attention_schedule": schedule_record(),
         }
         from .full_distribution import run_root
 

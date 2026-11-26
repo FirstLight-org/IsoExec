@@ -20,9 +20,10 @@ class SM100Backend(Backend):
     has_seg = True
     has_backward = False   # the backward stays the sm90 FA3-basis path; see README.md
 
-    def __init__(self, seg_tokens: int = 512, recipe: int = 1):
-        super().__init__(seg_tokens)
+    def __init__(self, seg_tokens: int | None = None, recipe: int = 1):
         from isoexec.ops.attention.mla_sm100 import fwd as fwd_mod
+
+        super().__init__(fwd_mod.segment_span() if seg_tokens is None else seg_tokens)
 
         #: Round 5: which recipe the relations drive (1 = sm100_absorbed_segtree, 2 = _v2).
         self.recipe = int(recipe)
@@ -68,7 +69,7 @@ class SM100Backend(Backend):
             ident["nvcc_flags"] = " ".join(profile_flags())
         except Exception as exc:  # pragma: no cover
             ident["fwd_profile_digest"] = f"unavailable: {exc!r}"
-        ident["seg_table_digest"] = self._mod.seg_table_digest()
+        ident["segment_span"] = self._mod.segment_span()
         h = hashlib.sha256()
         root = Path(self._mod.__file__).resolve().parent
         for name in ("fwd.py", "_extension.py", "spec.py"):

@@ -62,6 +62,7 @@ def install(*, deterministic_backward: bool = False) -> dict[str, Any]:
         "recipe": spec.RECIPE,
         "forward": "gqa_sm100 segment tree",
         "seg_tokens": {h: ops.segment_span(h) for h in spec.HEAD_DIMS},
+        "target_batch": spec.TARGET_BATCH,  # None: no target batch declared (one segment per row)
         "backward": {h: ops.backward_kernel(h) for h in spec.HEAD_DIMS},
         "fa4_commit": spec.FA4_COMMIT,
         "cute_dsl": cute_dsl,

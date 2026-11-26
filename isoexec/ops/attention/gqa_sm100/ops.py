@@ -4,8 +4,9 @@ autograd core the trainer binds.
 The forward's numerical program is stated in README.md. Two things in this module are part of the
 op's identity and nothing else is:
 
-* ``SEG_TOKENS`` -- the segment span, a table over ``(head_dim, max_context)`` read at the recipe's
-  fixed ``spec.SEG_CONTEXT`` (:func:`segment_span`). A change to the table or to that context is a
+* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.2, rule 3) applied to the
+  policy's cost parameters for this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
+  :func:`occupancy`) and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
   recipe version bump.
 * ``KEY_TILE`` -- the KV tile width, fixed at 128.
 
@@ -35,6 +36,7 @@ from pathlib import Path
 
 import torch
 
+from isoexec.ops import schedule_policy
 from isoexec.ops.attention.gqa_sm100 import spec
 
 #: The KV tile width. Numerical: every tile boundary inside a segment is a max/rescale point.
@@ -59,39 +61,66 @@ LEAF_AUTO, LEAF_GENERAL, LEAF_DECODE = 0, 1, 2
 #: to ``DECODE_ROWS / ratio`` tokens per request.
 DECODE_ROWS = 16
 
-#: The segment span, per deployment-fixed ``(head_dim, max_context)``. Regret-chosen across decode and
-#: prefill on the target shapes; README.md carries the measurements and the reasoning. The rule the
-#: table follows is ``n_max = max_context / SEG = 16``, floored at 128 (one KV tile) -- sixteen
-#: segments give decode sixteen-way split parallelism per (request, KV head) while keeping a prefill
-#: row's tree shallow enough for one worker to fold.
-SEG_TOKENS: dict[tuple[int, int], int] = {
-    (128, 2048): 128,
-    (128, 8192): 512,
-    (128, 32768): 2048,
-    (128, 131072): 8192,
-    (256, 2048): 128,
-    (256, 8192): 512,
-    (256, 32768): 2048,
-    (256, 131072): 8192,
-}
+# --- the policy's cost parameters for the softmax reducer (design version 7.2, rule 3; measured) -------
+# One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
+# of the declarations in spec.py; no table.
+
+#: L_r, the shortest segment worth a fresh start, in keys. Measured:
+#: policy_validation/gqa_sm100/sweep_roundd.json (256 equal, 128 slower by 1.2-2.3x at batch 1-2).
+SOFTMAX_SHORTEST_SEGMENT = 512
+
+#: cap, the most segments of one output in flight. Tuned (``csrc/params.h FOLD_MAX_RUN``; binds only at
+#: head dim 128 with one KV head at batch 1-4; the data allow 16-32):
+#: policy_validation/gqa_sm100/sweep_roundd.json, ROUND_B.md rounds E and F.
+SOFTMAX_SEGMENT_CAP = 16
+
+#: SMs one work item occupies: a CTA pair at head dim 256, one CTA at 128 (the kernel's worker footprint,
+#: policy_validation/gqa_sm100/ROUND_B.md round E, row ``occ``).
+SMS_PER_ITEM = {128: 1, 256: 2}
+
+#: SMs of the device generation this package compiles for (B200). Hardware.
+DEVICE_SMS = 148
 
 
-def seg_for(head_dim: int, max_context: int) -> int:
-    """The deployment-fixed segment span for this geometry, from ``SEG_TOKENS``.
+def occupancy(head_dim: int, kv_heads: int, batch: int) -> int:
+    """SMs that one segment of every output of a single-position call occupies: one work item per request
+    and MODEL KV head (not a rank's), an item being ``SMS_PER_ITEM[head_dim]`` SMs."""
+    if head_dim not in SMS_PER_ITEM:
+        raise ValueError(f"no leaf for head_dim={head_dim}")
+    if batch < 1 or kv_heads < 1:
+        raise ValueError(f"occupancy needs batch >= 1 and kv_heads >= 1 (got {batch}, {kv_heads})")
+    return batch * kv_heads * SMS_PER_ITEM[head_dim]
 
-    A context that is not a table key resolves to the smallest key at or above it, so a deployment
-    declaring ``max_context = 6000`` gets the 8192 row rather than a span invented per call.
-    """
-    keys = sorted(c for (d, c) in SEG_TOKENS if d == head_dim)
-    if not keys:
-        raise ValueError(f"no SEG table row for head_dim={head_dim}")
-    for c in keys:
-        if max_context <= c:
-            return SEG_TOKENS[(head_dim, c)]
-    raise ValueError(
-        f"max_context={max_context} exceeds the largest SEG table row for head_dim={head_dim} "
-        f"({keys[-1]}); the table is part of the op's identity, so extend it deliberately"
-    )
+
+#: ``target_batch=DECLARED``: take the deployment's declaration (``spec.TARGET_BATCH``, which may be ``None``).
+DECLARED = "declared"
+
+
+def schedule_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
+                 kv_heads: int | None = None) -> schedule_policy.Segments:
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, cap, n // L))`` segments of
+    ``S = 128 * ceil(n / (128 * G))`` keys, adjacent tree, with ``n = max_context``.
+
+    ``target_batch`` is optional. ``None`` (no target batch) gives ``p = workers(DEVICE_SMS) = 1``: one segment
+    of ``max_context`` keys. A batch gives ``p = DEVICE_SMS // occupancy`` at that batch. Left out, it is the
+    deployment's declaration (``spec.TARGET_BATCH``); ``kv_heads`` defaults to ``spec.MODEL_KV_HEADS``."""
+    if head_dim not in SMS_PER_ITEM:
+        raise ValueError(f"no leaf for head_dim={head_dim}")
+    if isinstance(target_batch, str):
+        if target_batch != DECLARED:
+            raise ValueError(f"target_batch must be a batch, None or DECLARED (got {target_batch!r})")
+        target_batch = spec.TARGET_BATCH
+    kv_heads = spec.MODEL_KV_HEADS if kv_heads is None else kv_heads
+    occupied = None if target_batch is None else occupancy(head_dim, kv_heads, target_batch)
+    p = schedule_policy.workers(DEVICE_SMS, occupied)
+    return schedule_policy.reduce(int(max_context), b=KEY_TILE, L=SOFTMAX_SHORTEST_SEGMENT, p=p,
+                                  cap=SOFTMAX_SEGMENT_CAP)
+
+
+def seg_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
+            kv_heads: int | None = None) -> int:
+    """The segment span for this geometry and declaration: ``schedule_for(...).S``."""
+    return schedule_for(head_dim, max_context, target_batch=target_batch, kv_heads=kv_heads).S
 
 
 def segment_count(border: int, seg: int) -> int:
@@ -127,7 +156,7 @@ def gqa_sm100_fwd(
     page ids never reach the arithmetic.
 
     Query row ``i`` of request ``b`` sits at logical position ``seqused_k[b] - q_len_b + i`` and
-    attends keys ``[0, position]``. ``seg_tokens`` comes from :func:`seg_for`; it is not a capacity
+    attends keys ``[0, position]``. ``seg_tokens`` comes from :func:`segment_span`; it is not a capacity
     knob and a caller that varies it has changed the op.
 
     ``waves`` is a head-dim-128 execution override and is refused at head dim 256, which runs one
@@ -154,9 +183,32 @@ def default_scale(head_dim: int) -> float:
     return 1.0 / math.sqrt(head_dim)
 
 
+#: The recipe's span per head dim, evaluated ONCE when the schedule is bound (module import, or
+#: :func:`bind_schedule` after a declaration changed). The per-call paths read this dict and never call the policy.
+_BOUND_SPAN: dict[int, int] = {}
+
+
+def bind_schedule() -> dict[int, int]:
+    """Evaluate the schedule policy at spec.py's declarations and bind the result: ``{head_dim: span}``.
+
+    Called at import. A process that changes a declaration (the tests' other target batches) calls it again;
+    nothing on a forward call does."""
+    spans = {d: seg_for(d, spec.LONGEST_CONTEXT) for d in HEAD_DIMS}
+    _BOUND_SPAN.clear()
+    _BOUND_SPAN.update(spans)
+    return dict(spans)
+
+
 def segment_span(head_dim: int) -> int:
-    """The recipe's segment span at ``head_dim``: the ``SEG_TOKENS`` row at ``spec.SEG_CONTEXT``."""
-    return seg_for(head_dim, spec.SEG_CONTEXT)
+    """The recipe's segment span at ``head_dim``: the policy's S at the declarations of spec.py
+    (``LONGEST_CONTEXT``, the optional ``TARGET_BATCH``, ``MODEL_KV_HEADS``), as bound by :func:`bind_schedule`."""
+    try:
+        return _BOUND_SPAN[head_dim]
+    except KeyError:
+        raise ValueError(f"no leaf for head_dim={head_dim}") from None
+
+
+bind_schedule()
 
 
 @lru_cache(None)
@@ -370,12 +422,19 @@ __all__ = [
     "LEAF_AUTO",
     "LEAF_DECODE",
     "LEAF_GENERAL",
-    "SEG_TOKENS",
+    "DECLARED",
+    "DEVICE_SMS",
+    "SMS_PER_ITEM",
+    "SOFTMAX_SEGMENT_CAP",
+    "SOFTMAX_SHORTEST_SEGMENT",
     "backward_kernel",
+    "bind_schedule",
     "default_scale",
     "gqa_sm100_fwd",
     "paged_fwd",
+    "occupancy",
     "require_consistent_cute_dsl",
+    "schedule_for",
     "seg_for",
     "segment_count",
     "segment_span",
