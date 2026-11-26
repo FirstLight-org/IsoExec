@@ -41,7 +41,7 @@ def projection_schedule(K: int, d_max: int = 1) -> schedule_policy.Segments:
     largest expert-tensor-parallel degree); a shard shorter than whole blocks is zero-padded capacity."""
     if d_max < 1 or d_max & (d_max - 1) or K < 1 or K % d_max:
         raise ValueError(f"K = {K} is not {d_max} equal shards (d_max must be a power of two)")
-    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, L=REDUCER_SHORTEST)
+    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, min_segment=REDUCER_SHORTEST)
 
 
 @functools.lru_cache(maxsize=None)

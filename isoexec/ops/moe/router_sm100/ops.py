@@ -108,7 +108,7 @@ def route_select_only(logits: torch.Tensor, *, routing: str, top_k: int, n_group
 def declared_segments(H: int) -> int:
     """The logits program's segment count: the schedule policy's G for the hidden axis (rule 3; the axis is not
     sharded, d_max = 1). 1 for every H. Cached per H: the policy is evaluated once, never on the per-call path."""
-    return schedule_policy.reduce(H, b=LOGITS_REDUCER_BLOCK, L=LOGITS_REDUCER_SHORTEST).G
+    return schedule_policy.reduce(H, b=LOGITS_REDUCER_BLOCK, min_segment=LOGITS_REDUCER_SHORTEST).G
 
 
 @functools.lru_cache(None)
@@ -289,7 +289,7 @@ __all__ = ["GROUPED", "LOGITS_REDUCER_BLOCK", "LOGITS_REDUCER_SHORTEST", "RENORM
 #: the token-segment length of dW's fixed segment tree (moe_fp8_sm100/SPEC.md §8.3's SEG_T): a
 #: deployment-fixed constant published per (op, shape) -- here a function of E only, never of T.
 #: Measured (README "Backward"): 512 wins at E = 64 (shorter chains, more CTAs), 1024 at E >= 256.
-#: The backward runs only in the trainer and is not scheduled by the policy (design 7.2: the policy covers the
+#: The backward runs only in the trainer and is not scheduled by the policy (design 7.3: the policy covers the
 #: forward pass). dW's sum over the tokens that selected an expert keeps this kernel's own fixed order:
 #: segments of exactly ``seg_t_for(E)`` tokens counted from token 0, the last one short, merged by a tree.
 SEG_T = 1024

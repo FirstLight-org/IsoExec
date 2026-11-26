@@ -19,7 +19,7 @@ from isoexec.ops import schedule_policy
 #: constant is the kernel's ``mma16`` step of ONEPAGE.md ("Tensor-core sums (GEMM, ...) publish nothing").
 REDUCER_BLOCK = 16
 
-#: The reducer's published shortest segment L_r. None: a tensor-core sum publishes no constant, so rule 3
+#: The reducer's published shortest segment min_segment. None: a tensor-core sum publishes no constant, so rule 3
 #: gives G = 1, one segment per shard (ONEPAGE.md, Inputs; measured cost of that choice against a split in
 #: policy_validation/gemm_sm100/bench/results/roundf_gpu_summary.txt). With None the rule reads no p, no
 #: occupancy, no cap, no smallest batch and no longest length.
@@ -64,7 +64,7 @@ def schedule(K: int, d_max: int = 1) -> schedule_policy.Segments:
         raise ValueError(f"d_max = {d_max} is not a power of two")
     if K < 1 or K % (REDUCER_BLOCK * d_max):
         raise ValueError(f"K = {K} is not {d_max} shard(s) of whole {REDUCER_BLOCK}-term blocks")
-    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, L=REDUCER_SHORTEST)
+    return schedule_policy.reduce(K // d_max, b=REDUCER_BLOCK, min_segment=REDUCER_SHORTEST)
 
 
 def segment_count(K: int, dtype) -> int:

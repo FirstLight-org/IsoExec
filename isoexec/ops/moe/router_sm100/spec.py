@@ -29,7 +29,7 @@ def logit_segments(hidden: int) -> int:
     """The logits program's segment count for a hidden size (``ops.declared_segments`` restated, no torch)."""
     from isoexec.ops import schedule_policy
 
-    return schedule_policy.reduce(hidden, b=LOGIT_REDUCER_BLOCK, L=LOGIT_REDUCER_SHORTEST).G
+    return schedule_policy.reduce(hidden, b=LOGIT_REDUCER_BLOCK, min_segment=LOGIT_REDUCER_SHORTEST).G
 
 
 LOGIT_MERGE = "balanced_tree_lower_left"

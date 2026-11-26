@@ -116,7 +116,7 @@ def test_no_segment_table_is_left():
 
 def test_the_schedule_digest_covers_everything_the_schedule_reads(monkeypatch):
     base = seg.schedule_digest()
-    assert seg.schedule_inputs() == {"policy": "7.2", "rule": 3, "block": 16, "shortest": None,
+    assert seg.schedule_inputs() == {"policy": "7.3", "rule": 3, "block": 16, "shortest": None,
                                      "merge": "tree", "root": "bf16_rne"}
     monkeypatch.setattr(seg, "REDUCER_SHORTEST", 1024)
     assert seg.schedule_digest() != base
@@ -131,9 +131,9 @@ def test_the_installed_schedule_policy_is_the_canonical_module():
 
     from isoexec.ops import schedule_policy as P
 
-    assert P.VERSION == "7.2"
+    assert P.VERSION == "7.3"
     assert hashlib.sha256(Path(P.__file__).read_bytes()).hexdigest() == \
-        "d4b5a777af9bfc0462308320a215385d1fda65f18aa9ade8136ae9c4e507a18e"
+        "14f043d9d504f1b55e6fdda6df8b013eef5e42c79cb4cb0e20556afd35bf2607"
 
 
 def test_every_plan_for_a_shape_shares_one_schedule():
@@ -316,7 +316,7 @@ def test_the_record_a_peer_compares_pins_the_schedule_and_not_only_the_id():
     assert rec["impl_id"] == "sm100_tcgen05_segtree"
     assert rec["recipe_version"] == seg_recipe()
     assert rec["schedule_digest"] == seg.schedule_digest()
-    assert rec["schedule_policy_version"] == "7.2"
+    assert rec["schedule_policy_version"] == "7.3"
     assert "segment_table_digest" not in rec and "segment_policy_version" not in rec
 
 
@@ -492,15 +492,15 @@ def test_installed_provider_refuses_unrecorded_recipes(monkeypatch, supported, h
 
 def test_the_general_kernels_k_schedule_is_the_schedule_policy():
     """``mm_sm100/general`` (the backward layouts): its segment count and length are rule 3 on the constants the
-    kernel publishes (L = 8192, cap 16 for an MN-major operand; nothing for K-major x K-major), and that is the
-    schedule the kernel has always run."""
+    kernel publishes (min_segment = 8192, max_segments 16 for an MN-major operand; nothing for K-major x
+    K-major), and that is the schedule the kernel has always run."""
     from isoexec.ops import schedule_policy as P
     from isoexec.ops.mm.mm_sm100.general import ops as G
 
     assert (G.SEGMENT_BLOCK, G.SEGMENT_MIN_K, G.MAX_SPLIT, G.SEGMENT_OCCUPANCY) == (64, 8192, 16, 1)
     for K in (64, 4608, 5120, 8192, 16320, 16384, 32768, 65536, 131072, 262144, 100032):
         assert G.schedule(K, False, False) == P.reduce(K, b=64) and G.split_for(K, False, False) == 1
-        want = P.reduce(K, b=64, L=8192, p=P.workers(148, 1), cap=16)
+        want = P.reduce(K, b=64, min_segment=8192, p=P.workers(148, 1), max_segments=16)
         for layout in ((True, False), (False, True), (True, True)):
             assert G.schedule(K, *layout) == want and G.split_for(K, *layout) == want.G
         # the rule the kernel ran before the policy: largest power of two <= 16 with K / S >= 8192, ceil-sized
