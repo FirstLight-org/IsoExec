@@ -92,7 +92,7 @@ def _instantiated(macro: str) -> set[tuple[int, int]]:
 
 
 def test_policy_version():
-    assert policy.VERSION == "7.2"
+    assert policy.VERSION == "7.3"
 
 
 @pytest.mark.parametrize("n", SUPPORTED)
