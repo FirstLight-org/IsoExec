@@ -76,6 +76,8 @@ def add_rms_norm_fused(x, residual, weight, eps: float, zero_centered: bool):
     """
     import torch
 
+    if weight is None:  # the RMS kernels have no no-weight mode (rms_norm / add_rms_norm refuse it too)
+        raise ValueError("norms_sm100.add_rms_norm_fused requires a weight (got None)")
     if not (
         isinstance(x, torch.Tensor) and isinstance(residual, torch.Tensor)
         and x.dtype == torch.bfloat16 and residual.dtype == torch.bfloat16
