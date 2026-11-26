@@ -111,7 +111,7 @@ def test_selected_lengths_are_passed_to_the_leaf_and_change_no_bit(monkeypatch):
         def spy(q, kv, lists, scale, **kw):
             if kw.get("extra_lists") is not None:
                 ln = kw.get("extra_topk_length")
-                seen.append(ln is not None)
+                seen.append((ln is not None, q.shape[0] >= paged.TRIM_MIN_ROWS))
                 if ln is not None:
                     occupied = (kw["extra_lists"] >= 0).sum(1)
                     last = torch.where(kw["extra_lists"] >= 0, torch.arange(kw["extra_lists"].shape[1], device="cuda")[None] + 1, 0).amax(1)
@@ -123,7 +123,9 @@ def test_selected_lengths_are_passed_to_the_leaf_and_change_no_bit(monkeypatch):
         pools = _pools(cfg, 3, P)
         slots = {0: 2, 1: 0, 2: 1}
         runs[trim] = [_step(cfg, layers, xs, pools, plan, win, comp, slots) for plan in SCHEDULE]
-        assert seen and all(x == trim for x in seen), (trim, seen[:8])
+        # lengths go to launches of at least TRIM_MIN_ROWS rows (the schedule has prefill chunks and decode steps)
+        assert seen and all(passed == (trim and big) for passed, big in seen), (trim, seen[:8])
+        assert not trim or (any(big for _, big in seen) and any(not big for _, big in seen))
         monkeypatch.setattr(dualrail, "dualrail_attn", real)
     for a, b in zip(runs[False], runs[True]):
         for x, y in zip(a, b):

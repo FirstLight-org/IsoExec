@@ -191,13 +191,20 @@ def floor_window_lists(lists, pos, floor):
 #: contiguous relations of tests/test_paged_gpu.py compare this path with the contiguous one, which runs every block);
 #: False runs every block.
 TRIM_SELECTED = True
+#: Launches below this many rows keep running every block (execution only: the bits are the same). B200, engine leaf
+#: call, FP8 window + compressed records (policy_validation/port/attn/sparse/bench): from 64 rows (the persistent plan)
+#: the length saves 4-7 us a launch where the list has empty blocks (0.66-0.79 of the time; 0.48-0.56 on 1056 trainer-
+#: shaped rows) and costs nothing where it has none; below, on the split plan, a launch gains nothing measurable and
+#: the step would pay the 6 us length launch.
+TRIM_MIN_ROWS = 64
 
 
 def selected_lengths(batch, pos, ratio, k):
     """int32 ``[rows]``: an upper bound, exact without a candidate filter, of the occupied prefix of each row's
     selected list -- ``min(k, ke)``. One clamp per step and ratio (``ke`` is the step's index bound, shared with the
-    index scores and the top-k); every layer of the step reads it. None when ``TRIM_SELECTED`` is off."""
-    if not TRIM_SELECTED:
+    index scores and the top-k); every layer of the step reads it. None when ``TRIM_SELECTED`` is off or the launch has
+    fewer than ``TRIM_MIN_ROWS`` rows."""
+    if not TRIM_SELECTED or pos.shape[0] < TRIM_MIN_ROWS:
         return None
 
     def make_ke():
