@@ -15,7 +15,7 @@ from isoexec.ops.attention.mla_sm100.spec import PAGE
 
 __all__ = [
     "MlaSm100Plan", "mla_sm100_fwd", "mla_sm100_plan", "mla_sm100_fwd_selfcheck",
-    "DEVICE_SMS", "EXEC_OVERRIDE_VARIANTS", "SOFTMAX_SHORTEST_SEGMENT", "occupancy", "schedule_for",
+    "DECLARED", "DEVICE_SMS", "EXEC_OVERRIDE_VARIANTS", "SOFTMAX_SHORTEST_SEGMENT", "occupancy", "schedule_for",
     "bind_schedule", "seg_tokens_for", "segment_span", "profile_digest",
 ]
 
@@ -62,9 +62,9 @@ EXEC_OVERRIDE_VARIANTS = [
 MAX_TREE_LEAVES = 1024
 EMPTY_LSE = float(torch.tensor(-1e30, dtype=torch.float32) / torch.tensor(1.4426950408889634, dtype=torch.float32))
 
-# --- the softmax reducer's published constants (design version 7.1, rule 3) ---------------------------
+# --- the policy's cost parameters for the softmax reducer (design version 7.2, rule 3; measured) -------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
-# of the declarations in spec.py; no table. This reducer publishes no cap.
+# of the declarations in spec.py; no table. This reducer has no cap.
 
 #: L_r, the shortest segment worth a fresh start, in keys. Measured:
 #: policy_validation/mla_sm100/pv_sweep_b.log (64 slower than 256 in every cell; 128 equal only at
@@ -85,19 +85,29 @@ def occupancy(model_heads: int, batch: int) -> int:
     return batch * -(-model_heads // M_BLOCK)
 
 
-def schedule_for(max_context: int, *, min_batch: int | None = None,
+#: ``target_batch=DECLARED``: take the deployment's declaration (``spec.TARGET_BATCH``, which may be ``None``).
+DECLARED = "declared"
+
+
+def schedule_for(max_context: int, *, target_batch: int | None | str = DECLARED,
                  model_heads: int | None = None) -> schedule_policy.Segments:
-    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, n // L_r))`` segments of
-    ``S = 64 * ceil(n / (64 * G))`` keys, adjacent tree, with ``n = max_context`` and
-    ``p = DEVICE_SMS // occupancy`` at the declared smallest batch. ``min_batch`` and ``model_heads``
-    default to the declarations in spec.py."""
-    min_batch = spec.SMALLEST_BATCH if min_batch is None else min_batch
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, n // L))`` segments of
+    ``S = 64 * ceil(n / (64 * G))`` keys, adjacent tree, with ``n = max_context``.
+
+    ``target_batch`` is optional. ``None`` (no target batch) gives ``p = workers(DEVICE_SMS) = 1``: one segment
+    of ``max_context`` keys. A batch gives ``p = DEVICE_SMS // occupancy`` at that batch. Left out, it is the
+    deployment's declaration (``spec.TARGET_BATCH``); ``model_heads`` defaults to ``spec.MODEL_HEADS``."""
+    if isinstance(target_batch, str):
+        if target_batch != DECLARED:
+            raise ValueError(f"target_batch must be a batch, None or DECLARED (got {target_batch!r})")
+        target_batch = spec.TARGET_BATCH
     model_heads = spec.MODEL_HEADS if model_heads is None else model_heads
-    p = schedule_policy.workers(DEVICE_SMS, occupancy(model_heads, min_batch))
+    occupied = None if target_batch is None else occupancy(model_heads, target_batch)
+    p = schedule_policy.workers(DEVICE_SMS, occupied)
     return schedule_policy.reduce(int(max_context), b=PAGE, L=SOFTMAX_SHORTEST_SEGMENT, p=p)
 
 
-def seg_tokens_for(h_q: int, max_seqlen_k: int, *, min_batch: int | None = None,
+def seg_tokens_for(h_q: int, max_seqlen_k: int, *, target_batch: int | None | str = DECLARED,
                    model_heads: int | None = None) -> int:
     """SEG for a deployment whose longest context is ``max_seqlen_k``: ``schedule_for(...).S``.
 
@@ -105,7 +115,7 @@ def seg_tokens_for(h_q: int, max_seqlen_k: int, *, min_batch: int | None = None,
     (the occupancy takes the model's heads, ``spec.MODEL_HEADS`` unless given)."""
     if int(h_q) < 1:
         raise ValueError(f"h_q must be positive (got {h_q})")
-    return schedule_for(max_seqlen_k, min_batch=min_batch, model_heads=model_heads).S
+    return schedule_for(max_seqlen_k, target_batch=target_batch, model_heads=model_heads).S
 
 
 #: The recipe's span, evaluated ONCE when the schedule is bound (module import, or :func:`bind_schedule` after a

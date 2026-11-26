@@ -93,7 +93,9 @@ def resolve(
         from isoexec.ops._dispatch import current_arch
 
         if current_arch() == "sm100":
-            # SM100: the span is the schedule policy's output at the recipe's declarations, on both hosts.
+            # SM100: the span is the schedule policy's output at the deployment's declarations (the optional
+            # target batch among them), on both hosts. A model config whose seg_tokens was written under another
+            # declaration is refused here, at resolution, before either party runs a token.
             from isoexec.ops.attention.mla_sm100.fwd import segment_span
 
             if type(seg_tokens) is not int or seg_tokens != segment_span():

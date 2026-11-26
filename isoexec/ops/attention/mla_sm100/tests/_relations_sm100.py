@@ -124,6 +124,20 @@ def rel_combine_tree_widths(rec: Rec, cfg: Config):
         rec.cmp_rows(f"n={n}/batched", rows_of(bb, i, batched), rec.fwd(alone), bb.labels_of(i))
 
 
+def _decode_request(length: int, heads: int, seed: int, tag: str):
+    """A request that is decoded at one position: its whole KV and ONE query row, expanded over the positions so
+    the harness's position index still reads it. ``make_request`` draws a query row for every position, which for
+    512 requests of ``8 S + 65`` positions is 512 x (8 S + 65) x heads x 1152 bytes: 121 GB at S = 5120 and
+    242 GB at S = 10240 (the span with no target batch declared) with 5 heads, more than a B200 holds beside the
+    cache. The decode step reads one of those rows per request."""
+    from isoexec.ops.attention.mla_sm90.tests._harness import DTYPE, Request
+
+    g = torch.Generator(device="cpu").manual_seed(seed)
+    kv = torch.randn(length, WIDTH, generator=g).to("cuda", DTYPE)
+    q = torch.randn(1, heads, WIDTH, generator=g).to("cuda", DTYPE).expand(length, heads, WIDTH)
+    return Request(kv, q, tag)
+
+
 def rel_saturated_decode_cut(rec: Rec, cfg: Config):
     """Check the decode split threshold."""
     from isoexec.ops.attention.mla_sm100 import fwd as F
@@ -131,7 +145,7 @@ def rel_saturated_decode_cut(rec: Rec, cfg: Config):
     seg = cfg.seg
     B = 512
     for tag, length in (("n4", 4 * seg), ("n9_partial", 8 * seg + 65)):
-        reqs = [make_request(length, cfg.heads, cfg.seed + 700 + i, tag=f"{tag}_{i}") for i in range(B)]
+        reqs = [_decode_request(length, cfg.heads, cfg.seed + 700 + i, tag=f"{tag}_{i}") for i in range(B)]
         b = assemble([decode(r, r.length - 1) for r in reqs], page_perm_seed=91)
         used = torch.full((B,), length, dtype=torch.int32)
         W = F._num_sms()
@@ -140,7 +154,7 @@ def rel_saturated_decode_cut(rec: Rec, cfg: Config):
         rec.witness(f"{tag}_run_target", int(fired))
         if tag == "n4":
             # the plan's cost model cuts when a segment outweighs an item's fixed overhead: stated for segments of
-            # at least 8 KV blocks (512 keys); a shorter span (the policy's at a smallest batch of 1) need not cut
+            # at least 8 KV blocks (512 keys); a shorter span (the policy's at a target batch of 1) need not cut
             rec.require("rule_fires_at_B512_n4", fired > 0 or W != 148 or seg < 512,
                         "the cut rule must fire at B = 512, n = 4 on a 148-SM part")
         try:

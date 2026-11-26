@@ -21,12 +21,12 @@ pytestmark = pytest.mark.skipif(not _sm100_ok(), reason="requires an SM100 (B200
 
 from isoexec.ops.attention.mla_sm100 import fwd as _fwd, spec as _spec
 
-#: The spans the relations run at, both outputs of the schedule policy: ``declared`` is the recipe's
-#: (spec.py's declarations: two segments of 5120 keys at the longest context), ``batch1`` the same rule at
-#: a smallest batch of 1 (32 segments of 320 keys), where the relations' lengths give rows of many
-#: segments. ``ISOEXEC_MLA_SM100_SEG`` replaces both with one explicit span (a sensitivity run).
-SEGS = {"declared": _fwd.segment_span(),
-        "batch1": _fwd.seg_tokens_for(_spec.MODEL_HEADS, _spec.LONGEST_CONTEXT, min_batch=1)}
+#: The spans the relations run at, both outputs of the schedule policy: ``default`` declares no target batch
+#: (one segment of 10240 keys at the longest context), ``batch1`` is the same rule at a target batch of 1
+#: (32 segments of 320 keys), where the relations' lengths give rows of many segments.
+#: ``ISOEXEC_MLA_SM100_SEG`` replaces both with one explicit span (a sensitivity run).
+SEGS = {"default": _fwd.seg_tokens_for(_spec.MODEL_HEADS, _spec.LONGEST_CONTEXT, target_batch=None),
+        "batch1": _fwd.seg_tokens_for(_spec.MODEL_HEADS, _spec.LONGEST_CONTEXT, target_batch=1)}
 if os.environ.get("ISOEXEC_MLA_SM100_SEG"):
     SEGS = {"env": int(os.environ["ISOEXEC_MLA_SM100_SEG"])}
 HEADS = [int(h) for h in os.environ.get("ISOEXEC_MLA_SM100_HEADS", "5,10,20").split(",")]
@@ -75,15 +75,11 @@ def _assert_outcome(o):
 def test_relation(sm100, relation, heads):
     torch.backends.cuda.matmul.allow_tf32 = False
     seg = sm100.seg_tokens
-    if seg == SEGS.get("declared") and len(SEGS) > 1:
-        # at the declared span the relations' S-relative fixtures are ten times longer; they run at the model's
-        # head count there, and at every head count under ``batch1``
-        if relation == "saturated_decode_cut":
-            # 512 requests of 8 S + 65 positions, each with every query row: about 145 GB of operands at S = 5120
-            # and 5 heads before the kernel's buffers; it does not fit a B200. The cut rule runs under ``batch1``.
-            pytest.skip(f"declared span {seg}: the fixture of saturated_decode_cut exceeds the device memory")
+    if seg == SEGS.get("default") and len(SEGS) > 1:
+        # at the default span the relations' S-relative fixtures are 32 times longer than under ``batch1``; they run
+        # at the model's head count there, and at every head count under ``batch1``
         if heads != _spec.MODEL_HEADS and _spec.MODEL_HEADS in HEADS:
-            pytest.skip(f"declared span {seg}: run at the model's {_spec.MODEL_HEADS} heads; {heads} heads run under batch1")
+            pytest.skip(f"default span {seg}: run at the model's {_spec.MODEL_HEADS} heads; {heads} heads run under batch1")
     # the relations' fixtures take long_ctx above their own S-relative lengths (2 S + 7, 3 S + 100): 8213 at the
     # spans up to 2048 this module used to run, 4 S + 21 above
     _assert_outcome(_run(relation, sm100, Config(heads=heads, seg=seg, long_ctx=max(8192 + 21, 4 * seg + 21))))

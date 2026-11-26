@@ -1,4 +1,5 @@
-"""The trainer adapter at the DECLARED span against the paged kernel, raw bits, at the span's own boundaries.
+"""The trainer adapter against the paged kernel, raw bits, at the span's own boundaries, with no target batch
+declared (the default: one segment of the longest context) and with a target batch of 64, 16 and 1 declared.
 
 ``mla_sm100_attention`` (what ``attention.core.mla`` resolves to on SM100) packs each sequence's latents and
 runs the whole sequence in one call. The engine side of the same recipe is the paged kernel over a cache
@@ -26,15 +27,30 @@ def _bits(t):
     return t.contiguous().view(torch.int16)
 
 
+#: label -> target batch (``None``: none declared, the default) and the span it gives
+TARGETS = {"default": (None, 10240), "target64": (64, 5120), "target16": (16, 1280), "target1": (1, 320)}
+
+
+@pytest.fixture(params=list(TARGETS))
+def target(request, monkeypatch):
+    from isoexec.ops.attention.mla_sm100 import fwd, spec
+
+    monkeypatch.setattr(spec, "TARGET_BATCH", TARGETS[request.param][0])
+    fwd.bind_schedule()
+    yield request.param
+    monkeypatch.undo()
+    fwd.bind_schedule()
+
+
 @pytest.mark.parametrize("heads", (5, 20))
-def test_adapter_rows_equal_paged_rows_at_the_declared_span_boundaries(heads):
+def test_adapter_rows_equal_paged_rows_at_the_span_boundaries(heads, target):
     from isoexec.ops.attention.mla_sm100 import fwd, spec
     from isoexec.ops.attention.mla_sm100.ops import mla_sm100_attention
     from isoexec.ops.attention.mla_sm90.ops import _absorb_fwd, _unabsorb_fwd
     from isoexec.ops.attention.mla_sm90.tests._harness import SCALE, Request, Slice, assemble, decode, full
 
     S = fwd.segment_span()
-    assert S == fwd.schedule_for(spec.LONGEST_CONTEXT).S
+    assert S == TARGETS[target][1] == fwd.schedule_for(spec.LONGEST_CONTEXT).S
     lens = [S - 1, S, S + 1, S + 65, spec.LONGEST_CONTEXT, 2 * S + 5]
     T = sum(lens)
     g = torch.Generator(device="cuda").manual_seed(heads)
