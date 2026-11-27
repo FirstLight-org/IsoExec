@@ -97,6 +97,16 @@ __device__ __forceinline__ ChunkGeo chunk_geo(int n, int k, int cs, int len, int
   return g;
 }
 
+// One 16-byte column chunk `c` of a P row of the open block, as a record holds it. A row of block
+// B = pb0 / 16 HAS the columns [0, pb0) -- its products with the earlier blocks, which are all phase 1
+// writes and all any reader consumes -- and the row is stored 64 wide. The columns at or past pb0 are
+// stored as +0, not as the bytes the source buffer happens to hold there: in shared memory nothing wrote
+// them, so they were whatever an earlier kernel left on that SM and the `pb` section differed from run
+// to run on identical inputs. `src` is the chunk's address in the buffer the row is copied out of.
+__device__ __forceinline__ float4 p_row_chunk(const float *src, int c, int pb0) {
+  return 4 * c < pb0 ? *reinterpret_cast<const float4 *>(src) : make_float4(0.f, 0.f, 0.f, 0.f);
+}
+
 // The open-chunk rows a call leaves in the output slot, from the sequence's last chunk g: rows
 // [r_first, jf). Rows [0, r_new) predate the call (only when no new chunk was started); they are already
 // in the output slot when it is the input slot.

@@ -258,7 +258,12 @@ class CprState:
 
     @property
     def pb(self) -> torch.Tensor:
-        """fp32 [P, hv, 16, 64]: rows of P for the open 16-row block (row 16B + r at r)."""
+        """fp32 [P, hv, 16, 64]: rows of P for the open 16-row block (row 16B + r at r).
+
+        At open-chunk offset ``j = pos % 64`` with ``B = j // 16 >= 1`` the record defines rows
+        ``[0, j % 16)`` and, in them, columns ``[0, 16 B)``; the kernels read nothing else. A call stores the
+        rest of each row it writes as +0. Rows at or past ``j % 16`` are stale rows of earlier blocks, like
+        the stale rows of every other open-chunk section."""
         return self._section("pb", 16 * C * 4, torch.float32, (16, C))
 
     @property
@@ -437,7 +442,13 @@ def prefill(q, k, v, a, b, A_log, dt_bias, cu_seqlens, *, state=None, slot_in=No
 
 
 def trainer_forward(q, k, v, a, b, A_log, dt_bias, cu_seqlens, *, save_states=False, cu_seqlens_cpu=None):
-    """Stateless prefill with backward intermediates in FLA's layouts; output bits match ``prefill``."""
+    """Stateless prefill with backward intermediates in FLA's layouts; output bits match ``prefill``.
+
+    ``saved["h"]`` is allocated for the worst case, ``T // 64 + N`` chunks, because the exact count
+    ``K = sum(ceil(len_n / 64))`` is only known on the device. The kernel writes rows ``[0, K)`` (FLA's
+    chunk order) and the backward reads exactly ``h[:K]``; rows ``[K, T // 64 + N)`` are NOT written and
+    hold whatever the allocation held, so they differ from run to run. Compare ``h[:K]``. (Zeroing them
+    would cost a clear of up to ``N`` chunk states, 32 KiB per value head each, on every forward.)"""
     del cu_seqlens_cpu
     _check_inputs(q, k, v, a, b)
     T, hk, hv = q.size(0), q.size(1), v.size(1)

@@ -25,6 +25,56 @@ def test_slot_placement_is_independent():
         assert state_equal(base_state, st, base_slots, ids(placement)), placement
 
 
+def _pb_rows_past_their_block(st, slots):
+    """The pb elements of the rows the record defines that lie at or past the row block's own columns."""
+    parts = []
+    for s in list(slots):
+        j = int(st.pos[int(s), 0, 0]) % 64
+        if j >= 16:
+            parts.append(st.pb[int(s), :, : j % 16, 16 * (j // 16):].reshape(-1))
+    return torch.cat(parts).view(torch.int32) if parts else torch.zeros(0, dtype=torch.int32, device="cuda")
+
+
+@pytest.mark.parametrize("plan", [None, 3, G.PREPARED], ids=["rule", "one_launch", "prepared"])
+def test_a_record_out_of_a_zeroed_pool_is_a_function_of_the_calls(plan):
+    """EVERY byte of a pool, and so the 16 x 64 `pb` section too, repeats when the calls repeat.
+
+    A P row of block B has 16 B columns and is stored 64 wide. The columns past 16 B used to be copied
+    out of shared memory nobody had written, so `pb` differed between two runs on identical inputs while
+    every output and every other section agreed. Nothing reads those columns (`state_equal` never
+    compared them); they are stored as +0 now, which is asserted directly as well as through the repeat,
+    after a prefill, after decode steps in place and after a decode step that moves every slot.
+    """
+    hk, hv = 4, 8
+    lanes = [17, 37, 63, 95, 126, 191, 64, 5]          # open-chunk offsets in every row block, and none
+    d = make(lanes, hk, hv, seed=71)
+    step = make([1] * len(lanes), hk, hv, seed=72)
+    slots, moved = ids(range(1, 9)), ids(range(9, 17))
+    lane = list(range(len(lanes)))
+
+    def run():
+        st = fresh(17, hv)
+        snaps, outs = [], [prefill(d, state=st, slot_in=ids([-1] * 8), slot_out=slots, plan=plan)]
+        snaps.append((st.data.clone(), _pb_rows_past_their_block(st, slots)))
+        for _ in range(3):
+            outs.append(decode_step(step, lane, st, slots))
+        snaps.append((st.data.clone(), _pb_rows_past_their_block(st, slots)))
+        outs.append(decode_step(step, lane, st, slots, slot_out=moved))
+        snaps.append((st.data.clone(), _pb_rows_past_their_block(st, moved)))
+        return outs, snaps
+
+    outs, snaps = run()
+    for phase, (_, past) in zip(("prefill", "decode in place", "decode slot move"), snaps):
+        assert past.numel() > 0, phase
+        assert int((past != 0).sum()) == 0, f"{phase}: pb columns past the row block are not +0"
+    for _ in range(3):
+        prefill(make([200, 64, 13], 16, 32, seed=73))   # other work on the same SMs between the repeats
+        outs2, snaps2 = run()
+        assert all(biteq(a, b) for a, b in zip(outs, outs2))
+        for phase, (a, _), (b, _) in zip(("prefill", "decode in place", "decode slot move"), snaps, snaps2):
+            assert biteq(a, b), f"{phase}: the pool's bytes differ between two identical runs"
+
+
 def test_a_sequence_alone_equals_its_rows_inside_the_pack():
     d = make([37, 64, 130, 1], 4, 8, seed=13)
     packed = prefill(d, state=fresh(9, 8), slot_in=ids([1, 2, 3, 4]))
