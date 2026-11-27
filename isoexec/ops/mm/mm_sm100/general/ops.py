@@ -13,7 +13,9 @@ from ._extension import extension
 
 RECIPE_CHAIN = "sm100_tcgen05_chain_v1"
 RECIPE_KSEGTREE = "sm100_tcgen05_ksegtree_v1"
-#: deployment constant for the tile choice only (ownership; the bits never read it)
+#: Deployment constant: the SM count of the target. It sizes the tile choice (ownership only) and it is the worker
+#: count ``p`` of the K schedule below (``workers(_SLOTS, SEGMENT_OCCUPANCY)``). There ``max_segments`` = 16 binds
+#: first, so the segment count -- and the bits -- are the same for every value >= 16; a smaller one would change them.
 _SLOTS = 148
 # ---- the K schedule: rule 3 of ``isoexec/ops/schedule_policy.py`` on the constants this reducer publishes.
 #: The reducer's block for this kernel: one K atom of 64 (four ``tcgen05.mma`` of 16), the unit its segments

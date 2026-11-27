@@ -243,10 +243,15 @@ def test_the_expert_mlp_seam_is_wired_to_the_declared_id():
 
 
 def test_importing_the_package_builds_nothing():
-    """The extension is built on the first call, never on import."""
-    import isoexec.ops.moe.moe_sm100._extension as ext
+    """The extension is built on the first call, never on import. A fresh interpreter: in this one an earlier
+    test of the session may have built it."""
+    import subprocess
+    import sys
 
-    assert ext.extension.cache_info().currsize == 0
+    code = ("import isoexec.ops.moe.moe_sm100, isoexec.ops.moe.moe_sm100.ops;"
+            "import isoexec.ops.moe.moe_sm100._extension as ext;"
+            "assert ext.extension.cache_info().currsize == 0")
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 # ------------------------------------------------------------ the schedule is the policy's output

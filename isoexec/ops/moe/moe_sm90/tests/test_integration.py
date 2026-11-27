@@ -3,11 +3,14 @@
 import pytest
 import torch
 
+from isoexec.core.arch import live_device_arch
 from isoexec.ops.moe.carriers import RoutingResult
 from isoexec.ops.moe.moe_sm90 import ops
 from isoexec.ops.moe.moe_sm90.integration import _Experts, expert_mlp
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="SM90 CUDA required")
+pytestmark = pytest.mark.skipif(
+    not torch.cuda.is_available() or live_device_arch() != "sm90", reason="requires an SM90 (H100) device"
+)
 
 
 def bits(a, b):
