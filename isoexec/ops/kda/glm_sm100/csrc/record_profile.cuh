@@ -4,6 +4,6 @@
 //
 // KDA_REC_RECOMPUTE_KI: do not store ki^b (12,288 bytes a head); every decode step of block b >= 1 recomputes
 // it from the stored k^ and G rows by the block-entry code. Saves 6.5% of the record for a measured decode
-// cost (see kda-capacity/DESIGN.md); off until the quickbench decides it.
+// cost; off by default.
 // #define KDA_REC_RECOMPUTE_KI 1
 #pragma once

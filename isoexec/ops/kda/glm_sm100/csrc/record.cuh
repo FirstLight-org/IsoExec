@@ -61,8 +61,8 @@ constexpr bool KI_STORED = true;
 
 // State planes. The fp32 state S_c [128 k][128 v] is held as the bf16 image the step reads (SH, [v][k]) plus
 // the 16 bits and one carry bit per element that complete it (S = ((SH - carry) << 16) | SL). SL is [k][v]
-// u16 (the accumulator pair of an element is one 32-bit word). SC is a bitmap of 8 x 8 blocks (cpr_planes.cuh, shared with
-// the GDN record): block (k / 8, v / 8) is the 64-bit word (v / 8) * 16 + k / 8, bit (k % 8) * 8 + (v % 8).
+// u16 (the accumulator pair of an element is one 32-bit word). SC is a bitmap of 8 x 8 blocks (cpr_planes.cuh):
+// block (k / 8, v / 8) is the 64-bit word (v / 8) * 16 + k / 8, bit (k % 8) * 8 + (v % 8).
 constexpr int64_t SH_BYTES = 128 * 128 * 2, SL_BYTES = 128 * 128 * 2, SC_BYTES = 8 * 16 * 16;   // SC: 256 64-bit 8x8 carry blocks (cpr_planes.cuh)
 
 struct Rec {

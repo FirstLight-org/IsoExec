@@ -15,7 +15,7 @@ deployment runs exactly one of them (engine and trainer alike):
 :func:`manifest` is what two parties of one deployment compare before they exchange state or bits
 (:func:`assert_same_manifest`): it differs between the two reducers.
 
-Source of every constant below: ``policy_validation/kda_sm100/ROUND_B.md`` (rounds D and E).
+Every constant below was built from this source and checked bitwise on a B200.
 """
 
 from __future__ import annotations
@@ -45,21 +45,21 @@ class Reducer:
 
     @property
     def block(self) -> int:
-        """The exact block of the schedule: the largest built block (ROUND_B.md round E: "largest built block;
-        D.shape is empty"; no recipe declares a state budget or a latency objective that would publish another)."""
+        """The exact block of the schedule: the largest built block (no recipe declares a state budget or a
+        latency objective that would publish another)."""
         return max(self.blocks)
 
 
-#: The chunkwise reducer. ``blocks``: chunk lengths built from this source with ``-DKDA_CL`` and checked bitwise on
-#: a B200 (ROUND_B.md round D, "blocks lists only built and checked members"; bench/roundA_check_rerun.log).
-#: Step 16 is ``m16`` of ``mma.sync.m16n8k16`` (the row block of one k-step); the upper end 64 is the shared-memory
-#: bound of this kernel's layout (ROUND_B.md round D table: at 96 rows ``state_kernel`` needs 238,592 B and at 128
-#: rows ``intra_kernel`` needs 264,704 B, more than one CTA may have; 80 fits but is not a tile the kernel forms).
+#: The chunkwise reducer. ``blocks``: the chunk lengths built from this source with ``-DKDA_CL`` and checked bitwise
+#: on a B200; only built and checked lengths are listed. Step 16 is ``m16`` of ``mma.sync.m16n8k16`` (the row block of
+#: one k-step); the upper end 64 is the shared-memory bound of this kernel's layout (at 96 rows ``state_kernel`` needs
+#: 238,592 B and at 128 rows ``intra_kernel`` needs 264,704 B, more than one CTA may have; 80 fits but is not a tile
+#: the kernel forms).
 CHUNK = Reducer(name="chunk_recurrence.kda", impl_id="sm100_kda_v1", package="glm_sm100", family="kda_glm",
                 blocks=(16, 32, 64), block_define="KDA_CL")
 
-#: The per-token reducer (ROUND_B.md round E: "per-token reducer, block 1, selected with reducers=, second shipped
-#: recipe; manifest differs"). Its kernel has no block parameter: one step folds one token.
+#: The per-token reducer: block 1, selected explicitly with :func:`select`, a second recipe whose manifest differs.
+#: Its kernel has no block parameter: one step folds one token.
 TOKEN = Reducer(name="chunk_recurrence.kda_rec.kernel_delta", impl_id="sm100_kda_rec_v1", package="glm_rec_sm100",
                 family="kda_glm_rec", blocks=(1,), block_define=None)
 

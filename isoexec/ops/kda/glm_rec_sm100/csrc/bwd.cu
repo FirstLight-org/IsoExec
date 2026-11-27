@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Trainer backward of recipe sm100_kda_rec_v1: the gradient of the token recurrence (recipe.cuh) with the roundings
 // treated as identities. Deterministic (every reduction is a fixed chain / fixed tree, one writer per output
-// element, no atomics); it may depend on T (the forward saves one fp32 state per 64 tokens -- DESIGN.md section 6).
+// element, no atomics); it may depend on T (the forward saves one fp32 state per 64 tokens).
 //
 // CTA = (sequence, head), 512 threads: thread (cgx = tid >> 7, c = tid & 127) owns channel c of the 32 value columns
 // j = 32 cgx + i of its group. A persistent grid loops over the (sequence, head) items. Per 64-token block, last to
 // first: (R) restore the block's checkpoint state, re-run the block forward writing the entering state of every token
 // to a per-CTA global scratch and the per-token scalars kS_j, delta_j to shared memory; (B) walk the block's tokens in
-// reverse with the adjoint state dS in registers (see DESIGN.md for the adjoint equations).
+// reverse with the adjoint state dS in registers.
 #include <cuda_runtime.h>
 
 #include "recipe.cuh"

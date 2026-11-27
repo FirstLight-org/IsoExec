@@ -1,4 +1,4 @@
-"""SASS gates on the built extension (no GPU needed; builds outside the lease if not cached).
+"""SASS gates on the built extension (no GPU needed; builds the extension if it is not cached).
 
 No kernel of this package -- forward, decode, backward or layer stage -- contains an atomic or reduction
 instruction of any kind (ATOM, ATOMS, ATOMG, RED): every output element has one writer and every sum is a

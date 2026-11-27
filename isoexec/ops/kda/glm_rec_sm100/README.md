@@ -7,8 +7,7 @@ reducer's (`schedule.manifest`), and each engine refuses the other's state pool.
 the adapter tests named below belong to the tree the package was written on and are not present here.
 
 Companion of `kda/glm_sm100` (CPR recipe `sm100_kda_v1`, the default and frozen). Prefill, decode and the trainer forward are the SAME per-token
-fp32 update; the state is only vLLM's regular KDA cache (fp32 `[slots, H, 128 (v), 128 (k)]` + the conv window). `csrc/recipe.cuh` is the contract;
-design and plans: `/var/tmp/isoexec-kernel-parity-20261014/kda-recurrent/DESIGN.md`.
+fp32 update; the state is only vLLM's regular KDA cache (fp32 `[slots, H, 128 (v), 128 (k)]` + the conv window). `csrc/recipe.cuh` is the contract.
 
 ```python
 from isoexec.ops.kda.glm_rec_sm100 import ops, engine
@@ -30,9 +29,9 @@ split anywhere + decode == whole sequence (outputs and state bytes); row-alone /
 null/negative lanes touch nothing; CUDA graph == eager; run-to-run; every launch shape and the packed fp32x2 path == scalar reference (incl. subnormals);
 fused gate/beta == unfused == glm_sm100's ops; SASS: no ATOM/RED; engine layer: TP 1/2/4/8 invariant, continuous batching == whole sequence, graph == eager,
 strided pages; adapter seams (fresh singleton slot, captured decode over changed slots/positions). Tolerance: float64 recurrence (o rel-L2 < 4e-3, state < 1e-5),
-CPR recipe (o < 1e-2). Same bits under torch 2.13 (SkyRL venv) and 2.14 (.venv-sm100).
+CPR recipe (o < 1e-2). Same bits under torch 2.13 and 2.14.
 
-## Performance (B200, H = 32 heads = TP2; scripts and raw json in kda-recurrent/bench/)
+## Performance (B200, H = 32 heads = TP2)
 Decode, L2 flushed, us/step: B=1/4/16/64/256/512/1024 rec 4.1/6.5/15.7/51/167/327/651; vLLM native fused_recurrent 4.0/7.0/16.2/52/190/372/740; FLA 8.5/10.7/20/54/188/381/768.
 Prefill, ms (rec | FlashKDA (vLLM native GLM prefill) | Triton chunk_kda | FLA fused_recurrent), one sequence, H=32:
 T=256 0.13|0.05|0.65|0.41; 2K 0.91|0.15|0.68|3.8; 8K 3.6|0.49|1.55|16.0; 32K 14.3|1.8|5.3|64.1 (H=64: 32K 14.7|2.1|9.5|66.2).
@@ -49,8 +48,8 @@ token (clock64, one head): 1.5k cycles -> 0.6k. Shapes by work: N*H >= 64 -> (8 
 ## Backward (csrc/bwd.cu, `ops.forward_train` / `ops.backward` / `ops.core`; engine layer under autograd)
 Deterministic, no atomics, may depend on T. `forward_train` is `forward` plus the fp32 state entering every 64th token (exec-only stores; o and state bitwise `forward`'s).
 `backward`: CTA = (sequence, head), 512 threads (channel x 4 column groups of 32); per 64-token block, last to first: restore the checkpoint, re-run the block writing each
-token's entering state to a per-CTA scratch (persistent grid), then walk the tokens in reverse with the adjoint state in registers (equations in DESIGN.md section 6);
-every cross-thread sum is a fixed warp-shuffle tree + fixed-order shared-memory combine. Gates (tests/test_bwd_gpu.py, test_engine_rec_gpu.py): float64 gradients (dq/dk/dv/dbeta
+token's entering state to a per-CTA scratch (persistent grid), then walk the tokens in reverse with the adjoint state in registers;
+every cross-thread sum is a fixed warp-shuffle tree + fixed-order shared-memory combine. Gates (tests/test_bwd_gpu.py): float64 gradients (dq/dk/dv/dbeta
 rel-L2 1.6e-3 = bf16 rounding of the outputs, dg and dh0 < 1e-5), run-to-run and CTA-schedule bitwise, sequence-alone == in-batch, full layer gradients (input and every parameter)
 vs the float64 equation across a checkpoint boundary, SASS without atomics. Speed: T=8192, H=32: 107 ms (13 us/token) -- correctness first; not tuned.
 

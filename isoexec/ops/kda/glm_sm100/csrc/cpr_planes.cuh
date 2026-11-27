@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// The carry plane (SC) of the state planes, shared by the CPR record families (kda/glm_sm100, gdn/gdn_cpr_sm100).
-// THIS FILE IS RESTATED, NOT INCLUDED, ACROSS PACKAGES (a kernel's identity is the digest of its own csrc tree): the copy in
-// each package must be byte-identical, which ops/cpr_record/tests/test_spec_cpu.py enforces.
+// The carry plane (SC) of the state planes of the KDA engine record (kda/glm_sm100). Its host-side reference is
+// isoexec/ops/cpr_record/planes.py; tests/test_record_layout_cpu.py checks it against a lane-by-lane model of this
+// file's stores.
 //
 // The fp32 state S (128 x 128) is held as SH = rn(S) (bf16, the operand image), SL = the low 16 bits of S's pattern and
 // SC = one carry bit per element, so S = ((SH - SC) << 16) | SL bit for bit. SC is a bitmap of 8 x 8 blocks over
