@@ -69,8 +69,10 @@ def test_the_lane_count_equals_the_kernels_constants(version):
 
 
 def test_the_lane_count_is_the_policys_and_is_256_at_every_vocabulary():
-    """L = ``policy.lanes(THREADS)``, THREADS = 256 (eight warps): 256, as before, on every segment."""
-    assert schedule.THREADS == 256 and schedule.LANES == policy.lanes(schedule.THREADS) == policy.lanes(256) == 256
+    """L = ``policy.lanes(ACCUMULATORS)``, ACCUMULATORS = 256 (one per thread, eight warps): 256, as before, on
+    every segment."""
+    assert schedule.ACCUMULATORS == 256
+    assert schedule.LANES == policy.lanes(schedule.ACCUMULATORS) == policy.lanes(256) == 256
     for vocab in VOCABS:
         s = schedule.segment(vocab).S
         assert all(red.lanes(s) == 256 for red in schedule.REDUCERS.values()), vocab

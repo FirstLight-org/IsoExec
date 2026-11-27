@@ -125,11 +125,12 @@ def test_the_lane_function_equals_the_v2_table_on_every_entry():
 
 
 def test_the_lane_count_is_the_policys_and_every_width_keeps_its_lanes():
-    """The most lanes are ``policy.lanes(threads)``: 32 (one warp) for v1, 128 (four warps) for v2 at the swept
+    """The most lanes are ``policy.lanes(accumulators)``, one accumulator per thread sharing the row: 32 (one warp)
+    for v1, 128 (four warps) for v2 at the swept
     widths. On every width of :data:`SUPPORTED` the lanes are what they were: the largest power of two <= the earlier
     literal cap (32, or 128 at a swept width) that divides n / 8, for both reducers and for the bound one."""
-    assert (schedule.V1.threads, schedule.V1.threads_elsewhere) == (32, 32)
-    assert (schedule.V2.threads, schedule.V2.threads_elsewhere) == (128, 32)
+    assert (schedule.V1.accumulators, schedule.V1.accumulators_elsewhere) == (32, 32)
+    assert (schedule.V2.accumulators, schedule.V2.accumulators_elsewhere) == (128, 32)
     assert schedule.V1.cap == schedule.V1.cap_elsewhere == schedule.V2.cap_elsewhere == policy.lanes(32) == 32
     assert schedule.V2.cap == policy.lanes(128) == 128
     for n in SUPPORTED:

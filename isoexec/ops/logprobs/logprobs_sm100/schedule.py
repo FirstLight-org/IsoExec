@@ -8,12 +8,12 @@ a rank of a world of ``w`` holds ``V / w`` contiguous columns, and ``w`` must di
 so ``d_max = 8`` and the 8 "leaves" of the kernels are the 8 shards at ``d_max`` (a rank at ``w < 8`` computes
 its ``8 / w`` leaves separately). The segment rule has no hardware specification here, so rule 3 of
 :mod:`isoexec.ops.schedule_policy` gives ONE segment per shard: ``n = V / 8``, ``G = 1``, ``S = V / 8``, and the
-shards combine by an adjacent tree. The lane count comes from ``policy.lanes``: a lane steps one strip on one
-thread, and the kernels have 256 threads (eight warps) for one row, so ``L = policy.lanes(256)``. Everything
+shards combine by an adjacent tree. The lane count comes from ``policy.lanes``: the kernels keep one accumulator
+per thread and 256 threads (eight warps) share one row, so ``L = policy.lanes(256)``. Everything
 below the segment is the reducer's own fixed DAG, which depends only on a term's position inside the segment:
 
     strip        8 consecutive columns (one 16-byte load)
-    lanes        L = policy.lanes(THREADS) = 256, whatever the segment length; a lane l >= S / 8 has no strip
+    lanes        L = policy.lanes(ACCUMULATORS) = 256, whatever the segment length; a lane l >= S / 8 has no strip
     membership   lane l owns strips l, l + 256, l + 512, ... : columns 8 * (l + 256 i) + j, j = 0..7
     lane order   strip ascending, then column ascending; fp32
     v2 (two passes)   M = the segment's exact max (fmaxf; NaN never wins); F = M, or +0 when M == -inf;
@@ -45,10 +45,10 @@ from isoexec.ops import schedule_policy as policy
 VOCAB_SHARDS = 8
 #: Columns per strip.
 STRIP = 8
-#: Threads for one row (eight warps); a lane steps one strip on one thread.
-THREADS = 256
-#: Lanes per segment: the policy's lane count for :data:`THREADS`.
-LANES = policy.lanes(THREADS)
+#: Independent accumulators for one row: one per thread, 256 threads (eight warps) share the row.
+ACCUMULATORS = 256
+#: Lanes per segment: the policy's lane count for :data:`ACCUMULATORS`.
+LANES = policy.lanes(ACCUMULATORS)
 
 
 @dataclass(frozen=True)
@@ -126,5 +126,5 @@ def shard_tree(shards: int = VOCAB_SHARDS) -> tuple[tuple[tuple[int, int], ...],
     return tuple(levels)
 
 
-__all__ = ["BINDING", "DEFAULT_VERSION", "LANES", "LaneReducer", "REDUCERS", "STRIP", "THREADS", "V1", "V2",
+__all__ = ["ACCUMULATORS", "BINDING", "DEFAULT_VERSION", "LANES", "LaneReducer", "REDUCERS", "STRIP", "V1", "V2",
            "VOCAB_SHARDS", "reducer", "segment", "shard_tree", "supported"]

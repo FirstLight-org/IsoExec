@@ -8,10 +8,10 @@ The reduction: one row's ``sum_h x[h] * x[h]`` over the hidden axis (RMSNorm, an
 declares only ``CONTEXT_PARALLEL``: per token; the kernels take whole rows), so ``d_max = 1`` and ``n`` is the
 row's width. The segment rule has no hardware specification here, so rule 3 of
 :mod:`isoexec.ops.schedule_policy` gives ONE segment per shard: ``G = 1``, ``S = width``. The lane count comes from
-``policy.lanes``: a lane steps one term on one thread, so a reducer's most lanes are ``policy.lanes(threads)``
-with ``threads`` the threads it has for one row (32, one warp; 128, four warps), and a segment runs the largest
-count up to it that it admits. Everything below the segment is the reducer's own fixed DAG, which depends only on a
-term's position inside the segment:
+``policy.lanes``: a reducer keeps one accumulator per thread that shares a row, so its most lanes are
+``policy.lanes(accumulators)`` with ``accumulators`` the independent accumulators it keeps for one row (32, one
+warp; 128, four warps), and a segment runs the largest count up to it that it admits. Everything below the
+segment is the reducer's own fixed DAG, which depends only on a term's position inside the segment:
 
     leaf        8 consecutive columns (one 16-byte bf16 load)
     lanes       L = the largest power of two <= cap that divides S / 8;  K = S / (8 L) visits per lane
@@ -22,7 +22,7 @@ term's position inside the segment:
                 strides >= 32 as v[q] = add_rn(v[q], v[q + s]) on the L / 32 values of one in-warp position
                 (``csrc/common.cuh::wide_fold``): the same DAG read at lane 0.
 
-Two reducers differ only in the threads behind the cap (:data:`V1`, :data:`V2`). Which one a width runs is a
+Two reducers differ only in the accumulators behind the cap (:data:`V1`, :data:`V2`). Which one a width runs is a
 BINDING, not a schedule: :data:`BINDING` lists the base tree's choice (``csrc/plan.h::fwd_recipe_default``) and is
 not changed here. The GDN gated out-norm always runs :data:`V1` (``launch_gated_fwd``); it is not stated further here.
 
@@ -58,8 +58,9 @@ class LaneReducer:
 
     version: int                     # the tree's forward recipe version
     impl_id: str                     # the declared impl (spec.py)
-    threads: int                     # threads for one row at ``cap_at``: most lanes = policy.lanes(threads)
-    threads_elsewhere: int           # threads for one row at a segment length outside ``cap_at``
+    accumulators: int                # independent accumulators for one row (one per thread) at ``cap_at``:
+                                     # most lanes = policy.lanes(accumulators)
+    accumulators_elsewhere: int      # accumulators for one row at a segment length outside ``cap_at``
     cap_at: tuple[int, ...] | None   # segment lengths that get ``cap``; None: every length
     reference: str                   # the executable statement of this DAG (torch, fp32, the stated order)
     leaf: int = LEAF
@@ -75,13 +76,14 @@ class LaneReducer:
 
     @property
     def cap(self) -> int:
-        """Most lanes: the policy's lane count for :attr:`threads`."""
-        return policy.lanes(self.threads)
+        """Most lanes: the policy's lane count for :attr:`accumulators`."""
+        return policy.lanes(self.accumulators)
 
     @property
     def cap_elsewhere(self) -> int:
-        """Most lanes at a segment length outside ``cap_at``: the policy's lane count for :attr:`threads_elsewhere`."""
-        return policy.lanes(self.threads_elsewhere)
+        """Most lanes at a segment length outside ``cap_at``: the policy's lane count for
+        :attr:`accumulators_elsewhere`."""
+        return policy.lanes(self.accumulators_elsewhere)
 
     def lane_cap(self, s: int) -> int:
         return self.cap if self.cap_at is None or s in self.cap_at else self.cap_elsewhere
@@ -112,13 +114,14 @@ class LaneReducer:
         return getattr(importlib.import_module(module), name)
 
 
-#: Recipe v1: at most policy.lanes(32) = 32 lanes (one warp), at every supported width. Its executable statement
-#: is the tree's ``norms_sm90/reference.py`` (re-exported by ``norms_sm100/reference.py``).
-V1 = LaneReducer(version=1, impl_id="sm100_rms_v1", threads=32, threads_elsewhere=32, cap_at=None,
+#: Recipe v1: at most policy.lanes(32) = 32 lanes (32 accumulators: one warp), at every supported width. Its
+#: executable statement is the tree's ``norms_sm90/reference.py`` (re-exported by ``norms_sm100/reference.py``).
+V1 = LaneReducer(version=1, impl_id="sm100_rms_v1", accumulators=32, accumulators_elsewhere=32, cap_at=None,
                  reference="isoexec.ops.norms.norms_sm100.reference.row_sum_of_squares")
-#: Recipe v2: at most policy.lanes(128) = 128 lanes (four warps) at the swept widths, v1's lanes elsewhere.
+#: Recipe v2: at most policy.lanes(128) = 128 lanes (128 accumulators: four warps) at the swept widths, v1's
+#: lanes elsewhere.
 #: Statement: ``reference_v2.py``.
-V2 = LaneReducer(version=2, impl_id="sm100_rms_v2", threads=128, threads_elsewhere=32, cap_at=V2_SWEPT,
+V2 = LaneReducer(version=2, impl_id="sm100_rms_v2", accumulators=128, accumulators_elsewhere=32, cap_at=V2_SWEPT,
                  reference="isoexec.ops.norms.norms_sm100.reference_v2.row_sum_of_squares")
 
 REDUCERS = {1: V1, 2: V2}

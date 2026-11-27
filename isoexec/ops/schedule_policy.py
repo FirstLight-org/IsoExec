@@ -17,12 +17,13 @@ by d_max), with exact block b:
               G = pow2floor(min(p, max_segments, n // min_segment)), at least 1
               S = b * ceil(n / (b * G))
 
-Lanes: a reducer that steps one term on one thread gets as many lanes as the threads it has for one output
-(lane l of L takes the terms l, l + L, ...: neighbouring threads read neighbouring terms). A reducer that
-steps a whole block with one instruction of all its threads, and a reducer without a merge, are sequential
-(L = 1). Lanes stay inside a segment, so they are independent of the three rules.
+Lanes: a chain is limited by its dependency, each update waits for the previous one. A reducer that keeps A
+independent accumulators for one output (one per thread that shares the output, or several chains of one
+thread or of the tensor cores) gets A interleaved lanes: lane l of L takes the terms l, l + L, ..., so that
+neighbouring accumulators read neighbouring terms. A reducer with one accumulator, and a reducer without a
+merge, are sequential (L = 1). Lanes stay inside a segment, so they are independent of the three rules.
 
-min_segment, max_segments, the occupancy behind p and the threads behind L are the hardware specifications
+min_segment, max_segments, the occupancy behind p and the accumulators behind L are the hardware specifications
 of a reducer on a GPU generation: min_segment is the shortest segment worth a partial result of its own,
 max_segments the most partial results the kernel holds for one output, p the workers free for the segments
 of one output. A reducer without them (min_segment absent) gets G = 1: one segment per shard. So does a
@@ -50,16 +51,16 @@ def workers(sms: int, occupancy: Optional[int] = None) -> int:
     return max(1, sms // occupancy)
 
 
-def lanes(threads: Optional[int] = None) -> int:
-    """L for one segment: the number of interleaved lanes. threads is the number of threads the reducer has for
-    one output when it steps one term on one thread; None for a reducer that steps a block with one instruction
-    of all its threads or that has no merge, which is sequential (L = 1). A reducer whose lanes must be equal
-    runs the largest count up to L that its segment admits."""
-    if threads is None:
+def lanes(accumulators: Optional[int] = None) -> int:
+    """L for one segment: the number of interleaved lanes. accumulators is the number of independent
+    accumulators the reducer keeps for one output; None for a reducer with one accumulator or without a merge,
+    which is sequential (L = 1). A reducer whose lanes must be equal runs the largest count up to L that its
+    segment admits."""
+    if accumulators is None:
         return 1
-    if threads < 1:
-        raise ValueError(f"threads {threads}")
-    return threads
+    if accumulators < 1:
+        raise ValueError(f"accumulators {accumulators}")
+    return accumulators
 
 
 @dataclass(frozen=True)
