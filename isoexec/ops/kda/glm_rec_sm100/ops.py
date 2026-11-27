@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import torch
 
+from isoexec.ops.kda import _checks
 from isoexec.ops.kda.glm_rec_sm100._extension import extension
 from isoexec.ops.kda.glm_rec_sm100.spec import HEAD_DIM
 
@@ -53,6 +54,33 @@ def _check_qkv(q, k, v):
     for t in (q, k, v):
         if t.stride(2) != 1 or t.stride(1) != HEAD_DIM:
             raise ValueError("q, k, v need 128-contiguous heads (one common token stride per tensor)")
+    if not q.is_cuda or k.device != q.device or v.device != q.device:
+        raise ValueError("kda glm_rec_sm100 requires CUDA tensors on one device")
+
+
+def _check_device(q, *ts):
+    if any(t is not None and t.device != q.device for t in ts):
+        raise ValueError("kda glm_rec_sm100 requires all inputs on one CUDA device")
+
+
+def _check_state(state, H: int, device):
+    if (not isinstance(state, torch.Tensor) or state.dtype != torch.float32 or state.dim() != 4
+            or state.shape[1:] != (H, HEAD_DIM, HEAD_DIM) or state.device != device):
+        raise ValueError(f"kda glm_rec_sm100: state must be fp32 [slots, {H}, 128, 128] on {device}")
+
+
+def _check_out(out, N: int, H: int, device):
+    if out is None:
+        return torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=device)
+    if (not isinstance(out, torch.Tensor) or out.shape != (N, H, HEAD_DIM) or out.dtype != torch.bfloat16
+            or out.device != device or out.stride(2) != 1 or out.stride(1) != HEAD_DIM):
+        raise ValueError(f"kda glm_rec_sm100: out must be bf16 [{N}, {H}, {HEAD_DIM}] on {device} with "
+                         f"128-contiguous heads")
+    return out
+
+
+def _slots(name, x, n, device, state, null_slot):
+    return _checks.slots("kda glm_rec_sm100", name, x, n, device, state.shape[0], null_slot)
 
 
 def _call(q, k, v, gate, beta, cu, slot_in, slot_out, null_slot, state, o, N, *, fused=False, dt_bias=None,
@@ -62,11 +90,6 @@ def _call(q, k, v, gate, beta, cu, slot_in, slot_out, null_slot, state, o, N, *,
     extension().rec(q, k, v, gate, beta, dt_bias, A_log, float(lb), bool(fused), int(mode), cu, slot_in, slot_out,
                     int(null_slot), state, o, int(N), lanes, nc, vb, bool(packed and PACKED), bool(not decode if ws is None else ws), ckpt, cp_base)
     return o
-
-
-def _i32(x, n, device):
-    t = torch.as_tensor(x, dtype=torch.int32, device=device).reshape(-1)
-    return t if t.is_contiguous() else t.contiguous()
 
 
 def forward(q, k, v, g, beta, cu_seqlens, initial_state=None, output_final_state=True, *, shape=None, ws=None):
@@ -79,6 +102,7 @@ def forward(q, k, v, g, beta, cu_seqlens, initial_state=None, output_final_state
         raise ValueError("kda glm_rec_sm100 forward expects fp32 log decay [T, H, 128]")
     if beta.shape != (T, H) or beta.dtype not in _BETA_MODE:
         raise ValueError("kda glm_rec_sm100 expects beta [T, H] bf16 or fp32 (post-sigmoid)")
+    _check_device(q, g, beta, initial_state)
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
     N = cu.numel() - 1
     o = torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
@@ -113,8 +137,16 @@ def forward_train(q, k, v, g, beta, cu_seqlens, initial_state=None, *, shape=Non
     _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
+    if g.shape != q.shape or g.dtype != torch.float32:
+        raise ValueError("kda glm_rec_sm100 forward expects fp32 log decay [T, H, 128]")
+    if beta.shape != (T, H) or beta.dtype not in _BETA_MODE:
+        raise ValueError("kda glm_rec_sm100 expects beta [T, H] bf16 or fp32 (post-sigmoid)")
+    N = cu_seqlens.numel() - 1
+    if initial_state is not None and (initial_state.shape != (N, H, HEAD_DIM, HEAD_DIM)
+                                      or initial_state.dtype != torch.float32):
+        raise ValueError(f"initial_state must be fp32 [{N}, {H}, 128, 128] (v-first)")
+    _check_device(q, g, beta, initial_state)
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
-    N = cu.numel() - 1
     cp_base, nck = checkpoint_layout(cu, T)
     ckpt = torch.empty(nck, H, HEAD_DIM, HEAD_DIM, dtype=torch.float32, device=q.device)
     o = torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
@@ -175,12 +207,14 @@ def prefill(q, k, v, g, beta, cu_seqlens, state, slot_in, slot_out, *, null_slot
     _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
+    _check_device(q, g, beta)
+    _check_state(state, H, q.device)
+    N = cu_seqlens.numel() - 1
+    si, so = (_slots(n, x, N, q.device, state, null_slot) for n, x in (("slot_in", slot_in), ("slot_out", slot_out)))
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
-    N = cu.numel() - 1
     o = torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
     if N:
-        _call(q, k, v, g, beta, cu, _i32(slot_in, N, q.device), _i32(slot_out, N, q.device), null_slot, state, o, N,
-              shape=shape)
+        _call(q, k, v, g, beta, cu, si, so, null_slot, state, o, N, shape=shape)
     return o
 
 
@@ -190,11 +224,17 @@ def prefill_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, cu_seqlens, state,
     _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
+    if f.dtype != torch.bfloat16 or b.dtype != torch.bfloat16 or f.shape != (T, H * HEAD_DIM) or b.shape != (T, H):
+        raise ValueError("prefill_fused expects raw bf16 f [T, H*128] and b [T, H]")
+    dt_bias, A_log = _gate_params(dt_bias, A_log, H)
+    _check_device(q, f, b, dt_bias, A_log)
+    _check_state(state, H, q.device)
+    N = cu_seqlens.numel() - 1
+    si, so = (_slots(n, x, N, q.device, state, null_slot) for n, x in (("slot_in", slot_in), ("slot_out", slot_out)))
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
-    N = cu.numel() - 1
     o = torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
     if N:
-        _call(q, k, v, f, b, cu, _i32(slot_in, N, q.device), _i32(slot_out, N, q.device), null_slot, state, o, N,
+        _call(q, k, v, f, b, cu, si, so, null_slot, state, o, N,
               fused=True, dt_bias=dt_bias, A_log=A_log, lb=lower_bound, beta_mode=2, shape=shape)
     return o
 
@@ -205,8 +245,10 @@ def decode_step(q, k, v, g, beta, state, slots, *, null_slot=-1, out=None, shape
     _check_count(q.shape[0], "decode lanes")
     _check_qkv(q, k, v)
     N, H = q.shape[:2]
-    o = torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device) if out is None else out
-    sl = _i32(slots, N, q.device)
+    _check_device(q, g, beta)
+    _check_state(state, H, q.device)
+    sl = _slots("slots", slots, N, q.device, state, null_slot)
+    o = _check_out(out, N, H, q.device)
     if N:
         _call(q, k, v, g, beta, None, sl, sl, null_slot, state, o, N, decode=True, shape=shape)
     return o
@@ -220,12 +262,23 @@ def decode_step_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, state, slots, 
     N, H = q.shape[:2]
     if f.dtype != torch.bfloat16 or b.dtype != torch.bfloat16 or f.shape != (N, H * HEAD_DIM) or b.shape != (N, H):
         raise ValueError("decode_step_fused expects raw bf16 f [N, H*128] and b [N, H]")
-    o = torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device) if out is None else out
-    sl = _i32(slots, N, q.device)
+    dt_bias, A_log = _gate_params(dt_bias, A_log, H)
+    _check_device(q, f, b, dt_bias, A_log)
+    _check_state(state, H, q.device)
+    sl = _slots("slots", slots, N, q.device, state, null_slot)
+    o = _check_out(out, N, H, q.device)
     if N:
         _call(q, k, v, f, b, None, sl, sl, null_slot, state, o, N, fused=True, dt_bias=dt_bias, A_log=A_log,
               lb=lower_bound, beta_mode=2, decode=True, shape=shape)
     return o
+
+
+def _gate_params(dt_bias, A_log, H: int):
+    """fp32 contiguous ``dt_bias [H*128]`` and ``A_log [H]`` (the kernels read fp32; an fp32 tensor is returned as is)."""
+    if not (isinstance(dt_bias, torch.Tensor) and isinstance(A_log, torch.Tensor)) or dt_bias.numel() != H * HEAD_DIM \
+            or A_log.numel() != H or not (dt_bias.is_floating_point() and A_log.is_floating_point()):
+        raise ValueError(f"kda glm_rec_sm100 expects floating-point dt_bias [{H * HEAD_DIM}] and A_log [{H}]")
+    return dt_bias.float().contiguous(), A_log.float().contiguous()
 
 
 def forget_gate(f, dt_bias, A_log, lower_bound):

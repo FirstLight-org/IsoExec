@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import torch
 
+from isoexec.ops.kda import _checks
 from isoexec.ops.kda.glm_sm100 import record_layout
 from isoexec.ops.kda.glm_sm100._extension import extension
 from isoexec.ops.kda.glm_sm100.spec import CHUNK, CHUNK_LENGTH, HEAD_DIM
@@ -200,8 +201,40 @@ class KdaState:
         return self.data[:, 0, -16:-12].contiguous().view(torch.int32).view(-1)
 
 
-def _slots(x, n, device):
-    return torch.as_tensor(x, dtype=torch.int32, device=device).reshape(n).contiguous()
+def _check_state(state, H: int, device):
+    if not isinstance(state, KdaState):
+        raise ValueError("kda glm_sm100: state must be a KdaState pool")
+    t = state.data
+    if (not isinstance(t, torch.Tensor) or t.dtype != torch.uint8 or t.dim() != 3 or t.size(1) != H
+            or t.size(2) != record_layout.REC_BYTES or t.device != device):
+        raise ValueError(f"kda glm_sm100: state must be a uint8 [slots, {H}, {record_layout.REC_BYTES}] KdaState pool "
+                         f"on {device}")
+
+
+def _slots(name, x, n, device, capacity: int, null_slot: int | None = None, *, padding=True):
+    return _checks.slots("kda glm_sm100", name, x, n, device, capacity, null_slot, padding=padding)
+
+
+def _check_out(out, N: int, H: int, device):
+    if out is None:
+        return torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=device)
+    if (not isinstance(out, torch.Tensor) or out.shape != (N, H, HEAD_DIM) or out.dtype != torch.bfloat16
+            or out.device != device or not out.is_contiguous()):
+        raise ValueError(f"kda glm_sm100: out must be a contiguous bf16 [{N}, {H}, {HEAD_DIM}] tensor on {device}")
+    return out
+
+
+def _check_workspace(ws, N: int, H: int, device):
+    if ws is None:
+        return decode_workspace(N, H, device)
+    want = [((N, H, HEAD_DIM), torch.bfloat16), ((N, H, HEAD_DIM), torch.bfloat16), ((N, H, CHUNK), torch.bfloat16),
+            ((N, H, CHUNK), torch.bfloat16), ((N, H), torch.int32)]
+    if not (isinstance(ws, (list, tuple)) and len(ws) == len(want) and all(
+            isinstance(t, torch.Tensor) and t.shape == shape and t.dtype == dt and t.device == device
+            and t.is_contiguous() for t, (shape, dt) in zip(ws, want))):
+        raise ValueError(f"kda glm_sm100: workspace must be decode_workspace({N}, {H}, {device}): contiguous "
+                         f"{[(list(sh), str(dt).split('.')[-1]) for sh, dt in want]}")
+    return list(ws)
 
 
 def prefill(q, k, v, g, beta, cu_seqlens, state: KdaState, slot_in, slot_out=None):
@@ -211,8 +244,11 @@ def prefill(q, k, v, g, beta, cu_seqlens, state: KdaState, slot_in, slot_out=Non
     sequence from position 0, wherever the calls split it (README "Relations")."""
     nseq = cu_seqlens.shape[0] - 1
     _check_count(nseq, "sequences")
-    si = _slots(slot_in, nseq, q.device)
-    so = si if slot_out is None else _slots(slot_out, nseq, q.device)
+    _check(q, k, v, g, beta, cu_seqlens, None)
+    _check_state(state, q.shape[1], q.device)
+    cap = state.data.shape[0]
+    si = _slots("slot_in", slot_in, nseq, q.device, cap)
+    so = si if slot_out is None else _slots("slot_out", slot_out, nseq, q.device, cap)
     o, _ = forward(q, k, v, g, beta, cu_seqlens, None, records=state.data, slot_in=si, slot_out=so)
     return o
 
@@ -238,11 +274,13 @@ def decode_step(q, k, v, g, beta, state: KdaState, slots, *, null_slot: int = -1
     N = q.shape[0]
     _check_count(N, "decode lanes")
     _check(q, k, v, g, beta, None, None)
+    H = q.shape[1]
+    _check_state(state, H, q.device)
+    sl = _slots("slots", slots, N, q.device, state.data.shape[0], int(null_slot))
+    o = _check_out(out, N, H, q.device)
+    hand = _check_workspace(workspace, N, H, q.device)
     q, k, v, g, beta = (t.contiguous() for t in (q, k, v, g, beta))
-    o = torch.empty_like(v) if out is None else out
-    hand = decode_workspace(N, q.shape[1], q.device) if workspace is None else workspace
-    extension().decode_rec(q, k, v, g, beta, state.data, _slots(slots, N, q.device), o, hand,
-                           int(null_slot))
+    extension().decode_rec(q, k, v, g, beta, state.data, sl, o, hand, int(null_slot))
     return o
 
 
@@ -260,19 +298,38 @@ def decode_step_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, state: KdaStat
         raise ValueError(f"kda glm_sm100 expects q, k, v [N, H, {HEAD_DIM}]")
     if f.shape != (N, H * HEAD_DIM) or b.shape != (N, H) or f.dtype != torch.bfloat16 or b.dtype != torch.bfloat16:
         raise ValueError("decode_step_fused expects raw bf16 projections f [N, H*128] and b [N, H]")
-    o = torch.empty((N, H, HEAD_DIM), dtype=torch.bfloat16, device=q.device) if out is None else out
-    hand = decode_workspace(N, H, q.device) if workspace is None else workspace
+    if q.dtype != torch.bfloat16 or k.dtype != q.dtype or v.dtype != q.dtype:
+        raise ValueError("kda glm_sm100 requires bf16 q, k, v")
+    if dt_bias.numel() != H * HEAD_DIM or A_log.numel() != H:
+        raise ValueError(f"decode_step_fused expects dt_bias [{H * HEAD_DIM}] and A_log [{H}]")
+    if not q.is_cuda or any(t.device != q.device for t in (k, v, f, b, dt_bias, A_log)):
+        raise ValueError("kda glm_sm100 requires all inputs on one CUDA device")
+    _check_state(state, H, q.device)
+    sl = _slots("slots", slots, N, q.device, state.data.shape[0], int(null_slot))
+    o = _check_out(out, N, H, q.device)
+    hand = _check_workspace(workspace, N, H, q.device)
     extension().decode_rec_fused(q, k, v, f, b, dt_bias.float().contiguous(), A_log.float().contiguous(),
-                                 float(lower_bound), state.data, _slots(slots, N, q.device), o, hand,
-                                 int(null_slot))
+                                 float(lower_bound), state.data, sl, o, hand, int(null_slot))
     return o
 
 
 def record_state(state: KdaState, slots) -> torch.Tensor:
     """The fp32 state ``[N, H, 128, 128]`` the records stand for: bit for bit ``forward``'s final state of
     the same tokens as one sequence."""
-    sl = torch.as_tensor(slots, dtype=torch.int32, device=state.data.device).reshape(-1).contiguous()
-    _check_count(sl.numel(), "slots")
+    if not isinstance(state, KdaState):
+        raise ValueError("kda glm_sm100: state must be a KdaState pool")
+    n = torch.as_tensor(slots).numel() if not isinstance(slots, torch.Tensor) else slots.numel()
+    _check_count(n, "slots")
+    dev = state.data.device
+    if dev.type != "cuda":
+        raise ValueError("kda glm_sm100: record_state requires a KdaState pool on a CUDA device")
+    _check_state(state, state.H, dev)
+    cap = state.data.shape[0]
+    sl = _slots("slots", slots, n, dev, cap, padding=False)   # every slot is read: no padding lanes
+    if n and isinstance(slots, torch.Tensor) and slots.is_cuda and not torch.cuda.is_current_stream_capturing():
+        lo, hi = (int(x) for x in torch.aminmax(sl))        # off the decode path: this read synchronizes
+        if lo < 0 or hi >= cap:
+            raise ValueError(f"kda glm_sm100: slots out of range for a pool of {cap} slots (no padding lanes here)")
     out = torch.empty(sl.numel(), state.H, HEAD_DIM, HEAD_DIM, dtype=torch.float32, device=state.data.device)
     if sl.numel():
         extension().record_state(state.data, sl, out)

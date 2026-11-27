@@ -67,10 +67,13 @@ class _Gate(torch.autograd.Function):
     def forward(ctx, f, dt_bias, A_log, lb):
         HK = dt_bias.numel()
         f2 = f.contiguous()
+        # The kernels read fp32 parameters (as gdn_cpr_sm100's and glm_rec_sm100's gate do, a bf16 / fp16 parameter
+        # is widened exactly; an fp32 one is the same tensor, no copy). Gradients return in the parameter's dtype.
+        dt32, A32 = dt_bias.detach().float().contiguous(), A_log.detach().float().contiguous()
         out = torch.empty(f2.shape, dtype=torch.float32, device=f.device)
-        extension().gate_fwd(f2, dt_bias.contiguous(), A_log.contiguous(), float(lb), out)
-        ctx.save_for_backward(f2, dt_bias, A_log)
-        ctx.lb, ctx.HK = float(lb), HK
+        extension().gate_fwd(f2, dt32, A32, float(lb), out)
+        ctx.save_for_backward(f2, dt32, A32)
+        ctx.lb, ctx.HK, ctx.dtypes = float(lb), HK, (dt_bias.dtype, A_log.dtype)
         return out
 
     @staticmethod
@@ -84,9 +87,8 @@ class _Gate(torch.autograd.Function):
         pdt, pA = torch.empty(nseg, HK, dtype=torch.float32, device=f.device), torch.empty(nseg, HK, dtype=torch.float32, device=f.device)
         colA, ddt, dA = torch.empty(HK, dtype=torch.float32, device=f.device), torch.empty(HK, dtype=torch.float32, device=f.device), torch.empty(H, dtype=torch.float32, device=f.device)
         df = torch.empty_like(f)
-        extension().gate_bwd(dld.float().contiguous(), f, df, dt_bias.contiguous(), A_log.contiguous(), ctx.lb,
-                             pdt, pA, colA, ddt, dA)
-        return df, ddt.to(dt_bias.dtype), dA.to(A_log.dtype), None
+        extension().gate_bwd(dld.float().contiguous(), f, df, dt_bias, A_log, ctx.lb, pdt, pA, colA, ddt, dA)
+        return df, ddt.to(ctx.dtypes[0]), dA.to(ctx.dtypes[1]), None
 
 
 class _Beta(torch.autograd.Function):
@@ -131,6 +133,16 @@ class _GatedNorm(torch.autograd.Function):
 
 def forget_gate(f, dt_bias, A_log, lower_bound):
     """``lower_bound * sigmoid(exp(A_log)[h] * (f + dt_bias))`` in fp32, f ``[..., H * 128]``."""
+    HK = f.shape[-1] if f.ndim else 0
+    if f.dtype not in (torch.bfloat16, torch.float32):
+        raise ValueError(f"glm_sm100 forget gate expects a bf16 or fp32 projection, got {f.dtype}")
+    if not f.is_cuda or dt_bias.device != f.device or A_log.device != f.device:
+        raise ValueError("glm_sm100 forget gate requires f, dt_bias and A_log on one CUDA device")
+    if HK == 0 or HK % HEAD_DIM or dt_bias.numel() != HK or A_log.numel() != HK // HEAD_DIM:
+        raise ValueError(f"glm_sm100 forget gate expects f [..., H * 128], dt_bias [H * 128] and A_log [H]; got "
+                         f"{tuple(f.shape)}, {tuple(dt_bias.shape)}, {tuple(A_log.shape)}")
+    if not (dt_bias.is_floating_point() and A_log.is_floating_point()):
+        raise ValueError("glm_sm100 forget gate expects floating-point dt_bias and A_log")
     return _Gate.apply(f, dt_bias, A_log, lower_bound)
 
 
@@ -145,6 +157,10 @@ def gated_rms_norm(core, gate, weight, eps):
     """``rn(core * rsqrt(mean(core^2) + eps) * weight * sigmoid(gate))`` per 128-wide head row."""
     if core.dtype != torch.bfloat16 or gate.dtype != torch.bfloat16 or core.numel() != gate.numel():
         raise ValueError("glm_sm100 gated norm expects bf16 core and gate of equal size")
+    if core.numel() % HEAD_DIM or weight.numel() != HEAD_DIM or weight.dtype not in (torch.bfloat16, torch.float32):
+        raise ValueError("glm_sm100 gated norm expects 128-wide rows and a bf16 or fp32 weight [128]")
+    if not core.is_cuda or gate.device != core.device or weight.device != core.device:
+        raise ValueError("glm_sm100 gated norm requires core, gate and weight on one CUDA device")
     return _GatedNorm.apply(core, gate, weight, eps)
 
 
