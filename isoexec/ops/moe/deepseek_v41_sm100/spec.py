@@ -17,8 +17,9 @@ OP = "moe.deepseek_v41"
 ROUTE_OP = "moe.deepseek_v41.route"
 #: v2 of the impl: the same recipe (``RECIPE`` names the program family) on the schedule policy's schedule
 #: (``isoexec/ops/schedule_policy.py``): router logits ONE chain over the hidden axis (v1: 4 segments and a tree),
-#: renormaliser and combine the rule-2 chain in ascending expert id from +0 (v1: a half fold in selection-rank
-#: order; first contribution taken as is). FC1 / FC2 were one chain already.
+#: renormaliser the rule-2 chain in ascending expert id from +0 (v1: a half fold in selection-rank order).
+#: FC1 / FC2 were one chain already, and the combine is v1's: the rule-2 chain in ascending expert id that
+#: starts from the first contribution, taken as is.
 IMPL = "sm100_deepseek_v41_bf16_actor_v2"
 RECIPE = "deepseek_v41_bf16_actor_v1"
 ROUTING = "sqrtsoftplus_bias_select"

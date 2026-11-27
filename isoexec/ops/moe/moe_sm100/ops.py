@@ -22,7 +22,8 @@ from ._extension import extension
 #                    segment each, balanced tree over the shards               tree over the d_max shards
 #   route_mechanics  the selected-set sum: one segment per selected expert,    rule 2
 #                    chain in ascending expert id from +0
-#   combine          the same chain over a token's selected experts' rows      rule 2
+#   combine          one segment per selected expert's row, chain in           rule 2
+#                    ascending expert id from the first row
 
 #: The tensor-core reducer's exact block: one ``tcgen05.mma`` consumes 16 K terms (hardware; the same
 #: reducer as ``ops/mm/mm_sm100/segments.py``). ``SEGMENT_MULTIPLE`` below is the kernel's K granularity

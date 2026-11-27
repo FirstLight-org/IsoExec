@@ -1393,19 +1393,12 @@ def _negotiate_owner_mode(mode, group, device):
         raise RuntimeError("Owner combine ranks disagree on opt-in or weight_after_fc2 mode")
 
 
-def engine_combine_owner(eager_fn, *, owner_exchange: bool = True):
+def engine_combine_owner(eager_fn):
     """Wrap eager combination with the engine owner path when owner_group and deferred pieces are supplied.
-    Without owner wiring, run eager_fn; refuse a group without deferred pieces or deferred pieces without a group.
-
-    ``owner_exchange=False`` keeps the ``owner_group`` seam but always composes the deferred pieces with
-    ``_engine_reference`` (the fc2 trees, then ``eager_fn``): for an ``eager_fn`` whose fold is not the owner
-    kernel's. The owner kernel starts the routed fold from its first term (``_unified_owner_core``), which is
-    ``fused_combine``'s fold; a combine whose chain is seeded with +0 (moe_sm100) gives +0 where that gives -0
-    on a token whose terms are all -0, so the exchange would be another program than the eager path."""
+    Without owner wiring, run eager_fn; refuse a group without deferred pieces or deferred pieces without a group."""
     from isoexec.ops.moe.carriers import SharedExpertPartial
 
     modes = {}
-    refused = []
 
     def combine(routed, shared, *, owner_group=None):
         deferred = routed.layout == "permuted_partial"
@@ -1419,21 +1412,14 @@ def engine_combine_owner(eager_fn, *, owner_exchange: bool = True):
                 f"shared={type(shared).__name__}. nn.MoE placement wires the group, the deferred "
                 "expert rows and the deferred shared expert together; refusing rather than reducing twice or never"
             )
-        opted = os.environ.get("ISOEXEC_MOE_AFTER_FC2_OWNER", "0") == "1"
-        if opted and not owner_exchange and not refused:
-            refused.append(True)
-            print("[ISOEXEC-MOE] ISOEXEC_MOE_AFTER_FC2_OWNER=1 is not served by this combine: the owner exchange "
-                  "folds the routed terms from the first term and this arch's combine from +0, two programs on a "
-                  "token whose terms are all -0. Every rank runs the reference composition (the fc2 trees, then "
-                  "the eager combine).", flush=True)
-        mode = (opted and owner_exchange, routed.weight_after_fc2)
+        mode = (os.environ.get("ISOEXEC_MOE_AFTER_FC2_OWNER", "0") == "1", routed.weight_after_fc2)
         if owner_group not in modes:
             _negotiate_owner_mode(mode, owner_group, routed.rows.device)
             modes[owner_group] = mode
         elif modes[owner_group] != mode:
             raise RuntimeError("Owner combine mode changed after negotiation; rebuild the bound model")
-        if not owner_exchange or (routed.weight_after_fc2 and not mode[0]):
-            # Keep the after-FC2 path opt-in; a binder without the exchange has the reference only.
+        if routed.weight_after_fc2 and not mode[0]:
+            # Keep the after-FC2 path opt-in.
             return _engine_reference(routed, shared, eager_fn)
         return _engine_owner_dispatch(routed, shared, owner_group, eager_fn)
 

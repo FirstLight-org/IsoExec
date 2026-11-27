@@ -886,8 +886,8 @@ __global__ void activation_kernel(const T *__restrict__ gu, const float *__restr
 
 // --------------------------------------------------------------------- combine ---
 //
-// Prefetch KT slot loads, then add in canonical slot order (ascending global expert id: schedule policy
-// rule 2, one segment per selected expert, a chain seeded with +0) with one BF16 conversion at the end.
+// Prefetch KT slot loads, then add in canonical slot order with one BF16
+// conversion at the end.
 template <class T, int KT>
 __global__ void combine_kernel(const float *__restrict__ rows,
                                const int *__restrict__ order, T *__restrict__ out,
@@ -922,9 +922,9 @@ __global__ void combine_kernel(const float *__restrict__ rows,
       load(j, v[j]);
 #pragma unroll
     for (int i = 0; i < 4; ++i)
-      acc[i] = 0.f;
+      acc[i] = v[0][i];
 #pragma unroll
-    for (int j = 0; j < KT; ++j)
+    for (int j = 1; j < KT; ++j)
 #pragma unroll
       for (int i = 0; i < 4; ++i)
         acc[i] = __fadd_rn(acc[i], v[j][i]);
@@ -933,11 +933,9 @@ __global__ void combine_kernel(const float *__restrict__ rows,
       dst[i] = cast<T>(acc[i]);
     return;
   }
-#pragma unroll
-  for (int i = 0; i < 4; ++i)
-    acc[i] = 0.f;
+  load(0, acc);
   // Load all four slots before the ordered sum to hide memory latency.
-  int j = 0;
+  int j = 1;
   for (; j + 3 < topk; j += 4) {
     float v0[4], v1[4], v2[4], v3[4];
     load(j, v0);

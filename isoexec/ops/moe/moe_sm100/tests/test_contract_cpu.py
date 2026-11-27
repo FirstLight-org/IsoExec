@@ -25,8 +25,8 @@ TWIN_CLAIMS = {
     "sm100_tcgen05_v1": spec.SEGMENT_TREE_GLU,
     "sm100_tcgen05_unfused_act_v1": spec.SEGMENT_TREE_GLU,
     # Two on-arch members of one native fold, proven EP-invariant by EP_BATTERY.
-    "sm100_gather_korder_v2": spec.KORDER,
-    "sm100_after_fc2_combine_v2": spec.KORDER,
+    "sm100_gather_korder_v1": spec.KORDER,
+    "sm100_after_fc2_combine_v1": spec.KORDER,
 }
 
 #: The EP 1/2/4 battery for ``KORDER`` on SM100 (NCCL, the 35B layer).
@@ -106,7 +106,7 @@ def test_ep_admits_against_the_two_sm100_korder_members():
 
     assert COMBINE_TWIN_CLASS == spec.KORDER
     members = {i.impl_id for i in OURS if i.op == "moe.combine" and i.twin_class == spec.KORDER}
-    assert members == {"sm100_gather_korder_v2", "sm100_after_fc2_combine_v2"}
+    assert members == {"sm100_gather_korder_v1", "sm100_after_fc2_combine_v1"}
     assert {i.impl_id for i in OURS if i.op == "moe.combine"} == members
     assert EP_BATTERY in runnable_batteries(spec.KORDER)
     assert os.path.isfile(os.path.join(_REPO_ROOT, EP_BATTERY))
@@ -313,9 +313,10 @@ def test_the_schedule_is_the_schedule_policy_on_the_deployed_shapes():
 
 
 def test_the_kernel_source_runs_the_rule_2_chain():
-    """``csrc/route.cu``: the selected-set sum and the combine are chains in ascending expert id seeded with
-    +0, and the half fold of v1 is gone. A source check, because the order is code and not a parameter; the
-    bits are gated by ``moe_relations_gpu.py`` (router phase, combine phase)."""
+    """``csrc/route.cu``: the selected-set sum is a chain in ascending expert id (from +0; the half fold of v1
+    is gone) and the combine a chain in canonical slot order that starts from the first slot, taken as is. A
+    source check, because the order is code and not a parameter; the bits are gated by ``moe_relations_gpu.py``
+    (router phase, combine phase)."""
     with open(os.path.join(_REPO_ROOT, "isoexec/ops/moe/moe_sm100/csrc/route.cu")) as fh:
         src = fh.read()
     assert "halffold_sum" not in src and "chain_sum" not in src
@@ -324,7 +325,9 @@ def test_the_kernel_source_runs_the_rule_2_chain():
     assert "lower += pick[l] < pick[j]" in body and "float acc = 0.f;" in body and "__fadd_rn(acc, term)" in body
     assert src.count("selected_sum<K, BK>(sel, pick)") == 2          # softmax_renorm and sigmoid
     kernel = src[src.index("void combine_kernel("):src.index("void combine_kernel(") + 3200]
-    assert "acc[i] = v[0][i]" not in kernel and "load(0, acc)" not in kernel   # no first-slot special case
-    assert kernel.count("acc[i] = 0.f;") == 2 and "for (int j = 0; j < KT; ++j)" in kernel and "int j = 0;" in kernel
+    # both paths start the chain from slot 0 as is and add slots 1.. in order; no +0 seed (-0 + -0 stays -0)
+    assert "acc[i] = v[0][i];" in kernel and "for (int j = 1; j < KT; ++j)" in kernel
+    assert "load(0, acc);" in kernel and "int j = 1;" in kernel
+    assert "0.f;" not in kernel.replace("col + i < hidden ? src[i] : 0.f;", "")
     assert spec.SM100_SELECTED_SUM == "ascending_expert_chain_from_zero"
     assert spec.SM100_COMBINE_ORDER == "ascending_expert_then_slot"

@@ -32,7 +32,7 @@ FACADES = {
 #: the importer is an SM90-only stage (``ops/moe/eager.combine_fixed_order`` is ``pik_leaf_tree``).
 SM90_ONLY = {
     "moe": {
-        "build_combine_rows",  # SM100 folds with the native combine (sm100_after_fc2_combine_v2)
+        "build_combine_rows",  # SM100 folds with the native combine (sm100_after_fc2_combine_v1)
         "engine_route_mechanics_o2",  # SM90 fused O2 router; SM100 binds sm100_fused_topk_v2
         "engine_router_o2_counts",
         "fused_combine",

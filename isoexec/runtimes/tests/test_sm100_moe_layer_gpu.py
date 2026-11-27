@@ -89,7 +89,7 @@ def test_bindings_are_the_sm100_recipes(layers):
         assert {name: bound[name].impl for name in ("route_score", "route_select", "expert_mlp", "combine",
                                                     "shared_expert")} == {
             "route_score": "sm100_router_gemm_fp32_v1", "route_select": "sm100_fused_topk_v2",
-            "expert_mlp": "sm100_tcgen05_after_fc2_v1", "combine": "sm100_after_fc2_combine_v2",
+            "expert_mlp": "sm100_tcgen05_after_fc2_v1", "combine": "sm100_after_fc2_combine_v1",
             "shared_expert": "sm100_after_fc2_shared_v2"}
 
 

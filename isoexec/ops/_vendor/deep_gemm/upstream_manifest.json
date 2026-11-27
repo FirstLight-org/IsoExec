@@ -498,11 +498,10 @@
    "source": "deep_gemm",
    "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_mega_moe.cuh",
    "upstream_sha256": "0387bd9bea62644b6580fd88d9e29f62d13e6ae4d319046ef1b8590224d1b8c5",
-   "sha256": "9e9f4fec05de4935d3144222f598047e3cf1e3f4cfd6ba400c5bb44cbfc05d30",
+   "sha256": "50c30e20c3ae544d9ad86b714c464389f7980577bb666be144838ed4930c5fb2",
    "modified": true,
    "modifications": [
-    "IsoExec canonical BF16 specialization (deepseek_v41_bf16_actor_v1): L1 weights read in the master [gate | up] layout through a 5D TMA map (no interleaved copy), canonical FP32 weighted clamped SwiGLU with one BF16 RNE, combine in ascending global expert ID with the shared contribution last and the first contribution assigned, per-launch combine-readiness tag from MegaMoESignals::isoexec_launch_epoch. Upstream default path preserved.",
-    "Schedule-policy port: the canonical combine chain starts from +0 and adds every selected expert's row (rule 2); the first-contribution special case is removed."
+    "IsoExec canonical BF16 specialization (deepseek_v41_bf16_actor_v1): L1 weights read in the master [gate | up] layout through a 5D TMA map (no interleaved copy), canonical FP32 weighted clamped SwiGLU with one BF16 RNE, combine in ascending global expert ID with the shared contribution last and the first contribution assigned, per-launch combine-readiness tag from MegaMoESignals::isoexec_launch_epoch. Upstream default path preserved."
    ]
   },
   {

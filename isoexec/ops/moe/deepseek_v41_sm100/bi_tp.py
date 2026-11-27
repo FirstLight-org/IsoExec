@@ -10,9 +10,7 @@ kernel cache refuses a compile inside CUDA graph capture). ``tune(sizes)`` is th
 dispatcher's top-ranked records and returns table entries in ``bi_records.TABLE``'s format; it changes nothing.
 
 Program: ``deepseek_v41_bf16_actor_v1`` (the vendored ``v41_actor`` GEMM1 chain with the route weight before FC2, the
-class's own combine -- the fold in slot order from ``+0`` -- with unit weights): the bits of ``ops.moe_forward`` /
-``tp_experts``. The combine is the schedule policy's rule 2 (one segment per selected expert, a chain seeded with +0);
-the vendored ``from_first`` variant (first live term taken as is) is no longer called.
+from-first unit-weight combine that reads no weights): the bits of ``ops.moe_forward`` / ``tp_experts``.
 """
 from __future__ import annotations
 
@@ -155,14 +153,6 @@ class BiTPExperts:
             bi.grouped_gemm(xp, self.w1i, counts, c1, self.chain1, out=h[:Tk], Tk=Tk, **kw)
         return h[:Tk], (counts, dest, w, c2, pad, Tk, h)
 
-    def _unit_weights(self, tokens, device):
-        """fp32 ones ``[tokens, SLOTS]`` for the combine (cached per token count; never written)."""
-        cache = self.__dict__.setdefault("_unit_w", {})
-        ones = cache.get((tokens, device))
-        if ones is None:
-            ones = cache[(tokens, device)] = torch.ones((tokens, SLOTS), dtype=torch.float32, device=device)
-        return ones
-
     def back(self, h_full, state):
         """GEMM2 on this rank's output slice over the gathered ``h [Tk, I]`` and the slice combine -> ``[M, H/tp]``."""
         bi = _bi()
@@ -174,11 +164,10 @@ class BiTPExperts:
         else:
             hf = h_full
         y = bi.grouped_gemm(hf, self.w2, counts, c2, "plain", torch.bfloat16, Tk=Tk)
-        # add chain from +0 in slot order (ascending id, shared last): the class's combine with unit weights
-        # (mul(f32(y), 1.0) is exact, so the fold is add(...add(add(+0, y_0), y_1)..., y_{k-1}))
+        # unit-weight add chain from the first term, slot order (ascending id, shared last); reads no weights
         ob = getattr(self.exchange, "out_buffer", None)           # NVLink exchange: the combine writes in place
         out = ob(w.size(0), self.Hs) if ob is not None else None
-        return bi.combine_unfinalized(y, self._unit_weights(w.size(0), y.device), dest, out=out)
+        return bi.combine_unfinalized(y, None, dest, out=out, from_first=True, tokens=w.size(0))
 
     def _local(self, x, ids, w, exchange=None):
         h, state = self.front(x, ids, w)

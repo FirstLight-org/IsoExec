@@ -23,7 +23,8 @@ def test_the_schedule_is_the_schedule_policy_on_the_deployed_model_cpu():
     Reductions and rules: router logits over the hidden axis, rule 3 (one segment); FC1 gate / up over the hidden
     axis and FC2 over the intermediate axis, routed and shared, rule 3 (one segment; no axis of a projection is
     sharded in this recipe, so d_max = 1); the renormaliser over the K selected scores and the combine over the
-    selected experts' rows, rule 2 (one segment per selected expert, a chain from +0)."""
+    selected experts' rows, rule 2 (one segment per selected expert, a chain in ascending expert id; the
+    renormaliser's from +0, the combine's from its first term taken as is)."""
     import json
     from pathlib import Path
 
@@ -53,10 +54,11 @@ def test_the_schedule_is_the_schedule_policy_on_the_deployed_model_cpu():
 
 
 def test_the_kernel_sources_run_the_policys_schedule_cpu():
-    """Order and seed are code, not parameters: the ported sources carry the rule-2 chain (ascending expert id,
-    seeded with +0) for the renormaliser and the combine on every path, the fused router instantiates one segment
-    only, and nothing of the 4-segment / half-fold / first-as-is schedule is left. The bits are GPU-gated
-    (router_relations_gpu.py, test_route_mega_gpu.py, test_actor_mega_gpu.py, test_bi_tp_gpu.py)."""
+    """Order and start are code, not parameters: the ported sources carry the rule-2 chain in ascending expert id
+    for the renormaliser (from +0) and for the combine (from the first term, taken as is, on every path), the
+    fused router instantiates one segment only, and nothing of the 4-segment / half-fold schedule is left. The
+    bits are GPU-gated (router_relations_gpu.py, test_route_mega_gpu.py, test_actor_mega_gpu.py,
+    test_bi_tp_gpu.py)."""
     import re
     from pathlib import Path
 
@@ -79,8 +81,8 @@ def test_the_kernel_sources_run_the_policys_schedule_cpu():
     assert pairs == {("1", "1")}, pairs
     assert "select_tree_kernel<MODE_, KT, ET, 1>" in router and "persist_kernel<CE_, MODE_, K_, EPL_, 1, 1>" in router
     assert "const int S = int(segments);" in router and "int declared_segments(" not in router
-    # the combine
-    assert "first_contribution" not in mega
+    # the combine: every path starts the chain from the first term as is (an all -0 sum stays -0)
+    assert "value = first_contribution ? input : float2{" in mega and mega.count("first_contribution = false;") == 1
     kernel = route[route.index("void combine_kernel("):][:3200]
-    assert kernel.count("acc[i] = 0.f;") == 2 and "acc[i] = v[0][i]" not in kernel and "load(0, acc)" not in kernel
-    assert "from_first=True" not in bi_tp
+    assert "acc[i] = v[0][i];" in kernel and "load(0, acc);" in kernel and "acc[i] = 0.f;" not in kernel
+    assert "combine_unfinalized(y, None, dest, out=out, from_first=True, tokens=w.size(0))" in bi_tp

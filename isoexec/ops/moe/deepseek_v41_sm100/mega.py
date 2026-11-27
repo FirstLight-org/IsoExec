@@ -7,7 +7,7 @@ The SAME arithmetic program as the grouped-kernel forward (``ops.stages``), in o
              step (k_block 0..H/64), no split-K, rounded once RNE to BF16 (= moe_sm100 ``fc1``'s stored projection)
 * act        h = RNE_bf16((silu(min(g, L)) * clamp(u, -L, L)) * w), FP32, IEEE expf / divide (= ``swiglu_rows``)
 * FC2        one K chain over I, root rounded RNE to BF16 (= moe_sm100 ``fc2`` with one leaf)
-* combine    ascending GLOBAL expert id, then the shared expert, FP32 ``__fadd_rn`` from +0 (every contribution added),
+* combine    ascending GLOBAL expert id, then the shared expert, FP32 ``__fadd_rn`` from the first contribution,
              one BF16 RNE (= moe_sm100 ``combine`` / ``ep._fold_f32``)
 The shared expert runs fused (MegaMoE's SharedLinear phases, weight 1.0: x * 1.0 is exact). Per output element the
 K order does not depend on block_m, UMMA N, the 2-CTA tile, the row's pool position (integer atomics allocate rows,

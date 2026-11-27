@@ -161,11 +161,8 @@ def resolve_sm100(op, *, site, routing, side, weight_after_fc2=False):
         fn = combine_trainable
         if side == "engine":
             from isoexec.ops.moe.moe_sm90.moe_pik_combine_owner import engine_combine_owner
-            # The wrapper gives the ``owner_group`` seam ETP > 1 needs. Its owner exchange is not bound: that
-            # kernel folds from the first term and this arch's combine from +0 (moe_sm100/spec.py), so every
-            # SM100 path -- trainer, engine at any EP / ETP -- folds with the one native combine kernel.
-            fn = engine_combine_owner(fn, owner_exchange=False)
-        return resolution(op, "sm100_after_fc2_combine_v2", fn, provider=provider, site=site)
+            fn = engine_combine_owner(fn)
+        return resolution(op, "sm100_after_fc2_combine_v1", fn, provider=provider, site=site)
     if op == "moe.shared_expert" and weight_after_fc2:
         fn = shared_expert_sm100
         if side == "engine":
@@ -180,7 +177,7 @@ def resolve_sm100(op, *, site, routing, side, weight_after_fc2=False):
         if impl is not None:
             return resolution(op, impl, mechanics(routing), provider=provider, site=site)
     if op == "moe.combine":
-        return resolution(op, "sm100_gather_korder_v2", combine, provider=provider, site=site)
+        return resolution(op, "sm100_gather_korder_v1", combine, provider=provider, site=site)
     if op == "moe.shared_expert":
         # This native recipe is local-only; callers needing TP/SP must bind a qualified seam.
         return resolution(op, integration.EAGER_SHARED_IMPL, forward_only(ops.shared_expert), provider=provider,

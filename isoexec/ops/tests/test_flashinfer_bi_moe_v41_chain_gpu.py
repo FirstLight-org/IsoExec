@@ -137,11 +137,10 @@ def test_v41_actor_pipeline_bitwise(T, H, I):
         y = api.grouped_gemm(h_buf, W.w2, counts, cfg, "plain", torch.bfloat16, Tk=Tk)
         _assert_bitwise(y, y_ref, f"GEMM2 {name} T={T} H={H} I={I}")
 
-    # combine: unit weights, the add chain from +0 (moe_sm100's combine is the schedule policy's rule-2 chain seeded
-    # with +0, which is the vendored class's own fold; the from-first variant is what the recipe ran before)
+    # combine: unit weights, the add chain from the first term
     plan = base.RoutePlan(gp, ids, src, dest, dest.contiguous())
     out_ref = base.combine(y_ref.float(), plan)
-    out = api.combine_unfinalized(y_ref, torch.ones_like(scales), dest)
+    out = api.combine_unfinalized(y_ref, torch.ones_like(scales), dest, from_first=True)
     _assert_bitwise(out, out_ref, f"combine T={T} H={H}")
 
     # fused_moe with the weighted chain: the same stages (its default records and form)

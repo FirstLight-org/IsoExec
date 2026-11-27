@@ -55,10 +55,9 @@ def glu_epilogue_torch(gate_bf: torch.Tensor, up_bf: torch.Tensor, probs=None) -
 
 
 def combine_reference(rows_fp32: torch.Tensor, combine_rows: torch.Tensor, dtype) -> torch.Tensor:
-    """One fp32 chain over the k slots in canonical slot order, seeded with +0 (schedule policy rule 2),
-    then one conversion."""
-    acc = torch.zeros_like(rows_fp32.index_select(0, combine_rows[:, 0].long()))
-    for j in range(combine_rows.shape[1]):
+    """One fp32 chain over the k slots in canonical slot order, then one conversion."""
+    acc = rows_fp32.index_select(0, combine_rows[:, 0].long())
+    for j in range(1, combine_rows.shape[1]):
         acc = acc + rows_fp32.index_select(0, combine_rows[:, j].long())
     return acc.to(dtype)
 

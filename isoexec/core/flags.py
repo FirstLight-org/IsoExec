@@ -1120,9 +1120,7 @@ FLAGS: List[Flag] = [
         (TRAIN, ENGINE, VLLM_ENV),
         notes="Opt-in SM90 owner composition preserving the BF16 FC2 root, BF16 routing "
         "multiply, ascending-expert FP32 fold and final BF16 round. Unsupported shapes "
-        "retain the existing combine path; training backward is unchanged. Not served on SM100: its combine "
-        "seeds the fold with +0 and the owner kernel with the first term, so the SM100 engine keeps the "
-        "reference composition whatever this says (ops/moe/sm100.py).",
+        "retain the existing combine path; training backward is unchanged.",
     ),
     Flag(
         "ISOEXEC_MOE_AFTER_FC2_GATHER",
