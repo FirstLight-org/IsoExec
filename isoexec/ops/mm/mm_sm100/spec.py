@@ -19,7 +19,7 @@ ARCH = "sm100"
 #: whole weight; under v2 the program of an output element is fixed by the logical weight whatever
 #: rank holds it and whatever it is packed with. That is a property of the program, not only of a
 #: table row, so it moved this string. The policy gives every K one segment per shard, which is the
-#: schedule v2 already ran: the port to the schedule policy moved no bit and does not move this string.
+#: schedule v2 already ran: taking the schedule from the schedule policy moved no bit and does not move this string.
 RECIPE_VERSION = "sm100_tcgen05_segtree_v2"
 
 #: The registry version of :data:`IMPL_ID`, moved with :data:`RECIPE_VERSION`.

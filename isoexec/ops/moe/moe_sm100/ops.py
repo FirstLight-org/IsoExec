@@ -13,8 +13,8 @@ from ._extension import extension
 
 # ------------------------------------------------------------------------- schedule ---
 # Every reduction of this operator and the rule of ``isoexec/ops/schedule_policy.py`` that orders it.
-# The operator publishes no constant (policy_validation/sparse_design/ONEPAGE.md, Inputs: "Tensor-core
-# sums (GEMM, the MoE router, ...) publish nothing and are one segment per shard").
+# The operator publishes no constant: a tensor-core sum (GEMM, the MoE router, ...) publishes no shortest
+# segment, so it is one segment per shard.
 #
 #   route_score      one chain over the hidden axis per (token, expert)        rule 3, G = 1
 #   fc1, fc1_glu     one chain over the hidden axis per output                 rule 3, G = 1
@@ -296,8 +296,6 @@ def fc2(x, down, plan: GroupedPlan, *, leaves=8, out=None):
         raise ValueError(f"leaves must be one of {LEAVES}")
     if x.size(1) % (8 * leaves):
         raise ValueError("each logical K segment must be a positive multiple of 8")
-    if fc2_leaves(x.size(1), leaves) != leaves:
-        raise ValueError("the schedule policy gives one segment per shard; leaves must be the declared d_max")
     segment = x.size(1) // leaves
     # One leaf: the kernel reads K's tail with zero-filled TMA boxes (the bits of an explicit zero pad), so
     # nothing is copied per call. Several leaves: each declared leaf boundary stays a whole-atom boundary.
