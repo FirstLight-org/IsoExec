@@ -2,11 +2,19 @@
 and a deterministic trainer backward through every stage including the router.
 
 Random weights at the released geometry; one B200.
+
+The tests that use ``layers`` run in a child process. ``install_trainer_kernels`` is the trainer's process-wide,
+one-way install (the aten::mm / addmm / bmm overrides, the trainer environment, the precision flags, the GEMM
+providers); in a shared pytest session it stayed installed for every later test, whose cuBLAS and fp64 references
+then reached the batch-invariant Triton override (``ops/mm``: 13 failures after this module, none alone).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,10 +27,27 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or live_device_arc
 
 _RAW = Path(__file__).resolve().parents[2] / "models/qwen3_5_moe/tests/fixtures/qwen3_5_35b_a3b.json"
 _T = 512
+#: Set in the child process that runs the tests needing the trainer's process-wide install.
+_CHILD = "ISOEXEC_SM100_MOE_LAYER_CHILD"
+_IN_CHILD = os.environ.get(_CHILD) == "1"
+installed = pytest.mark.skipif(not _IN_CHILD, reason="runs in its own process (test_installed_layer_in_its_own_process)")
 
 
 def _bits(t: torch.Tensor) -> torch.Tensor:
     return t.contiguous().view({torch.float32: torch.int32, torch.bfloat16: torch.int16}[t.dtype])
+
+
+@pytest.mark.skipif(_IN_CHILD, reason="the child process itself")
+def test_installed_layer_in_its_own_process():
+    """Run every ``installed`` test of this module in a fresh process, so the install ends with it."""
+    names = [name for name, f in globals().items()
+             if name.startswith("test_") and installed.mark in getattr(f, "pytestmark", ())]
+    root = Path(__file__).resolve().parents[3]
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rfEs",
+                          *(f"{__file__}::{name}" for name in names)],
+                         cwd=root, env={**os.environ, _CHILD: "1"}, capture_output=True, text=True)
+    summary = run.stdout.strip().splitlines()[-1] if run.stdout.strip() else ""
+    assert run.returncode == 0 and summary.startswith(f"{len(names)} passed"), run.stdout[-20000:] + run.stderr[-5000:]
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +79,7 @@ def layers():
     return trainer, engine, x
 
 
+@installed
 def test_bindings_are_the_sm100_recipes(layers):
     from isoexec import nn
 
@@ -67,6 +93,7 @@ def test_bindings_are_the_sm100_recipes(layers):
             "shared_expert": "sm100_after_fc2_shared_v2"}
 
 
+@installed
 def test_engine_forward_equals_trainer_forward(layers):
     trainer, engine, x = layers
     with torch.no_grad():
@@ -77,6 +104,7 @@ def test_engine_forward_equals_trainer_forward(layers):
     assert torch.equal(_bits(rollout), _bits(trained.detach()))
 
 
+@installed
 def test_engine_rows_do_not_depend_on_the_batch(layers):
     _, engine, x = layers
     with torch.no_grad():
@@ -85,6 +113,7 @@ def test_engine_rows_do_not_depend_on_the_batch(layers):
             assert torch.equal(_bits(engine(x[:rows].clone(), None)), _bits(full[:rows])), rows
 
 
+@installed
 def test_trainer_backward_is_deterministic_and_reaches_the_router(layers):
     trainer, _, x = layers
 
@@ -106,6 +135,7 @@ def test_trainer_backward_is_deterministic_and_reaches_the_router(layers):
     assert all(torch.equal(grads[name], grads2[name]) for name in grads)
 
 
+@installed
 def test_router_and_shared_expert_reach_no_host_installed_gemm(layers, monkeypatch):
     """The router and shared-expert GEMMs name their providers. A host may wrap ``matmul_persistent``
     with its own provider and another may not, and ``torch.mm`` reaches whichever
