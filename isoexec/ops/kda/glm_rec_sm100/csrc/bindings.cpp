@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-// Torch binding of the recurrent KDA kernel. Shape and dtype policy lives in ops.py.
+// Torch binding of the recurrent KDA kernel. Shape and dtype policy lives in ops.py. Launches run on the current
+// stream of the inputs' device (CUDAGuard) and are checked.
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/extension.h>
 
@@ -38,6 +41,7 @@ void rec(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
          int64_t beta_mode, const c10::optional<at::Tensor> &cu, const at::Tensor &slot_in, const at::Tensor &slot_out,
          int64_t null_slot, at::Tensor &state, at::Tensor &o, int64_t N, int64_t lanes, int64_t nc, int64_t vb, bool packed, bool ws, const c10::optional<at::Tensor> &ckpt,
          const c10::optional<at::Tensor> &cp_base) {
+  const c10::cuda::CUDAGuard guard(q.device());
   const int64_t H = q.size(1);
   for (const at::Tensor *t : std::initializer_list<const at::Tensor *>{&q, &k, &v, &o})
     TORCH_CHECK(t->scalar_type() == at::kBFloat16 && t->dim() == 3 && t->size(1) == H && t->size(2) == 128 &&
@@ -80,6 +84,7 @@ void rec(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
   }
   TORCH_CHECK(rec_launch(p, fused, packed, ws, int(lanes), int(nc), int(vb), at::cuda::getCurrentCUDAStream()),
               "kda_rec: unsupported launch shape (lanes, nc, vb) = (", lanes, ", ", nc, ", ", vb, ")");
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 struct BwdParams {
@@ -109,6 +114,7 @@ void bwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
          int64_t beta_mode, const at::Tensor &cu, const at::Tensor &ckpt, const at::Tensor &cp_base, const at::Tensor &dO,
          const c10::optional<at::Tensor> &dht, at::Tensor &dq, at::Tensor &dk, at::Tensor &dv, at::Tensor &dg,
          at::Tensor &dbeta, const c10::optional<at::Tensor> &dh0, at::Tensor &scratch, int64_t grid) {
+  const c10::cuda::CUDAGuard guard(q.device());
   const int64_t H = q.size(1);
   for (const at::Tensor *t : std::initializer_list<const at::Tensor *>{&q, &k, &v, &dO, &dq, &dk, &dv})
     TORCH_CHECK(t->scalar_type() == at::kBFloat16 && t->dim() == 3 && t->size(1) == H && t->size(2) == 128 &&
@@ -130,7 +136,10 @@ void bwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
   p.dg = ptr<float>(dg); p.dbeta = ptr<float>(dbeta); p.dh0 = dh0 ? ptr<float>(*dh0) : nullptr;
   p.scratch = ptr<float>(scratch);
   p.N = int(cu.numel() - 1); p.H = int(H);
-  if (p.N > 0) bwd_launch(p, int(grid), at::cuda::getCurrentCUDAStream());
+  if (p.N > 0) {
+    bwd_launch(p, int(grid), at::cuda::getCurrentCUDAStream());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
 }
 
 void leaf_tree4_launch(const float *x, int L, int64_t n, float *out_f32, uint16_t *out_bf16, cudaStream_t st);
@@ -141,8 +150,10 @@ void leaf_tree(const at::Tensor &parts, at::Tensor &out) {
                   (L & (L - 1)) == 0 && L >= 1 && L <= 8 && n % 4 == 0 &&
                   reinterpret_cast<uintptr_t>(parts.data_ptr()) % 16 == 0 && reinterpret_cast<uintptr_t>(out.data_ptr()) % 16 == 0 &&
                   (out.scalar_type() == at::kFloat || out.scalar_type() == at::kBFloat16), "kda_rec leaf_tree: fp32 parts, 16B aligned");
+  const c10::cuda::CUDAGuard guard(parts.device());
   leaf_tree4_launch(ptr<const float>(parts), int(L), n, out.scalar_type() == at::kFloat ? ptr<float>(out) : nullptr,
                     out.scalar_type() == at::kBFloat16 ? ptr<uint16_t>(out) : nullptr, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 void gate_launch(const uint16_t *f, int64_t f_ts, const float *dt_bias, const float *A_log, float lb, float *out,
@@ -153,13 +164,17 @@ void gate(const at::Tensor &f, const at::Tensor &dt_bias, const at::Tensor &A_lo
   TORCH_CHECK(f.scalar_type() == at::kBFloat16 && f.dim() == 2 && f.stride(1) == 1 && out.scalar_type() == at::kFloat &&
                   out.is_contiguous() && out.sizes() == f.sizes() && dt_bias.scalar_type() == at::kFloat &&
                   A_log.scalar_type() == at::kFloat, "kda_rec gate: bf16 f [T, H*128] -> fp32");
+  const c10::cuda::CUDAGuard guard(f.device());
   gate_launch(ptr<const uint16_t>(f), f.stride(0), ptr<const float>(dt_bias), ptr<const float>(A_log), float(lb),
               ptr<float>(out), f.size(0), int(f.size(1)), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void beta(const at::Tensor &b, at::Tensor &out) {
   TORCH_CHECK(b.scalar_type() == at::kBFloat16 && b.is_contiguous() && out.scalar_type() == at::kBFloat16 &&
                   out.is_contiguous() && out.numel() == b.numel(), "kda_rec beta: contiguous bf16");
+  const c10::cuda::CUDAGuard guard(b.device());
   beta_launch(ptr<const uint16_t>(b), ptr<uint16_t>(out), b.numel(), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 }  // namespace kda_rec
 

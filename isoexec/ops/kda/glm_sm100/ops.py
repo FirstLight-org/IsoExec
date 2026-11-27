@@ -19,6 +19,17 @@ from isoexec.ops.kda.glm_sm100.spec import CHUNK, CHUNK_LENGTH, HEAD_DIM
 
 _GATE_DTYPES = (torch.float32, torch.bfloat16)
 
+#: CUDA's limit of gridDim.y. The state pass (forward, prefill), the backward state pass, the decode row kernel and
+#: record_state put one sequence (decode lane, slot) per grid row on that axis: a call with more is refused here,
+#: before any launch, instead of launching nothing.
+MAX_SEQUENCES = 65535
+
+
+def _check_count(n: int, what: str):
+    if n > MAX_SEQUENCES:
+        raise ValueError(f"kda glm_sm100: {n} {what} in one call, more than the {MAX_SEQUENCES} the kernels' grid "
+                         f"y axis holds; split the call")
+
 
 def _check(q, k, v, g, beta, cu_seqlens, initial_state):
     if not q.is_cuda:
@@ -73,6 +84,7 @@ def forward(q, k, v, g, beta, cu_seqlens, initial_state=None, *, output_final_st
     ``saves`` (backward recompute only) is a dict that receives the workspace, the plan, S^ at every chunk
     start and the deltas.
     """
+    _check_count(cu_seqlens.shape[0] - 1, "sequences")
     _check(q, k, v, g, beta, cu_seqlens, initial_state)
     T, H, _ = q.shape
     nseq = cu_seqlens.shape[0] - 1
@@ -135,6 +147,7 @@ def backward(q, k, v, g, beta, cu_seqlens, initial_state, do, dht=None):
 
     The forward intermediates are recomputed by the forward kernels themselves; every reduction is a
     fixed-order chain, no kernel uses atomics, so the gradients are run-to-run deterministic."""
+    _check_count(cu_seqlens.shape[0] - 1, "sequences")
     _check(q, k, v, g, beta, cu_seqlens, initial_state)
     T, H, _ = q.shape
     nseq = cu_seqlens.shape[0] - 1
@@ -197,6 +210,7 @@ def prefill(q, k, v, g, beta, cu_seqlens, state: KdaState, slot_in, slot_out=Non
     discarded). Outputs ``o [T, H, 128]`` are bit for bit those of one ``forward`` over each whole
     sequence from position 0, wherever the calls split it (README "Relations")."""
     nseq = cu_seqlens.shape[0] - 1
+    _check_count(nseq, "sequences")
     si = _slots(slot_in, nseq, q.device)
     so = si if slot_out is None else _slots(slot_out, nseq, q.device)
     o, _ = forward(q, k, v, g, beta, cu_seqlens, None, records=state.data, slot_in=si, slot_out=so)
@@ -222,6 +236,7 @@ def decode_step(q, k, v, g, beta, state: KdaState, slots, *, null_slot: int = -1
     are padding: output +0, no record byte touched. No host synchronization and no data-dependent launch
     shape, so the call is CUDA-graph capturable (``out`` / ``workspace`` may be preallocated)."""
     N = q.shape[0]
+    _check_count(N, "decode lanes")
     _check(q, k, v, g, beta, None, None)
     q, k, v, g, beta = (t.contiguous() for t in (q, k, v, g, beta))
     o = torch.empty_like(v) if out is None else out
@@ -240,6 +255,7 @@ def decode_step_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, state: KdaStat
     ``decode_step(q, k, v, forget_gate(f, ...), sigmoid_beta(b), ...)``, two launches fewer and no
     contiguous copies."""
     N, H = q.shape[0], q.shape[1]
+    _check_count(N, "decode lanes")
     if q.ndim != 3 or q.shape[-1] != HEAD_DIM or k.shape != q.shape or v.shape != q.shape:
         raise ValueError(f"kda glm_sm100 expects q, k, v [N, H, {HEAD_DIM}]")
     if f.shape != (N, H * HEAD_DIM) or b.shape != (N, H) or f.dtype != torch.bfloat16 or b.dtype != torch.bfloat16:
@@ -256,6 +272,7 @@ def record_state(state: KdaState, slots) -> torch.Tensor:
     """The fp32 state ``[N, H, 128, 128]`` the records stand for: bit for bit ``forward``'s final state of
     the same tokens as one sequence."""
     sl = torch.as_tensor(slots, dtype=torch.int32, device=state.data.device).reshape(-1).contiguous()
+    _check_count(sl.numel(), "slots")
     out = torch.empty(sl.numel(), state.H, HEAD_DIM, HEAD_DIM, dtype=torch.float32, device=state.data.device)
     if sl.numel():
         extension().record_state(state.data, sl, out)

@@ -25,6 +25,16 @@ PACKED = False
 
 _BETA_MODE = {torch.bfloat16: 0, torch.float32: 1}
 
+#: CUDA's limit of gridDim.z, the axis the recurrent kernel puts sequences (decode lanes) on: a call with more is
+#: refused before the launch (and before any allocation) instead of launching nothing.
+MAX_SEQUENCES = 65535
+
+
+def _check_count(n: int, what: str = "sequences"):
+    if n > MAX_SEQUENCES:
+        raise ValueError(f"kda glm_rec_sm100: {n} {what} in one call, more than the {MAX_SEQUENCES} the kernel's grid "
+                         f"z axis holds; split the call")
+
 
 def _shape(N: int, H: int, decode: bool):
     """(lanes per column, columns per lane group NC, columns per CTA VB): tuned for the work available. Execution
@@ -62,6 +72,7 @@ def _i32(x, n, device):
 def forward(q, k, v, g, beta, cu_seqlens, initial_state=None, output_final_state=True, *, shape=None, ws=None):
     """Functional whole-sequence form (the trainer's forward). ``initial_state`` / the returned state are fp32
     ``[N, H, 128 (v), 128 (k)]``; no initial state = +0. Returns ``(o [T, H, 128] bf16, final | None)``."""
+    _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
     if g.shape != q.shape or g.dtype != torch.float32:
@@ -99,6 +110,7 @@ def forward_train(q, k, v, g, beta, cu_seqlens, initial_state=None, *, shape=Non
     """:func:`forward` that also keeps the state entering every 64th token of each sequence (exec-only extra stores,
     the trainer backward's checkpoints). Returns ``(o, final_state, ckpt, cp_base)``; ``o`` and the state are bit for
     bit :func:`forward`'s."""
+    _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
@@ -160,6 +172,7 @@ def core(q, k, v, g, beta, cu_seqlens, initial_state=None):
 def prefill(q, k, v, g, beta, cu_seqlens, state, slot_in, slot_out, *, null_slot=-1, shape=None):
     """Engine prefill: sequence n continues slot ``slot_in[n]`` (negative: a fresh +0 state) and leaves its state
     in ``slot_out[n]`` (negative: not stored). ``state`` is the fp32 ``[slots, H, 128, 128]`` pool."""
+    _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
@@ -174,6 +187,7 @@ def prefill(q, k, v, g, beta, cu_seqlens, state, slot_in, slot_out, *, null_slot
 def prefill_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, cu_seqlens, state, slot_in, slot_out, *, null_slot=-1,
                   shape=None):
     """:func:`prefill` with the gate and beta stages evaluated in-kernel from the raw bf16 projections."""
+    _check_count(cu_seqlens.numel() - 1)
     _check_qkv(q, k, v)
     T, H = q.shape[:2]
     cu = cu_seqlens.to(device=q.device, dtype=torch.int32).contiguous()
@@ -188,6 +202,7 @@ def prefill_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, cu_seqlens, state,
 def decode_step(q, k, v, g, beta, state, slots, *, null_slot=-1, out=None, shape=None):
     """One token per sequence, in place in ``state[slots]``. Lanes whose slot is ``null_slot`` (vLLM's padded
     lanes) produce zeros and touch no state. CUDA-graph capturable (no host sync)."""
+    _check_count(q.shape[0], "decode lanes")
     _check_qkv(q, k, v)
     N, H = q.shape[:2]
     o = torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device) if out is None else out
@@ -200,6 +215,7 @@ def decode_step(q, k, v, g, beta, state, slots, *, null_slot=-1, out=None, shape
 def decode_step_fused(q, k, v, f, b, dt_bias, A_log, lower_bound, state, slots, *, null_slot=-1, out=None, shape=None):
     """:func:`decode_step` with the forget gate and beta evaluated in-kernel from the raw bf16 projections
     ``f [N, H*128]`` and ``b [N, H]``: bit for bit ``decode_step(..., forget_gate(f, ...), sigmoid_beta(b), ...)``."""
+    _check_count(q.shape[0], "decode lanes")
     _check_qkv(q, k, v)
     N, H = q.shape[:2]
     if f.dtype != torch.bfloat16 or b.dtype != torch.bfloat16 or f.shape != (N, H * HEAD_DIM) or b.shape != (N, H):
