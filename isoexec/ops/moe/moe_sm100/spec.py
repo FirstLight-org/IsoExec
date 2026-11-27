@@ -23,6 +23,12 @@ FC1_GLU_ACT = "silu"
 SM100_COMBINE_ORDER = "ascending_expert_then_slot"
 SM100_SELECTED_SUM = "ascending_expert_chain_from_zero"
 
+#: The combine is NOT moe_sm90's program bit for bit: the same order, another seed. moe_sm90's folds
+#: (``fused_combine``, the owner exchange's ``_unified_owner_core``) take the first term as is; this one adds
+#: every term to +0. They differ on exactly one input class, a channel whose k terms are all -0 (-0 there, +0
+#: here), and nowhere else. ``ops/moe/sm100.py`` therefore binds no sm90 fold on this arch.
+SM100_COMBINE_MATCHES_SM90 = False
+
 #: Dispatch rows are exact integer ranks over the flat ``(token, slot)`` index, so
 #: within-expert placement is canonical -- stronger than sm90, where it is unspecified and the
 #: result is made independent of it by the inverse map instead.
@@ -39,25 +45,22 @@ SM100_SEGMENT_MULTIPLE = 64
 #: the pre-update score gate is a within-arch gate on sm100. README.md "Remaining gaps" item 7.
 SM100_SCORE_MATCHES_SM90 = False
 
-#: ``KORDER`` is the exception: this package declares TWO members of it (the forward-only
-#: ``sm100_gather_korder_v2`` and the after-fc2 ``sm100_after_fc2_combine_v2``, one native combine
-#: kernel), so the class has an on-arch counterparty and carries the field. ``runtimes/parallel``
-#: admits EP > 1 only against a combine whose RECORD names the class, and
-#: ``tests/test_ep_korder_gpu.py`` is the proof the record points at.
+#: ``KORDER``: this package declares TWO members of it (the forward-only ``sm100_gather_korder_v2`` and
+#: the after-fc2 ``sm100_after_fc2_combine_v2``, one native combine kernel), so the class has an on-arch
+#: counterparty and carries the field. ``runtimes/parallel`` admits EP > 1 only against a combine whose
+#: RECORD names the class, and ``tests/test_ep_korder_gpu.py`` is the proof the record points at.
+#: What the field claims is the equality of THESE two members at every EP / ETP layout. It claims nothing
+#: about moe_sm90, whose own two members carry the same class name: ``ops/moe/spec.py`` is lazy
+#: (``family_impls`` builds the family from the package the LIVE arch selects, and
+#: ``ops/_dispatch._assert_proven`` refuses a package that declares an impl of another arch), so a registry
+#: holds one arch's members and the two packages' members are never compared as one class. Across the
+#: archs the folds are not one program (``SM100_COMBINE_MATCHES_SM90``).
 #:
-#: Why the CROSS-ARCH class below is recorded in ``core/registry.TWIN_PROOFS`` but is not
-#: spelled on an ``ImplSpec.twin_class`` field. ``ops/moe/spec.py`` is lazy: ``family_impls``
-#: rebuilds the family's declarations from whichever package the LIVE arch selects, and
-#: ``ops/_dispatch._assert_proven`` refuses a selected package that declares ANY impl whose
-#: ``supported_archs`` omits that arch. So on a B200 the moe registry can hold this package's
-#: records and no others, and the sm90 member of a shared class cannot be declared beside ours --
-#: a ``twin_class`` on our record would read as a class with exactly one member, which
-#: ``core/tests/test_op_gate_alignment_cpu.py`` correctly refuses ("the equivalence they claim has
-#: nothing to be checked against"). The equivalence is real and it is recorded where it is
-#: checkable: ``TWIN_PROOFS`` lists this battery per class, which is what ``gdn.cpr`` does for the
-#: same reason. Expressing a cross-arch class ON the records needs registry vocabulary that does
-#: not exist yet (README "Remaining gaps"); ``moe.expert_mlp.segment_tree_glu``, whose two members
-#: are both sm100, does carry the field.
+#: This package claims NO cross-arch class any more. It claimed ``SORTED_TOPK`` with moe_sm90 through
+#: ``core/registry.TWIN_PROOFS`` (never on a ``twin_class`` field: with the sm90 sibling undeclarable here,
+#: the field would read as a one-member class, which ``core/tests/test_op_gate_alignment_cpu.py`` refuses);
+#: ``sm100_fused_topk_v2`` withdrew that claim (its record below). The reason a future cross-arch class
+#: could not be spelled on these records stays as stated.
 WHY_NO_TWIN_FIELD = "cross-arch class; the sibling cannot be declared in an arch-selected package"
 
 KORDER = "moe.combine.korder_fp32"
@@ -134,12 +137,11 @@ IMPLS: tuple[ImplSpec, ...] = (
         inputs=dict(_EXPERT_INPUTS),
         twin_class=SEGMENT_TREE_GLU,
     ),
-    # ``KORDER``'s program: the k slots folded in canonical slot order by one fp32 chain with one
-    # rounding. v2 seeds the chain with +0 (schedule policy rule 2); moe_sm90's ``pik_leaf_tree`` takes
-    # the first slot as is, so the two agree bit for bit except on a sum whose terms are all -0
-    # (+0 here, -0 there) -- including the EP
-    # home-rank fold, which is the same call on rows shipped home. ``TWIN_PROOFS[KORDER]`` names
-    # the batteries that check it; ``tests/test_ep_korder_gpu.py`` proves this member and
+    # The k slots folded in canonical slot order by one fp32 chain with one rounding, the EP home-rank
+    # fold included (the same call on rows shipped home). v2 seeds the chain with +0 (schedule policy
+    # rule 2); moe_sm90's ``pik_leaf_tree`` takes the first slot as is, so the two archs agree bit for bit
+    # except on a sum whose terms are all -0 (+0 here, -0 there): ``SM100_COMBINE_MATCHES_SM90``. The class
+    # on this record is the on-arch one: ``tests/test_ep_korder_gpu.py`` proves this member and
     # ``sm100_after_fc2_combine_v2`` bitwise equal on the same rows and EP-invariant.
     ImplSpec(
         op="moe.combine",
@@ -163,6 +165,7 @@ __all__ = (
     "IMPLS",
     "KORDER",
     "SEGMENT_TREE_GLU",
+    "SM100_COMBINE_MATCHES_SM90",
     "SM100_COMBINE_ORDER",
     "SM100_DISPATCH_ORDER",
     "SM100_SCORE_MATCHES_SM90",

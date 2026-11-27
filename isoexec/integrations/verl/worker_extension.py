@@ -128,7 +128,7 @@ class IsoExecWorkerExtension(vLLMColocateWorkerExtension):
             "event": "weight_ack", "version": self._isoexec_version, "tensors_received": received,
             "parameter_sha256": local_parameter_sha256(model), "wall_time": time.time(),
             # the attention schedules this worker bound (policy version, optional target batch, spans); the
-            # trainer side compares it with its own before the first rollout (trainer.verify_acks)
+            # sync compares it with what the training workers bound before the first rollout (schedule.py)
             "attention_schedule": schedule_record(),
         }
         from .full_distribution import run_root
