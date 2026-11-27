@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from isoexec.ops.kda.glm_sm100.tests._fixtures import require_sm100
+from isoexec.ops.kda.tests._fixtures import require_sm100
 
 
 @pytest.fixture(autouse=True)

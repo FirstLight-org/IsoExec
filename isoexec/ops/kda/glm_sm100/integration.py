@@ -83,7 +83,6 @@ class _Gate(torch.autograd.Function):
         HK, H = ctx.HK, A_log.numel()
         T = f.numel() // HK
         nseg = max(1, -(-T // extension().seg()))
-        f32 = dict(dtype=torch.float32, device=f.device)
         pdt, pA = torch.empty(nseg, HK, dtype=torch.float32, device=f.device), torch.empty(nseg, HK, dtype=torch.float32, device=f.device)
         colA, ddt, dA = torch.empty(HK, dtype=torch.float32, device=f.device), torch.empty(HK, dtype=torch.float32, device=f.device), torch.empty(H, dtype=torch.float32, device=f.device)
         df = torch.empty_like(f)

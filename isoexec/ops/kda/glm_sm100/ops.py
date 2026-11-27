@@ -71,7 +71,6 @@ def make_plan(cu_seqlens: torch.Tensor, T: int, records=None, slot_in=None, H: i
 
 
 def workspace(T: int, H: int, maxch: int, device):
-    bf = dict(dtype=torch.bfloat16, device=device)
     return dict(W=torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=device), U=torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=device),
                 QG=torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=device), KD=torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=device),
                 MQ=torch.empty(T, H, CHUNK, dtype=torch.bfloat16, device=device),
@@ -102,7 +101,6 @@ def forward(q, k, v, g, beta, cu_seqlens, initial_state=None, *, output_final_st
     h0 = initial_state.contiguous() if initial_state is not None else None
     save_S = save_d = save_X = save_KK = save_Xu = save_Kg = None
     if saves is not None:
-        bf, f32 = dict(dtype=torch.bfloat16, device=q.device), dict(dtype=torch.float32, device=q.device)
         save_S = torch.empty(max(maxch, 1), H, HEAD_DIM, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
         save_d = torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device)
         save_X, save_KK = torch.empty(T, H, CHUNK, dtype=torch.float32, device=q.device), torch.empty(T, H, CHUNK, dtype=torch.float32, device=q.device)
@@ -135,7 +133,7 @@ def decode(q, k, v, g, beta, state, *, out_state=None):
             or not out_state.is_contiguous():
         raise ValueError("kda glm_sm100 decode out_state must be contiguous fp32 [N, H, 128, 128]")
     o = torch.empty_like(v)
-    H, bf = q.shape[1], dict(dtype=torch.bfloat16, device=q.device)
+    H = q.shape[1]
     rows = [torch.empty(N, H, HEAD_DIM, dtype=torch.bfloat16, device=q.device) for _ in range(4)] + [
         torch.empty(N, H, 2, dtype=torch.bfloat16, device=q.device), torch.empty(N, H, HEAD_DIM, dtype=torch.float32, device=q.device)]
     extension().decode(q, k, v, g, beta, state, out_state, o, rows)
@@ -156,8 +154,6 @@ def backward(q, k, v, g, beta, cu_seqlens, initial_state, do, dht=None):
     saves = {}
     forward(q, k, v, g, beta, cu_seqlens, initial_state, output_final_state=False, saves=saves)
     maxch, dev = saves["maxch"], q.device
-    f32 = dict(dtype=torch.float32, device=dev)
-    bf = dict(dtype=torch.bfloat16, device=dev)
     iw = [torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=dev), torch.empty(max(maxch, 1), H, HEAD_DIM, HEAD_DIM, dtype=torch.bfloat16, device=dev),
           torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=dev), torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=dev), torch.empty(T, H, HEAD_DIM, dtype=torch.bfloat16, device=dev),
           torch.empty(T, H, CHUNK, dtype=torch.float32, device=dev), torch.empty(max(maxch, 1), H, HEAD_DIM, dtype=torch.float32, device=dev),

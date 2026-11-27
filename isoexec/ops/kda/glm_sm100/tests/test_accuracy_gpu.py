@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from isoexec.ops.kda.glm_sm100 import ops, reference as R
-from isoexec.ops.kda.glm_sm100.tests._fixtures import assert_close, make_inputs, require_sm100
+from isoexec.ops.kda.tests._fixtures import assert_close, make_inputs, require_sm100
 
 FWD_L2, FWD_MAX = 1e-2, 2.5e-2
 BWD_L2, BWD_MAX = 2e-2, 5e-2

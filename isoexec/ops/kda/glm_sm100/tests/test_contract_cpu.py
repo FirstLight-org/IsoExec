@@ -17,10 +17,10 @@ def test_spec_declares_one_sm100_impl_cpu():
 
 
 def test_importing_ops_and_integration_does_not_build_cpu():
-    import sys
+    from isoexec.ops.kda.tests._fixtures import assert_imports_build_nothing
 
-    importlib.import_module("isoexec.ops.kda.glm_sm100.integration")
-    assert "isoexec_kda_glm_sm100_cuda" not in sys.modules
+    assert_imports_build_nothing("import isoexec.ops.kda.glm_sm100.ops, isoexec.ops.kda.glm_sm100.integration, "
+                                 "isoexec.ops.kda.glm_sm100.engine", extensions=("glm_sm100",))
 
 
 def test_recipe_header_is_the_numerical_contract_cpu():

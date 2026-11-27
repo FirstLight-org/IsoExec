@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from isoexec.ops.kda.glm_rec_sm100 import ops
-from isoexec.ops.kda.glm_rec_sm100.tests._fixtures import (bits_equal, cu_of, make_inputs, max_rel, rel_l2, require_sm100)
+from isoexec.ops.kda.tests._fixtures import (bits_equal, cu_of, make_inputs, max_rel, rel_l2, require_sm100)
 
 SHAPES = [(8, 4, 16), (8, 4, 32), (8, 2, 8), (8, 8, 32), (16, 4, 16), (16, 2, 8), (32, 4, 16), (32, 4, 8), (32, 2, 8),
           (8, 2, 16), (8, 2, 32), (8, 2, 64), (8, 4, 64), (8, 4, 128), (16, 2, 32), (16, 4, 64)]

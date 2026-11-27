@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from isoexec.ops.kda.glm_sm100 import ops, reference as R
-from isoexec.ops.kda.glm_sm100.tests._fixtures import assert_close, cu_of, make_inputs, require_sm100
+from isoexec.ops.kda.tests._fixtures import assert_close, cu_of, make_inputs, require_sm100
 
 
 @pytest.fixture(autouse=True)
