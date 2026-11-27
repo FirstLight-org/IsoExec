@@ -42,9 +42,14 @@ from isoexec.ops.kda.glm_sm100 import ops, record_layout
 from isoexec.ops.kda.glm_sm100._extension import extension
 from isoexec.ops.kda.glm_sm100.integration import forget_gate, gated_rms_norm, sigmoid_beta
 from isoexec.ops.kda.glm_sm100.spec import HEAD_DIM
+from isoexec.ops.mm.mm_sm100.segments import row_parallel_leaves
 
-TP_LEAVES = 8
 TP_DEGREES = (1, 2, 4, 8)
+#: Leaves of the row-parallel o_proj reduction: the GEMM's statement of it (``mm_sm100`` ``row_parallel_leaves``, rule 3
+#: of the schedule policy: d_max shards of G segments) at the largest TP degree. The tensor-core sum publishes no
+#: shortest segment, so G = 1 at every K; it is evaluated at the smallest o_proj K the engine takes (8 heads) and
+#: ``shard_layer`` re-derives it at the layer's own K.
+TP_LEAVES = row_parallel_leaves(8 * HEAD_DIM, max(TP_DEGREES))
 
 
 # ------------------------------------------------------------------------------------------ projections
@@ -135,6 +140,9 @@ def shard_layer(module, rank: int = 0, world: int = 1, *, trainable=False) -> Kd
         raise ValueError("glm_sm100 engine requires linear_head_dim == 128")
     if world not in TP_DEGREES or H % (TP_LEAVES * 1) or (H // TP_LEAVES * K) % 64:
         raise ValueError(f"TP degree must be one of {TP_DEGREES} and the heads must form {TP_LEAVES} leaves")
+    if row_parallel_leaves(H * K, max(TP_DEGREES)) != TP_LEAVES:
+        raise ValueError(f"o_proj K = {H * K}: the GEMM's row-parallel tree has "
+                         f"{row_parallel_leaves(H * K, max(TP_DEGREES))} leaves, the engine's has {TP_LEAVES}")
     if not 0 <= rank < world:
         raise ValueError("rank out of range")
     for name in ("q_proj", "k_proj", "v_proj", "f_a_proj", "f_b_proj", "g_a_proj", "g_b_proj", "b_proj", "o_proj"):

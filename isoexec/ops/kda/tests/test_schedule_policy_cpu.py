@@ -118,7 +118,7 @@ def test_the_two_reducers_have_different_manifests_and_are_refused_together_cpu(
     a, b = schedule.manifest(schedule.CHUNK), schedule.manifest(schedule.TOKEN)
     assert a["schedule"] == {"split": "anchored(64)", "combine": "continued"}
     assert b["schedule"] == {"split": "anchored(1)", "combine": "continued"}
-    assert a["reducer"] != b["reducer"] and a["source_sha256"] != b["source_sha256"]
+    assert a["reducer"] != b["reducer"] and a["builds"] != b["builds"]
     assert schedule.manifest_hash(a) != schedule.manifest_hash(b)
     assert schedule.manifest_hash(a) == schedule.manifest_hash(schedule.manifest())      # engine == trainer by default
     schedule.assert_same_manifest(a, schedule.manifest(schedule.CHUNK))

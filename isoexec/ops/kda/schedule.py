@@ -26,6 +26,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from isoexec.ops import build_cache
 from isoexec.ops import schedule_policy as policy
 
 _HERE = Path(__file__).resolve().parent
@@ -66,6 +67,11 @@ TOKEN = Reducer(name="chunk_recurrence.kda_rec.kernel_delta", impl_id="sm100_kda
 REDUCERS = (CHUNK, TOKEN)
 DEFAULT = CHUNK
 
+#: The KDA extensions each reducer's engine compiles, named by the reducer whose package builds them. The token
+#: engine also runs glm_sm100's (its gated norm, the o_proj leaf-tree fallback and the trainer's gate and beta are
+#: glm_sm100's integration stages, csrc/layer.cu).
+ENGINE_BUILDS = {CHUNK.name: (CHUNK,), TOKEN.name: (TOKEN, CHUNK)}
+
 
 def segments(reducer: Reducer = DEFAULT) -> policy.Segments:
     """Rule 1 for ``reducer``: segments of its exact block, one continued chain."""
@@ -79,21 +85,33 @@ def cuda_defines(reducer: Reducer = DEFAULT) -> tuple[str, ...]:
     return (f"-D{reducer.block_define}={segments(reducer).S}",)
 
 
-def csrc(reducer: Reducer) -> Path:
-    return _HERE / reducer.package / "csrc"
+def csrc(reducer: Reducer, root: Path | None = None) -> Path:
+    """The csrc tree of ``reducer``'s package (under ``root``, default this directory)."""
+    return (_HERE if root is None else Path(root)) / reducer.package / "csrc"
 
 
-def source_sha256(reducer: Reducer) -> str:
+def source_sha256(reducer: Reducer, root: Path | None = None) -> str:
+    """Digest of every file of ``reducer``'s package csrc tree (sources and the headers they include)."""
     digest = hashlib.sha256()
-    for path in sorted(csrc(reducer).rglob("*")):
+    tree = csrc(reducer, root)
+    for path in sorted(tree.rglob("*")):
         if path.is_file():
-            digest.update(path.relative_to(csrc(reducer)).as_posix().encode())
+            digest.update(path.relative_to(tree).as_posix().encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()
 
 
-def manifest(reducer: Reducer = DEFAULT) -> dict:
-    """What a party of a deployment publishes about its KDA program."""
+def compile_flags(reducer: Reducer) -> tuple[str, ...]:
+    """The nvcc flags of ``reducer``'s package build that can reach the arithmetic: the shared SM100 profile (target,
+    -O3, ``build_cache.NUMERICS_FLAGS``) and the schedule's definitions. The language standard and the diagnostic
+    flags (``-lineinfo``, ``-Xptxas=-v``) are left out."""
+    return tuple(f for f in build_cache.sm100_cuda_flags(extra=cuda_defines(reducer)) if not f.startswith("-std="))
+
+
+def manifest(reducer: Reducer = DEFAULT, *, root: Path | None = None) -> dict:
+    """What a party of a deployment publishes about its KDA program: the schedule, and every KDA extension its engine
+    compiles (``ENGINE_BUILDS``) with its sources and the compile flags that can reach the arithmetic. ``root``
+    (tests): read the csrc trees under another copy of this directory."""
     seg = segments(reducer)
     return {
         "op": "kda.glm",
@@ -102,7 +120,8 @@ def manifest(reducer: Reducer = DEFAULT) -> dict:
         "impl_id": reducer.impl_id,
         "schedule": {"split": f"anchored({seg.S})", "combine": seg.merge},
         "defines": list(cuda_defines(reducer)),
-        "source_sha256": source_sha256(reducer),
+        "builds": [{"package": r.package, "flags": list(compile_flags(r)), "source_sha256": source_sha256(r, root)}
+                   for r in ENGINE_BUILDS[reducer.name]],
     }
 
 
@@ -136,5 +155,5 @@ def check_pool(reducer: Reducer, pool) -> None:
                          f"the two reducers are not mixed inside one deployment")
 
 
-__all__ = ["CHUNK", "DEFAULT", "REDUCERS", "Reducer", "TOKEN", "assert_same_manifest", "check_pool", "csrc",
-           "cuda_defines", "manifest", "manifest_hash", "segments", "select", "source_sha256"]
+__all__ = ["CHUNK", "DEFAULT", "ENGINE_BUILDS", "REDUCERS", "Reducer", "TOKEN", "assert_same_manifest", "check_pool",
+           "compile_flags", "csrc", "cuda_defines", "manifest", "manifest_hash", "segments", "select", "source_sha256"]
