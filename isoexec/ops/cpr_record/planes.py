@@ -4,10 +4,10 @@
 The fp32 boundary state ``S_c [128 k][128 v]`` is held as ``SH`` (bf16 ``rn(S)``, ``[v][k]``: the operand image every
 step reads), ``SL`` (the low 16 bits of the fp32 pattern, ``[k][v]``) and ``SC`` (one carry bit per element: ``SH`` is one
 above the truncated top half), so that ``S = ((SH - SC) << 16) | SL`` bit for bit. SC is a bitmap of 8 x 8 blocks over
-(r, c) = (k, v) for KDA and (d, v) for GDN: block (r / 8, c / 8) is the 64-bit word ``(c / 8) * 16 + r / 8``, bit
+(r, c) = (k, v): block (r / 8, c / 8) is the 64-bit word ``(c / 8) * 16 + r / 8``, bit
 ``(r % 8) * 8 + (c % 8)`` (little endian). Reading an element's carry is one shift of one word whatever thread holds the
 element; a warp that holds an mma accumulator fragment assembles a block word with a ballot, a bit spread and (for a
-fragment whose rows are v) an 8 x 8 bit transpose (csrc/cpr_planes.cuh). Both families therefore share one plane.
+fragment whose rows are v) an 8 x 8 bit transpose (``isoexec/ops/kda/glm_sm100/csrc/cpr_planes.cuh``).
 """
 
 from __future__ import annotations

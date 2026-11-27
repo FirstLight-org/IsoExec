@@ -12,6 +12,7 @@ from isoexec.ops import schedule_policy
 from isoexec.ops.attention.mla_sm100 import spec
 from isoexec.ops.attention.mla_sm100._extension import extension, profile_digest
 from isoexec.ops.attention.mla_sm100.spec import PAGE
+from isoexec.ops.attention.target_batch import DEVICE_SMS  # SMs of the device generation (B200); hardware
 
 __all__ = [
     "MlaSm100Plan", "mla_sm100_fwd", "mla_sm100_plan", "mla_sm100_fwd_selfcheck",
@@ -62,23 +63,20 @@ EXEC_OVERRIDE_VARIANTS = [
 MAX_TREE_LEAVES = 1024
 EMPTY_LSE = float(torch.tensor(-1e30, dtype=torch.float32) / torch.tensor(1.4426950408889634, dtype=torch.float32))
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.4, rule 3; measured) -------
+# --- the hardware specifications of the softmax reducer (rule 3 of the schedule policy; measured) ------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
-# of the declarations in spec.py; no table. This reducer has no cap.
+# of the declarations in spec.py; no table. This reducer has no max_segments.
 
-#: min_segment, the shortest segment worth a fresh start, in keys. Measured:
-#: policy_validation/mla_sm100/pv_sweep_b.log (64 slower than 256 in every cell; 128 equal only at
-#: batch 1 / 8k), pv_sweep.log.
+#: min_segment, the shortest segment worth a fresh start, in keys. Measured on B200: the shortest segment
+#: for which a partial result of its own pays off (64 is slower than 256 in every measured cell; 128 is
+#: equal only at batch 1 and 8192 keys).
 SOFTMAX_SHORTEST_SEGMENT = 256
-
-#: SMs of the device generation this package compiles for (B200). Hardware.
-DEVICE_SMS = 148
 
 
 def occupancy(model_heads: int, batch: int) -> int:
     """SMs that one segment of every output of a single-position call occupies: each request has its own
     ``ceil(heads / 64)`` row blocks (requests never share one, `_exact_sizes`), one CTA per block
-    (policy_validation/mla_sm100/pv_mech.log: items = batch x segments at 5, 10 and 20 heads).
+    (measured: items = batch x segments at 5, 10 and 20 heads).
     ``model_heads`` is the MODEL's head count, never a rank's."""
     if batch < 1 or model_heads < 1:
         raise ValueError(f"occupancy needs batch >= 1 and heads >= 1 (got {batch}, {model_heads})")
@@ -91,7 +89,7 @@ DECLARED = "declared"
 
 def schedule_for(max_context: int, *, target_batch: int | None | str = DECLARED,
                  model_heads: int | None = None) -> schedule_policy.Segments:
-    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, n // L))`` segments of
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, n // min_segment))`` segments of
     ``S = 64 * ceil(n / (64 * G))`` keys, adjacent tree, with ``n = max_context``.
 
     ``target_batch`` is optional. ``None`` (no target batch) gives ``p = workers(DEVICE_SMS) = 1``: one segment
@@ -345,8 +343,9 @@ def mla_sm100_plan(cu_seqlens_q, seqused_k, seg_tokens, h_q, max_seqlen_q, capac
         workers = int(cap.get("workers", workers))
 
     if max_n > MAX_TREE_LEAVES and combine > 0:
-        raise ValueError(f"{max_n} segments per row exceed the combine kernel's {MAX_TREE_LEAVES}; "
-                         f"raise seg_tokens")
+        raise ValueError(f"{max_n} segments per row exceed the combine kernel's {MAX_TREE_LEAVES}; the span is the "
+                         f"schedule policy's (mla_sm100.segment_span()): shorten the context, or leave "
+                         f"ISOEXEC_TARGET_BATCH unset (or declare a larger one) for a longer span")
 
     plan = MlaSm100Plan(
         items=torch.zeros(max(items, 1), 8, dtype=torch.int32, device=dev),

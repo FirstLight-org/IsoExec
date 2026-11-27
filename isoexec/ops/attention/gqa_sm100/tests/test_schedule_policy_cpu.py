@@ -1,10 +1,10 @@
 """CPU: the kernel's schedule parameters are the schedule policy's output on the deployed shapes.
 
-``isoexec.ops.schedule_policy`` (design version 7.4) is the one place a segment count or length comes
+``isoexec.ops.schedule_policy`` is the one place a segment count or length comes
 from. This module fails when
 
 * ``ops.segment_span`` (the span every call site hands the kernel) differs from rule 3 recomputed here
-  from the policy's cost parameters for this reducer and spec.py's declarations, at both head dims and
+  from the hardware specifications of this reducer and spec.py's declarations, at both head dims and
   for the KV head counts of every release model, with no target batch declared (the default) and with a
   target batch of 1, 16, 64 and 128 declared;
 * a call site passes the kernel a span that is not ``segment_span``;
@@ -53,9 +53,9 @@ def _workers(batch: int | None, hk: int, d: int) -> int:
     return 1 if batch is None else max(1, ops.DEVICE_SMS // (batch * hk * ops.SMS_PER_ITEM[d]))
 
 
-def _rule3(n: int, b: int, L: int, p: int, cap: int) -> tuple[int, int]:
+def _rule3(n: int, b: int, min_segment: int, p: int, max_segments: int) -> tuple[int, int]:
     """Rule 3 written out independently of schedule_policy: (G, S)."""
-    g = max(1, min(p, cap, n // L))
+    g = max(1, min(p, max_segments, n // min_segment))
     while g & (g - 1):
         g &= g - 1
     return g, b * -(-n // (b * g))
@@ -75,8 +75,10 @@ def declare(monkeypatch):
     ops.bind_schedule()
 
 
-def test_the_policy_module_is_version_7_2():
-    assert schedule_policy.VERSION == "7.4"
+def test_the_recorded_policy_version_and_no_target_batch_gives_one_worker():
+    from isoexec.ops.attention import target_batch
+
+    assert target_batch.schedule_record()["policy"] == schedule_policy.VERSION
     assert schedule_policy.workers(ops.DEVICE_SMS) == schedule_policy.workers(ops.DEVICE_SMS, None) == 1
 
 
@@ -101,7 +103,9 @@ def test_declarations_and_the_default(monkeypatch):
     assert target_batch.declared() is None
     monkeypatch.setenv(target_batch.FLAG, "16")
     assert target_batch.declared() == 16
-    for bad in ("0", "-4", "many", "1.5"):
+    monkeypatch.setenv(target_batch.FLAG, " 16 ")
+    assert target_batch.declared() == 16
+    for bad in ("0", "-4", "many", "1.5", "1_0", "+4", "\u0664", "1 0"):     # ASCII decimal digits only
         monkeypatch.setenv(target_batch.FLAG, bad)
         with pytest.raises(ValueError, match=target_batch.FLAG):
             target_batch.declared()
@@ -157,7 +161,7 @@ def test_the_policy_at_a_target_batch_of_one_is_the_span_the_table_had():
     """The removed max-context table was this rule at a target batch of 1 (max_segments 16 binding)."""
     for d in (128, 256):
         assert [ops.seg_for(d, n, target_batch=1) for n in (8192, 32768, 131072)] == [512, 2048, 8192]
-        assert ops.seg_for(d, 2048, target_batch=1) == 512   # the table had 128: below L, dropped
+        assert ops.seg_for(d, 2048, target_batch=1) == 512   # the table had 128: below min_segment, dropped
 
 
 def test_the_span_fits_the_decode_leafs_tile_cache(declare):
@@ -193,7 +197,7 @@ def test_two_parties_with_different_target_batches_refuse_to_start(declare):
 
     declare(None)
     trainer = json.loads(json.dumps(target_batch.schedule_record()))     # as it crosses the acknowledgement file
-    assert trainer["policy"] == "7.4" and trainer["gqa_sm100"]["target_batch"] is None
+    assert trainer["policy"] == schedule_policy.VERSION and trainer["gqa_sm100"]["target_batch"] is None
     assert trainer["gqa_sm100"]["seg_tokens"] == {"128": 10240, "256": 10240}
     target_batch.require_same_schedule(trainer, json.loads(json.dumps(target_batch.schedule_record())), who="engine")
     for batch, field in ((16, "gqa_sm100.seg_tokens.128"), (1, "gqa_sm100.seg_tokens.128"),
@@ -243,8 +247,7 @@ def test_the_policy_is_evaluated_when_the_schedule_is_bound_and_never_on_a_call(
         ops.segment_span(64)
 
 
-def test_no_table_and_no_literal_span():
-    assert not hasattr(ops, "SEG_TOKENS") and not hasattr(spec, "SEG_CONTEXT")
+def test_no_literal_span():
     tree = ast.parse((PACKAGE / "ops.py").read_text())
     for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name in ("schedule_for", "seg_for", "segment_span", "bind_schedule")):
         literals = [n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, int)

@@ -15,14 +15,12 @@ from isoexec.ops import schedule_policy
 # a weight, on N, on M or on the machine.
 
 #: The reducer's exact block: one ``tcgen05.mma`` consumes 16 K terms, ascending k, fp32 accumulator, fresh
-#: start per segment. Hardware fact (policy_validation/gemm_sm100/SCHEDULE_INVENTORY.md items 1-2); the
-#: constant is the kernel's ``mma16`` step of ONEPAGE.md ("Tensor-core sums (GEMM, ...) publish nothing").
+#: start per segment. A hardware fact: the constant is the kernel's ``mma16`` step.
 REDUCER_BLOCK = 16
 
 #: The reducer's published shortest segment min_segment. None: a tensor-core sum publishes no constant, so rule 3
-#: gives G = 1, one segment per shard (ONEPAGE.md, Inputs; measured cost of that choice against a split in
-#: policy_validation/gemm_sm100/bench/results/roundf_gpu_summary.txt). With None the rule reads no p, no
-#: occupancy, no cap, no smallest batch and no longest length.
+#: gives G = 1, one segment per shard. With None the rule reads no p, no occupancy, no max_segments, no smallest
+#: batch and no longest length.
 REDUCER_SHORTEST = None
 
 #: Streaming multiprocessors of the deployment target (B200). A **deployment-fixed** axis for the PLANNER

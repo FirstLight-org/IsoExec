@@ -1,4 +1,4 @@
-"""CPU: the sparse attention's schedule parameters are the schedule policy's output (design 7.4, rule 1).
+"""CPU: the sparse attention's schedule parameters are the schedule policy's output (rule 1).
 
 The tile reducer has no merge, so the policy returns segments of the reducer's block folded by ONE continued chain
 (``schedule_policy.no_merge``); nothing else is a schedule decision of this operator, and the policy is not called on

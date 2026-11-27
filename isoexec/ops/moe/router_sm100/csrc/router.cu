@@ -828,8 +828,7 @@ Tile pick_tile(int T, int E, int H, int S) {
                               {4096, {128, 128, 2, 2, 1, 0}}, {8192, {128, 128, 1, 1, 1, 0}},
                               {1 << 30, {128, 128, 1, 1, 1, 1}}};
   // e384v4 (DeepSeek V4-class, E in (288, 384]): re-measured at ONE segment (CS = 1) on B200, H 5120, top-6 + shared
-  // (policy_validation/port/dense/results/sweep_router_tile_fl.json: every (N, KA, persistent) point bit-equal to
-  // the previous rung, then timed). With one segment a cluster is CE = 3 CTAs, so the small token tile carries
+  // (every (N, KA, persistent) point checked bit-equal to the previous rung, then timed). With one segment a cluster is CE = 3 CTAs, so the small token tile carries
   // the parallelism the segment CTAs used to: N = 16 up to 1024 rows, 64 up to 2048, 128 above.
   static const Rung e384v4[] = {{1024, {16, 128, 1, 4, 1, 0}},  {2048, {64, 128, 1, 2, 1, 0}},
                                 {4096, {128, 128, 1, 1, 1, 0}}, {1 << 30, {128, 128, 1, 1, 1, 1}}};

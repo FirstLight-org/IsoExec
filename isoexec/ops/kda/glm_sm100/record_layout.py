@@ -65,7 +65,7 @@ LEGACY_REC_BYTES = 220_944
 
 
 # ----------------------------------------------------------------------------------------------- state planes
-# The codec is shared with the other CPR family (isoexec/ops/cpr_record/planes.py).
+# The codec (the host-side reference of csrc/cpr_planes.cuh) lives in isoexec/ops/cpr_record/planes.py.
 from isoexec.ops.cpr_record.planes import (  # noqa: E402,F401
     carry_from_words, carry_words, join_state, pack_planes, split_state, unpack_planes,
 )

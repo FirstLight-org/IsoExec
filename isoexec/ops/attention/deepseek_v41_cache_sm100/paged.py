@@ -184,7 +184,7 @@ def floor_window_lists(lists, pos, floor):
     return torch.where(j < n.unsqueeze(1), kept, -1).to(torch.int32).contiguous()
 
 
-#: Schedule port (design 7.1, rule 1: blocks of 64 list positions, one continued chain; a block that holds only empty
+#: The schedule (rule 1 of the schedule policy: blocks of 64 list positions, one continued chain; a block that holds only empty
 #: positions is skipped by a step program). The selected part of a row's list holds its ``min(k, ke)`` selected keys
 #: first (``ke``: the row's visible compressed keys) and empty positions after; the leaf is told that length and does
 #: not run the blocks past it. Same bits as running every block (sparse_sm100/tests/test_domains_gpu.py; the paged ==
@@ -192,7 +192,7 @@ def floor_window_lists(lists, pos, floor):
 #: False runs every block.
 TRIM_SELECTED = True
 #: Launches below this many rows keep running every block (execution only: the bits are the same). B200, engine leaf
-#: call, FP8 window + compressed records (policy_validation/port/attn/sparse/bench): from 64 rows (the persistent plan)
+#: call, FP8 window + compressed records, measured: from 64 rows (the persistent plan)
 #: the length saves 4-7 us a launch where the list has empty blocks (0.66-0.79 of the time; 0.48-0.56 on 1056 trainer-
 #: shaped rows) and costs nothing where it has none; below, on the split plan, a launch gains nothing measurable and
 #: the step would pay the 6 us length launch.

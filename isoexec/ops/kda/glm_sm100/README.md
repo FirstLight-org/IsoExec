@@ -1,6 +1,6 @@
 # GLM Kimi Delta Attention on SM100 (`kda.glm`, impl `sm100_kda_v1`)
 
-## Schedule (design version 7.3)
+## Schedule
 
 The recurrence reducer has no merge, so rule 1 of `isoexec/ops/schedule_policy.py` applies: segments of the exact
 block, anchored at absolute position 0 of the sequence, one continued chain. `isoexec/ops/kda/schedule.py` holds the
@@ -62,7 +62,7 @@ output = sum(state * Q[..., :, None], key_axis)
 The state stays FP32; outputs cast to the query dtype; decay is per key channel. Oracles: the eager
 equation `isoexec.nn.GLMKimiDeltaRule(backend="reference")` (`reference.recurrence` is the same equation in
 float64, differentiable) and the pinned upstream chunk oracle
-`isoexec/models/glm5_3_flash/tests/upstream_kda.py`. The temporary `backend="upstream"` FLA adapter is
+`tests/upstream_kda.py` (vendored from HuggingFace Transformers, Apache-2.0; see NOTICE). The temporary `backend="upstream"` FLA adapter is
 untouched. Geometry: GLM-5.3-Flash `linear_num_heads = 64`, `linear_head_dim = 128` (published_config);
 the kernels take any head count with K = V = 128, bf16 q/k/v, fp32 or bf16 log decay and beta.
 
@@ -153,7 +153,7 @@ What remains is recomputable only at a price:
 - Any of the open rows from the raw inputs: a 64-row intra recompute per token.
 - SH from the planes would read the state at twice the bytes per step, at fewer CTAs per SM (+15-25% estimated).
 
-The sizes that matter to vLLM are in `kda-capacity/DESIGN.md` (the pool block, not the record, is the unit).
+For vLLM the unit of capacity is the pool block, not the record.
 
 ## Relations (what is bitwise, what is tolerance)
 
@@ -163,7 +163,7 @@ The sizes that matter to vLLM are in `kda-capacity/DESIGN.md` (the pool block, n
 | records left by different splits continue identically (decode + prefill, outputs and state) | **bitwise** | `test_records_left_by_different_splits_continue_identically` |
 | initial state at position 0, slot moves, zero-token moves | **bitwise** | `test_initial_state_and_slot_moves` |
 | run-to-run (engine path), NULL decode lanes touch nothing | **bitwise** | `test_null_decode_lanes_and_run_to_run` |
-| run-to-run: forward, functional decode, backward, layer fwd+bwd | **bitwise** | `test_forward_and_backward_are_run_to_run_bitwise`, `test_glm_kda_attention_sm100_is_run_to_run_bitwise` |
+| run-to-run: forward, functional decode, backward | **bitwise** | `test_forward_and_backward_are_run_to_run_bitwise` |
 | batch invariance (composition, order, size 1..37 seqs, H 4 / 64) | **bitwise** | `test_a_sequence_is_bitwise_independent_of_its_batch` |
 | functional `ops.decode` (dense state) == one-token `forward` call | **bitwise** | `test_decode_equals_one_token_forward_bitwise` |
 | functional continuation with a dense state split at multiples of 64 == whole | **bitwise** | `test_chunk_aligned_continuation_equals_whole_bitwise` |
@@ -178,10 +178,10 @@ rollout.
 * SASS scan (`tests/test_sass_cpu.py`): **zero ATOM/ATOMS/ATOMG/RED instructions in every kernel of the extension** (24 SASS functions, including both `REC` instantiations of the chunk kernels, the engine decode, the record materializer and the o_proj leaf tree)
   (forward, decode, backward, layer stages). Every output element has one writer; weight-gradient
   reductions (dt_bias, A_log, norm weight) use fixed 256-row segments folded in ascending order.
-* Battery: `python tools/gpu_lease.py -- .venv-sm100/bin/python -m pytest isoexec/ops/kda/glm_sm100/tests isoexec/nn/tests/test_glm_kda_sm100_layer_gpu.py isoexec/nn/tests/test_glm_kda_sm100_backend_cpu.py -q`
-  → **84 passed, 1 skipped** (CPU contract + SASS + GPU accuracy, relations, engine records, engine / TP
-  layer, public layer). The skip is the two-process NCCL test, which needs two GPUs:
-  `tools/gpu_lease.py --count 2 -- ... -k two_process` → passed.
+* Battery: `python -m pytest isoexec/ops/kda/glm_sm100/tests isoexec/ops/kda/tests -q` on an SM100 device
+  (CPU contract, SASS, GPU accuracy, relations, engine records). On the tree the package was written on,
+  with its engine / TP layer and public layer tests, the battery gave **84 passed, 1 skipped**; the skip
+  was the two-process NCCL test, which needs two GPUs and passed on two.
 
 ## Accuracy vs float64 oracles (measured; tests gate fwd 1e-2/2.5e-2, bwd 2e-2/5e-2 rel-L2/max-rel)
 
@@ -195,16 +195,15 @@ rollout.
 | full GLM layer (bf16) vs float64 reference module: y, dx, all parameter grads | 5.8e-3, 7.1e-3, ≤ 1.6e-2 | — |
 | pinned upstream oracle (`upstream_kda.py`) | within the forward gate | |
 
-## Performance vs FLA 0.4.2 (temporary baseline) — `results_sm100_r3.json`
+## Performance vs FLA 0.4.2 (temporary baseline)
 
-One lease, GPU `GPU-ef5a8300-fa8a-64f7-b6a5-ca2d0dbb6128` (B200), provider order alternating per row,
+One B200, provider order alternating per row,
 CUPTI per-iteration kernel-time sum, median of 10 (20 for engine decode; spread < 1%, engine decode
 B=256 3%: its positions advance through block entries and closes). H = 64, K = V = 128,
 bf16 q/k/v, fp32 log decay (GLM bounded range), bf16 beta, fp32 h0, final state returned. FLA:
 `chunk_kda` (prefill, train via autograd incl. state grads) and `fused_recurrent_kda` (decode; FLA
 `chunk_kda` decode is 1724/3379 µs at B 256/512 and fails at B 1024). Engine decode runs records at
 positions 640..703, so every open-chunk row and the chunk closes are in the median.
-`python -m isoexec.ops.kda.glm_sm100.benchmark` reproduces it.
 
 | Row | ours µs | FLA µs | ours/FLA |
 |---|---|---|---|
@@ -214,7 +213,7 @@ positions 640..703, so every open-chunk row and the chunk closes are in the medi
 | decode (functional dense one-token call) B=256 / 512 / 1024 | 387.1 / 758.7 / 1491.1 | 401.9 / 894.2 / 1800.9 | 0.96 / 0.85 / 0.83 |
 | fwd+bwd T=4096 / 8192 / 16384 | 3148.9 / 6192.1 / 12272.7 | 3619.4 / 7077.7 / 14051.6 | 0.87 / 0.87 / 0.87 |
 
-Round history: round 2 (`results_sm100_r2.json`) had the exact engine decode at 1.79 / 1.60 / 1.58x and
+Round history: round 2 had the exact engine decode at 1.79 / 1.60 / 1.58x and
 the record-aware chunk kernels costing 5-8% on the trainer forward; round 3 recovers the latter with the
 `REC` instantiations (trainer forward back to round 1's 0.79-0.82) and brings the engine decode under FLA.
 Engine decode split at B=256 (kernel µs): row kernel ~185, state pass ~192. Both are latency bound, not
@@ -241,8 +240,8 @@ Q/K/V causal width-4 SiLU convolutions on `gdn.conv_sm100` (its equation is GLM'
 current, SiLU, one bf16 rounding; bf16 activations with fp32 weights are supported in both directions),
 the bounded forget gate `lb·sigmoid(e^{A_log}(f + dt_bias))` (fp32), sigmoid beta (bf16 boundary), the KDA
 core, and the sigmoid-gated RMS output (`csrc/layer.cu`, fwd + bwd, deterministic segmented weight
-gradients). Edits outside this package: `isoexec/nn/glm.py` (accept `"sm100"`, two dispatch lines) and
-`isoexec/ops/kda/__init__.py`.
+gradients). Outside this package only `isoexec/ops/kda/__init__.py` names it; the GLM model module that
+accepts `backend="sm100"` is not in this tree.
 
 ## Tensor parallelism and the engine layer (`engine.py`)
 
@@ -271,10 +270,9 @@ views/copies for gradient and no-grad scoring. After serving weight sync, call
 before graph replay; refresh preserves captured tensor addresses. Adapter-specific attention
 shards must be refreshed at that same boundary.
 
-New validation gates: `models/glm5_3_flash/tests/test_kda_engine_training_gpu.py` (projection float64 oracles,
-frozen-forward bitwise equality, repeated gradients, post-update weights) and
-`models/glm5_3_flash/tests/test_kda_engine_training_oracle_gpu.py` (complete layer float64 gradient oracle using the
-existing tolerances). GPU results are pending; the presence of these bindings is not a
+Its validation gates (projection float64 oracles, frozen-forward bitwise equality, repeated gradients,
+post-update weights, and a complete layer float64 gradient oracle using the existing tolerances) belong to
+the GLM model, which is not in this tree. GPU results are pending; the presence of these bindings is not a
 validated engine/trainer identity claim. The existing KDA, convolution and general GEMM SASS
 gates apply to the exact binaries used by this backward. Full-model post-optimizer identity
 and engine program/tag transport remain separate required gates.
@@ -318,17 +316,17 @@ the output-norm weight. Row-parallel: o_proj (columns of its weight).
   fixed launch shapes; padded lanes are named by `null_block_id` (vLLM's `NULL_BLOCK_ID`) or a negative
   slot, and touch no state. It is CUDA-graph capturable.
 
-**Relations (bitwise, `models/glm5_3_flash/tests/test_kda_engine_tp_gpu.py`):**
+**Relations (bitwise).** Measured by the engine-layer tests of the GLM model, which are not in this tree:
 
-| Relation | Gate |
-|---|---|
-| layer output at TP = 2 / 4 / 8 (single-process, rank-order tree) == TP = 1 | `test_layer_output_is_tp_degree_invariant_bitwise` |
-| each rank's records and conv windows == the TP = 1 pool's, restricted to its heads | `test_rank_state_is_the_tp1_state_of_its_heads_bitwise` |
-| continuous batching at TP = 1 and 2 == one whole-sequence layer call, every token. The schedule mixes prefill chunks with one-token lanes, pads decode calls with the null block, reuses slots after a request finishes, and preempts one request (recompute into another slot) | `test_continuous_batching_rollout_equals_whole_sequence_layer_bitwise` |
-| CUDA-graph captured decode steps (whole layer: GEMMs, conv update, gate, beta, decode kernels, norm, o_proj tree) == eager | `test_cuda_graph_decode_equals_eager_bitwise` |
-| padded decode lanes (null block, negative slot) touch no record or conv byte | `test_padded_decode_lanes_touch_nothing` |
-| records inside larger per-slot pages (engine strides) == dense pool | `test_engine_allocated_pages_with_a_slot_stride` |
-| **real two-process NCCL TP = 2** (`gpu_lease --count 2`), functional, prefill and decode == TP = 1 | `test_two_process_nccl_tp_equals_tp1_bitwise` |
+| Relation |
+|---|
+| layer output at TP = 2 / 4 / 8 (single-process, rank-order tree) == TP = 1 |
+| each rank's records and conv windows == the TP = 1 pool's, restricted to its heads |
+| continuous batching at TP = 1 and 2 == one whole-sequence layer call, every token. The schedule mixes prefill chunks with one-token lanes, pads decode calls with the null block, reuses slots after a request finishes, and preempts one request (recompute into another slot) |
+| CUDA-graph captured decode steps (whole layer: GEMMs, conv update, gate, beta, decode kernels, norm, o_proj tree) == eager |
+| padded decode lanes (null block, negative slot) touch no record or conv byte |
+| records inside larger per-slot pages (engine strides) == dense pool |
+| **real two-process NCCL TP = 2** (two GPUs), functional, prefill and decode == TP = 1 |
 
 Composition check: the engine layer at TP = 1 is within 1e-2 rel-L2 of the module's own `backend="sm100"`
 forward (cuBLAS projections, a different GEMM program).

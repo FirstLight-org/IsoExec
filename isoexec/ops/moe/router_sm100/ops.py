@@ -38,10 +38,9 @@ import torch
 from isoexec.ops import schedule_policy
 from isoexec.ops.moe.router_sm100._extension import extension
 
-#: The logits reducer: one ``tcgen05.mma`` consumes 16 hidden terms (hardware); it publishes no shortest segment
-#: (policy_validation/sparse_design/ONEPAGE.md, Inputs: "Tensor-core sums (GEMM, the MoE router, ...) publish
-#: nothing and are one segment per shard"; measured cost of one segment against four:
-#: policy_validation/moe_megamoe_sm100/ROUND_B.md, Round F, build/r1.log).
+#: The logits reducer: one ``tcgen05.mma`` consumes 16 hidden terms (hardware); like every tensor-core sum it
+#: publishes no shortest segment, so it is one segment per shard (one segment was measured on B200 against a split
+#: into four).
 LOGITS_REDUCER_BLOCK = 16
 LOGITS_REDUCER_SHORTEST = None
 #: Rule 2 for the renormaliser (``select.cuh`` ``selected_sum``): one segment per selected expert, chain from +0.
@@ -289,7 +288,7 @@ __all__ = ["GROUPED", "LOGITS_REDUCER_BLOCK", "LOGITS_REDUCER_SHORTEST", "RENORM
 #: the token-segment length of dW's fixed segment tree (moe_fp8_sm100/SPEC.md §8.3's SEG_T): a
 #: deployment-fixed constant published per (op, shape) -- here a function of E only, never of T.
 #: Measured (README "Backward"): 512 wins at E = 64 (shorter chains, more CTAs), 1024 at E >= 256.
-#: The backward runs only in the trainer and is not scheduled by the policy (design 7.4: the policy covers the
+#: The backward runs only in the trainer and is not scheduled by the policy (the policy covers the
 #: forward pass). dW's sum over the tokens that selected an expert keeps this kernel's own fixed order:
 #: segments of exactly ``seg_t_for(E)`` tokens counted from token 0, the last one short, merged by a tree.
 SEG_T = 1024

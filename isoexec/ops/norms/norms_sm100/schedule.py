@@ -1,8 +1,7 @@
-"""The numerical schedule of the norms_sm100 FORWARD sum of squares, stated through the policy (design 7.4).
+"""The numerical schedule of the norms_sm100 FORWARD sum of squares, stated through the policy.
 
-Nothing here is on a call path: the kernels (``csrc/``) are the tree's own and read nothing from this module.
-It states their schedule as data, and ``tests/test_schedule_policy_cpu.py`` fails if ``csrc/plan.h`` or
-``csrc/launch_fwd.cu`` stop agreeing with it.
+This module states the schedule and ``tests/test_schedule_policy_cpu.py`` checks the kernels (``csrc/plan.h``,
+``csrc/launch_fwd.cu``) against it; the kernels do not read it.
 
 The reduction: one row's ``sum_h x[h] * x[h]`` over the hidden axis (RMSNorm, and the fused add + RMSNorm on
 ``h = rn_bf16(x + r)``). The tree declares no shard degree for the hidden axis of a norm (``isoexec/nn/norm.py``

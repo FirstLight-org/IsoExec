@@ -4,8 +4,8 @@ autograd core the trainer binds.
 The forward's numerical program is stated in README.md. Two things in this module are part of the
 op's identity and nothing else is:
 
-* the segment span -- ``isoexec.ops.schedule_policy`` (design version 7.4, rule 3) applied to the
-  policy's cost parameters for this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
+* the segment span -- ``isoexec.ops.schedule_policy`` (rule 3) applied to the
+  hardware specifications of this reducer (``SOFTMAX_SHORTEST_SEGMENT``, ``SOFTMAX_SEGMENT_CAP``,
   :func:`occupancy`) and the declarations in spec.py (:func:`segment_span`). A change to a constant or a declaration is a
   recipe version bump.
 * ``KEY_TILE`` -- the KV tile width, fixed at 128.
@@ -38,6 +38,7 @@ import torch
 
 from isoexec.ops import schedule_policy
 from isoexec.ops.attention.gqa_sm100 import spec
+from isoexec.ops.attention.target_batch import DEVICE_SMS  # SMs of the device generation (B200); hardware
 
 #: The KV tile width. Numerical: every tile boundary inside a segment is a max/rescale point.
 KEY_TILE = 128
@@ -61,25 +62,20 @@ LEAF_AUTO, LEAF_GENERAL, LEAF_DECODE = 0, 1, 2
 #: to ``DECODE_ROWS / ratio`` tokens per request.
 DECODE_ROWS = 16
 
-# --- the policy's cost parameters for the softmax reducer (design version 7.4, rule 3; measured) -------
+# --- the hardware specifications of the softmax reducer (rule 3 of the schedule policy; measured) ------
 # One place for this operator. Every segment count and length is ``schedule_policy.reduce`` of these and
 # of the declarations in spec.py; no table.
 
-#: min_segment, the shortest segment worth a fresh start, in keys. Measured:
-#: policy_validation/gqa_sm100/sweep_roundd.json (256 equal, 128 slower by 1.2-2.3x at batch 1-2).
+#: min_segment, the shortest segment worth a fresh start, in keys. Measured on B200: the shortest segment
+#: for which a partial result of its own pays off (256 runs equal, 128 slower by 1.2-2.3x at batch 1-2).
 SOFTMAX_SHORTEST_SEGMENT = 512
 
-#: cap, the most segments of one output in flight. Tuned (``csrc/params.h FOLD_MAX_RUN``; binds only at
-#: head dim 128 with one KV head at batch 1-4; the data allow 16-32):
-#: policy_validation/gqa_sm100/sweep_roundd.json, ROUND_B.md rounds E and F.
+#: max_segments, the most segments of one output in flight. Tuned on B200 (``csrc/params.h FOLD_MAX_RUN``;
+#: binds only at head dim 128 with one KV head at batch 1-4, where 16 to 32 segments run equally fast).
 SOFTMAX_SEGMENT_CAP = 16
 
-#: SMs one work item occupies: a CTA pair at head dim 256, one CTA at 128 (the kernel's worker footprint,
-#: policy_validation/gqa_sm100/ROUND_B.md round E, row ``occ``).
+#: SMs one work item occupies: a CTA pair at head dim 256, one CTA at 128 (the kernel's worker footprint).
 SMS_PER_ITEM = {128: 1, 256: 2}
-
-#: SMs of the device generation this package compiles for (B200). Hardware.
-DEVICE_SMS = 148
 
 
 def occupancy(head_dim: int, kv_heads: int, batch: int) -> int:
@@ -98,8 +94,8 @@ DECLARED = "declared"
 
 def schedule_for(head_dim: int, max_context: int, *, target_batch: int | None | str = DECLARED,
                  kv_heads: int | None = None) -> schedule_policy.Segments:
-    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, cap, n // L))`` segments of
-    ``S = 128 * ceil(n / (128 * G))`` keys, adjacent tree, with ``n = max_context``.
+    """The policy's schedule of the key axis (rule 3): ``G = pow2floor(min(p, max_segments, n // min_segment))``
+    segments of ``S = 128 * ceil(n / (128 * G))`` keys, adjacent tree, with ``n = max_context``.
 
     ``target_batch`` is optional. ``None`` (no target batch) gives ``p = workers(DEVICE_SMS) = 1``: one segment
     of ``max_context`` keys. A batch gives ``p = DEVICE_SMS // occupancy`` at that batch. Left out, it is the

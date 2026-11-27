@@ -21,14 +21,13 @@ _SLOTS = 148
 SEGMENT_BLOCK = 64
 assert SEGMENT_BLOCK % REDUCER_BLOCK == 0 and REDUCER_SHORTEST is None
 #: Published min_segment and max_segments of the MN-major step program (an operand walked across its rows:
-#: the trainer's dgrad / wgrad). Source: this kernel's own rule ("segments of at least 8192 terms, at most 16"),
-#: and policy_validation/port/dense/results/bench_general_*.json: with ONE segment instead, reductions of
-#: 16384-131072 terms measured 1.05-1.13 of the time at the wide shapes and 2-16 times the error against
-#: float64. Occupancy: one worker per segment of one output (the split multiplies the launch's work items), so
-#: p = SMs, and the cap binds first. With these constants rule 3 returns exactly the segment count and the
+#: the trainer's dgrad / wgrad): segments of at least 8192 terms, at most 16 of them. Measured on B200: with ONE
+#: segment instead, reductions of 16384-131072 terms took 1.05-1.13 of the time at the wide shapes and had 2-16
+#: times the error against float64. Occupancy: one worker per segment of one output (the split multiplies the
+#: launch's work items), so p = SMs, and max_segments binds first. With these constants rule 3 returns exactly the segment count and the
 #: ceil-sized segments this kernel has always run; nothing here is keyed on a weight or a table.
 SEGMENT_MIN_K = 8192        # min_segment
-MAX_SPLIT = 16              # cap
+MAX_SPLIT = 16              # max_segments
 SEGMENT_OCCUPANCY = 1
 
 __all__ = ["RECIPE_CHAIN", "RECIPE_KSEGTREE", "bmm", "mm", "plan", "recipe_for", "split_for", "supported"]
@@ -86,7 +85,8 @@ def supported(a: torch.Tensor, b: torch.Tensor) -> bool:
 def schedule(K: int, a_mn: bool, b_mn: bool) -> schedule_policy.Segments:
     """The policy's schedule of the K reduction. K-major x K-major operands run the chain step program, whose
     reducer publishes nothing: one segment. An MN-major operand runs the step program that publishes
-    ``SEGMENT_MIN_K`` / ``MAX_SPLIT``: G = pow2floor(min(p, cap, K // L)), S = 64 ceil(K / (64 G))."""
+    ``SEGMENT_MIN_K`` / ``MAX_SPLIT``: G = pow2floor(min(p, max_segments, K // min_segment)),
+    S = 64 ceil(K / (64 G))."""
     if not (a_mn or b_mn):
         return schedule_policy.reduce(K, b=SEGMENT_BLOCK, min_segment=REDUCER_SHORTEST)
     return schedule_policy.reduce(K, b=SEGMENT_BLOCK, min_segment=SEGMENT_MIN_K,

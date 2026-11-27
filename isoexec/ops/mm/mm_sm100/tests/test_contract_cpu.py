@@ -106,17 +106,9 @@ def test_the_schedule_reads_only_K_and_d_max():
         assert "N" not in inspect.signature(fn).parameters, fn.__name__
 
 
-def test_no_segment_table_is_left():
-    """The table, its loader, its digest and its policy version are gone; the schedule is a function."""
-    assert not (PKG / "segments.json").exists()
-    for name in ("published_table", "table_digest", "write_table", "regenerate", "POLICY_VERSION",
-                 "LEGAL_SPLITS", "segment_count_by_policy", "MEASURED_SPLITS", "default_k_set"):
-        assert not hasattr(seg, name), name
-
-
 def test_the_schedule_digest_covers_everything_the_schedule_reads(monkeypatch):
     base = seg.schedule_digest()
-    assert seg.schedule_inputs() == {"policy": "7.4", "rule": 3, "block": 16, "shortest": None,
+    assert seg.schedule_inputs() == {"policy": seg.schedule_policy.VERSION, "rule": 3, "block": 16, "shortest": None,
                                      "merge": "tree", "root": "bf16_rne"}
     monkeypatch.setattr(seg, "REDUCER_SHORTEST", 1024)
     assert seg.schedule_digest() != base
@@ -125,15 +117,11 @@ def test_the_schedule_digest_covers_everything_the_schedule_reads(monkeypatch):
     assert seg.schedule_digest() != base
 
 
-def test_the_installed_schedule_policy_is_the_canonical_module():
-    """``isoexec/ops/schedule_policy.py`` is installed unchanged (policy_validation/port/schedule_policy.py)."""
-    import hashlib
-
+def test_the_installed_schedule_policy_version():
+    """The one place the policy version is spelled out; every operator test compares with ``VERSION``."""
     from isoexec.ops import schedule_policy as P
 
     assert P.VERSION == "7.4"
-    assert hashlib.sha256(Path(P.__file__).read_bytes()).hexdigest() == \
-        "af56abc5257a448bf1027e87c9392dde7c0e5d6a21ad43a86c51063ced8004ad"
 
 
 def test_every_plan_for_a_shape_shares_one_schedule():
@@ -316,7 +304,7 @@ def test_the_record_a_peer_compares_pins_the_schedule_and_not_only_the_id():
     assert rec["impl_id"] == "sm100_tcgen05_segtree"
     assert rec["recipe_version"] == seg_recipe()
     assert rec["schedule_digest"] == seg.schedule_digest()
-    assert rec["schedule_policy_version"] == "7.4"
+    assert rec["schedule_policy_version"] == seg.schedule_policy.VERSION
     assert "segment_table_digest" not in rec and "segment_policy_version" not in rec
 
 

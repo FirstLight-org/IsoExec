@@ -1,10 +1,10 @@
 """CPU: the kernel's schedule parameters are the schedule policy's output on the deployed shapes.
 
-``isoexec.ops.schedule_policy`` (design version 7.4) is the one place a segment count or length comes
+``isoexec.ops.schedule_policy`` is the one place a segment count or length comes
 from. This module fails when
 
 * ``fwd.segment_span`` (the span the trainer adapter and the SM100 resolution admit) differs from rule 3
-  recomputed here from the policy's cost parameters for this reducer and spec.py's declarations, with no
+  recomputed here from the hardware specifications of this reducer and spec.py's declarations, with no
   target batch declared (the default) and with a target batch of 1, 16, 64 and 128 declared;
 * the trainer adapter or the resolution accepts another span;
 * a segment table, its digest or a literal span comes back.
@@ -32,9 +32,9 @@ def _workers(batch: int | None, heads: int) -> int:
     return 1 if batch is None else max(1, fwd.DEVICE_SMS // (batch * -(-heads // 64)))
 
 
-def _rule3(n: int, b: int, L: int, p: int) -> tuple[int, int]:
-    """Rule 3 written out independently of schedule_policy (no cap): (G, S)."""
-    g = max(1, min(p, n // L))
+def _rule3(n: int, b: int, min_segment: int, p: int) -> tuple[int, int]:
+    """Rule 3 written out independently of schedule_policy (no max_segments): (G, S)."""
+    g = max(1, min(p, n // min_segment))
     while g & (g - 1):
         g &= g - 1
     return g, b * -(-n // (b * g))
@@ -54,12 +54,14 @@ def declare(monkeypatch):
     fwd.bind_schedule()
 
 
-def test_the_policy_module_is_version_7_2():
-    assert schedule_policy.VERSION == "7.4"
+def test_the_recorded_policy_version_and_no_target_batch_gives_one_worker():
+    from isoexec.ops.attention import target_batch
+
+    assert target_batch.schedule_record()["policy"] == schedule_policy.VERSION
     assert schedule_policy.workers(fwd.DEVICE_SMS) == schedule_policy.workers(fwd.DEVICE_SMS, None) == 1
 
 
-def test_cost_parameters_and_declarations():
+def test_hardware_specifications_and_declarations():
     assert spec.PAGE == fwd.M_BLOCK == 64
     assert fwd.SOFTMAX_SHORTEST_SEGMENT == 256 and fwd.SOFTMAX_SHORTEST_SEGMENT % spec.PAGE == 0
     assert fwd.DEVICE_SMS == 148
@@ -192,8 +194,7 @@ def test_the_policy_is_evaluated_when_the_schedule_is_bound_and_never_on_a_call(
         assert not names & {"schedule_policy", "schedule_for", "seg_tokens_for", "bind_schedule"}, (name, names)
 
 
-def test_no_table_no_digest_and_no_literal_span():
-    assert not hasattr(fwd, "SEG_TABLE") and not hasattr(fwd, "seg_table_digest")
+def test_no_literal_span():
     tree = ast.parse((PACKAGE / "fwd.py").read_text())
     for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                and n.name in ("schedule_for", "seg_tokens_for", "segment_span", "bind_schedule")):

@@ -1,8 +1,7 @@
-"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy (design 7.4).
+"""The numerical schedule of the logprobs_sm100 log-sum-exp, stated through the policy.
 
-Nothing here is on a call path: the kernels (``csrc/logprobs.cu``, ``csrc/logprobs_v2.cu``) are the tree's own
-and read nothing from this module. It states their schedule as data, and ``tests/test_schedule_policy_cpu.py``
-fails if the kernels' constants or the recipe table stop agreeing with it.
+This module states the schedule and ``tests/test_schedule_policy_cpu.py`` checks the kernels (``csrc/logprobs.cu``,
+``csrc/logprobs_v2.cu``, the recipe table) against it; the kernels do not read it.
 
 The reduction: one row's ``log sum_v exp(x[v])`` over the vocabulary axis. The vocabulary is the axis TP shards:
 a rank of a world of ``w`` holds ``V / w`` contiguous columns, and ``w`` must divide 8 (``ops.py::supports``),
