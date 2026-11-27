@@ -504,10 +504,7 @@ constexpr int S_DT = S_SH + VS * D * 2;          // Tile<64 i, 32 v> d slice (ro
 constexpr int S_VT = S_DT + 64 * VS * 2;         // Tile<64 i, 32 v> v slice (row j already appended)
 constexpr int S_W = S_VT + 64 * VS * 2, S_QG = S_W + 256, S_U = S_QG + 256, S_MQ = S_U + 128, S_POS = S_MQ + 128;
 constexpr int STAGE = S_POS + 128;
-#ifndef KDA_NSTAGE
-#define KDA_NSTAGE 2
-#endif
-constexpr int NSTAGE = KDA_NSTAGE, MINB = NSTAGE == 2 ? 6 : (NSTAGE == 3 ? 4 : 3);
+constexpr int NSTAGE = 2, MINB = 6;               // the id pipeline of decode_state_rec_kernel is two-stage
 constexpr int OFF_ZERO = NSTAGE * STAGE;
 constexpr int OFF_D = OFF_ZERO + 256;            // d_j of the slice (bf16 [32]) ; u_j of the slice at +128
 constexpr int SMEM = OFF_D + 256;

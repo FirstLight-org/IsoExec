@@ -60,8 +60,6 @@ def layout(ki_stored: bool | None = None) -> dict[str, int]:
 
 REC = layout()
 REC_BYTES = REC["BYTES"]
-#: The record this tree replaced (S fp32 + S^ bf16 + the full open-chunk rows): kept for the capacity arithmetic.
-LEGACY_REC_BYTES = 220_944
 
 
 # ----------------------------------------------------------------------------------------------- state planes

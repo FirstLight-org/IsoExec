@@ -42,9 +42,14 @@ from isoexec.ops.kda.glm_sm100 import ops, record_layout
 from isoexec.ops.kda.glm_sm100._extension import extension
 from isoexec.ops.kda.glm_sm100.integration import forget_gate, gated_rms_norm, sigmoid_beta
 from isoexec.ops.kda.glm_sm100.spec import HEAD_DIM
+from isoexec.ops.mm.mm_sm100.segments import row_parallel_leaves
 
-TP_LEAVES = 8
 TP_DEGREES = (1, 2, 4, 8)
+#: Leaves of the row-parallel o_proj reduction: the GEMM's statement of it (``mm_sm100`` ``row_parallel_leaves``, rule 3
+#: of the schedule policy: d_max shards of G segments) at the largest TP degree. The tensor-core sum publishes no
+#: shortest segment, so G = 1 at every K; it is evaluated at the smallest o_proj K the engine takes (8 heads) and
+#: ``shard_layer`` re-derives it at the layer's own K.
+TP_LEAVES = row_parallel_leaves(8 * HEAD_DIM, max(TP_DEGREES))
 
 
 # ------------------------------------------------------------------------------------------ projections
@@ -111,10 +116,10 @@ class KdaShard:
     norm_w: torch.Tensor        # [128]              replicated
     eps: float
     lower_bound: float
-    # Optional fused decode operands (``fuse_decode_operands``): ``w_in`` [3 H 128 + 256 + H, hidden] = the rows of
-    # w_qkv, w_fa, w_ga, w_b in one storage (those four fields are then views of it), ``w_fg`` [2, H 128, 128] =
-    # (w_fb, w_gb). ``sm100_tcgen05_chain_v1`` bits do not depend on N or the batch, so the fused GEMMs give the
-    # separate GEMMs' bits.
+    # Optional fused decode operands (``fuse_decode_operands``): ``w_in`` [3 H 128 + 256 + H + pad, hidden] = the rows
+    # of w_qkv, w_fa, w_ga, w_b in one storage (those four fields are then views of it), then ``pad`` zero rows up to
+    # a multiple of ``FUSED_ROW_ALIGN``; ``w_fg`` [2, H 128, 128] = (w_fb, w_gb). ``sm100_tcgen05_chain_v1`` bits do
+    # not depend on N or the batch, so the fused GEMMs give the separate GEMMs' bits.
     w_in: torch.Tensor | None = None
     w_fg: torch.Tensor | None = None
 
@@ -135,6 +140,9 @@ def shard_layer(module, rank: int = 0, world: int = 1, *, trainable=False) -> Kd
         raise ValueError("glm_sm100 engine requires linear_head_dim == 128")
     if world not in TP_DEGREES or H % (TP_LEAVES * 1) or (H // TP_LEAVES * K) % 64:
         raise ValueError(f"TP degree must be one of {TP_DEGREES} and the heads must form {TP_LEAVES} leaves")
+    if row_parallel_leaves(H * K, max(TP_DEGREES)) != TP_LEAVES:
+        raise ValueError(f"o_proj K = {H * K}: the GEMM's row-parallel tree has "
+                         f"{row_parallel_leaves(H * K, max(TP_DEGREES))} leaves, the engine's has {TP_LEAVES}")
     if not 0 <= rank < world:
         raise ValueError("rank out of range")
     for name in ("q_proj", "k_proj", "v_proj", "f_a_proj", "f_b_proj", "g_a_proj", "g_b_proj", "b_proj", "o_proj"):
@@ -206,22 +214,37 @@ class KdaStatePool:
         return model_dtype, torch.uint8
 
 
+#: The fused input weight's row count is padded with zero rows to a multiple of this, so the decode GEMM output's
+#: row pitch is 16 bytes: ``mm_sm100/general`` reads its (fa x, ga x) columns in place and refuses a pitch that is
+#: not (a local head count that is not a multiple of 8, e.g. 32 heads at TP 8). Nothing reads a padding column, and
+#: no other column's bits depend on N.
+FUSED_ROW_ALIGN = 8
+
+
+def _fused_row_blocks(H: int) -> list[int]:
+    """Row blocks of the fused input weight: q k v, f_a, g_a, b, zero padding."""
+    n = [3 * H * HEAD_DIM, HEAD_DIM, HEAD_DIM, H]
+    return n + [-sum(n) % FUSED_ROW_ALIGN]
+
+
 def fused_input_weight(w_qkv, w_fa, w_ga, w_b):
-    """The fused decode input projection rows ``[w_qkv; w_fa; w_ga; w_b]`` (one new storage)."""
-    return torch.cat([w_qkv, w_fa, w_ga, w_b], 0).contiguous()
+    """The fused decode input projection rows ``[w_qkv; w_fa; w_ga; w_b; 0]`` (one new storage; the zero rows pad the
+    row count to a multiple of ``FUSED_ROW_ALIGN``, none when the local head count is a multiple of 8)."""
+    pad = _fused_row_blocks(w_b.shape[0])[-1]
+    return torch.cat([w_qkv, w_fa, w_ga, w_b, w_b.new_zeros(pad, w_b.shape[1])], 0).contiguous()
 
 
 def fuse_decode_operands(shard: KdaShard, w_in: torch.Tensor | None = None) -> KdaShard:
     """Give ``shard`` the fused decode operands. ``w_in``: an already-built :func:`fused_input_weight` whose row
     blocks the shard's w_qkv / w_fa / w_ga / w_b must equal (the callers re-point those fields as views, so the
     weights are stored once); None builds it and re-points the fields here. Inference only."""
-    HK = shard.H * HEAD_DIM
     if w_in is None:
         w_in = fused_input_weight(shard.w_qkv, shard.w_fa, shard.w_ga, shard.w_b)
-    n = [3 * HK, HEAD_DIM, HEAD_DIM, shard.H]
+    n = _fused_row_blocks(shard.H)
     if w_in.shape != (sum(n), shard.hidden) or w_in.dtype != torch.bfloat16 or not w_in.is_contiguous():
-        raise ValueError("fused KDA input weight must be bf16 [3 H 128 + 256 + H, hidden]")
-    shard.w_qkv, shard.w_fa, shard.w_ga, shard.w_b = torch.split(w_in, n, 0)
+        raise ValueError(f"fused KDA input weight must be bf16 [3 H 128 + 256 + H rounded up to a multiple of "
+                         f"{FUSED_ROW_ALIGN}, hidden] = {[sum(n), shard.hidden]} (fused_input_weight)")
+    shard.w_qkv, shard.w_fa, shard.w_ga, shard.w_b, _ = torch.split(w_in, n, 0)
     shard.w_in = w_in
     shard.w_fg = torch.stack([shard.w_fb, shard.w_gb], 0).contiguous()
     return shard
@@ -234,13 +257,13 @@ def _decode_fused(shard: KdaShard, x, batch, pool):
     from isoexec.ops.gdn.conv_sm100 import ops as conv_ops
     T, Hl, K = x.shape[0], shard.H, HEAD_DIM
     HK = Hl * K
-    y = linear(x, shard.w_in)                                              # [T, 3HK + 256 + H]
+    y = linear(x, shard.w_in)                                              # [T, 3HK + 256 + H + pad]
     mixed = conv_ops.update(y[:, :3 * HK], pool.conv, shard.conv_w, activation="silu",
                             cache_indices=batch.state_indices, null_block_id=batch.null_block_id)
     q, k, v = (mixed[:, i * HK:(i + 1) * HK].view(T, Hl, K) for i in range(3))
     low = y[:, 3 * HK:3 * HK + 2 * K].view(T, 2, K).transpose(0, 1)        # [2, T, 128]: (fa x, ga x)
     fg = _gen().bmm(low, shard.w_fg.transpose(1, 2))                       # [2, T, HK]: (f, gate)
-    core = ops.decode_step_fused(q, k, v, fg[0], y[:, 3 * HK + 2 * K:], shard.dt_bias, shard.A_log,
+    core = ops.decode_step_fused(q, k, v, fg[0], y[:, 3 * HK + 2 * K:3 * HK + 2 * K + Hl], shard.dt_bias, shard.A_log,
                                  shard.lower_bound, pool.rec, batch.state_indices, null_slot=batch.null_block_id)
     normalized = gated_rms_norm(core, fg[1].view(T, Hl, K), shard.norm_w, shard.eps)
     return o_proj_leaves(normalized.view(T, HK), shard.w_o, shard.leaves, root_fp32=shard.world > 1)

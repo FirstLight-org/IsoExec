@@ -60,6 +60,33 @@ def test_fused_decode_bitwise_eager(H, world):
     assert torch.equal(pools[0].conv.view(torch.uint8), pools[1].conv.view(torch.uint8))
 
 
+@pytest.mark.parametrize("reducer", ["chunk", "token"])
+@pytest.mark.parametrize("H,world", [(4, 8), (12, 4), (1, 8)])
+def test_fused_decode_with_local_heads_not_a_multiple_of_8_is_the_unfused_path(reducer, H, world):
+    """32 heads at TP 8 (4 local heads), 96 at TP 8 split 4 ways (12), 8 at TP 8 (1): the fused operand's rows are
+    padded to a multiple of 8 so the decode GEMM's output pitch is 16 bytes; every output, record byte and
+    convolution window equals the unfused path's, across a chunk close, with a NULL lane."""
+    _gpu()
+    from isoexec.ops.kda import schedule
+    eng = schedule.select(schedule.CHUNK if reducer == "chunk" else schedule.TOKEN)
+    torch.manual_seed(0)
+    base = _shard(H, 31 + H, world)
+    fused = eng.fuse_decode_operands(copy.copy(base))
+    N, slots_n = 5, 8
+    pools = [eng.KdaStatePool(slots_n, H, device="cuda") for _ in range(2)]
+    slots = torch.tensor([3, 1, 0, 7, 5], dtype=torch.int32, device="cuda")   # lane 2: the NULL block 0
+    batch = eng.EngineBatch(None, slots, None, True, 0)
+    with torch.no_grad():
+        for step in range(66):             # crosses the chunk close at row 63
+            x = (torch.randn(N, HIDDEN, device="cuda") * 2).to(torch.bfloat16)
+            a = eng.forward(base, x, batch, pools[0])
+            b = eng.forward(fused, x, batch, pools[1])
+            assert a.dtype == b.dtype and torch.equal(a.view(torch.uint8), b.view(torch.uint8)), step
+    state = (lambda p: p.rec.data) if reducer == "chunk" else (lambda p: p.state.view(torch.uint8))
+    assert torch.equal(state(pools[0]), state(pools[1]))
+    assert torch.equal(pools[0].conv.view(torch.uint8), pools[1].conv.view(torch.uint8))
+
+
 def test_fused_decode_graph_replay_equals_eager():
     _gpu()
     H, N = 32, 16

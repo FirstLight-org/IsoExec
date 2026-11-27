@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import importlib
 import re
-import sys
 from pathlib import Path
 
 import pytest
@@ -118,7 +117,7 @@ def test_the_two_reducers_have_different_manifests_and_are_refused_together_cpu(
     a, b = schedule.manifest(schedule.CHUNK), schedule.manifest(schedule.TOKEN)
     assert a["schedule"] == {"split": "anchored(64)", "combine": "continued"}
     assert b["schedule"] == {"split": "anchored(1)", "combine": "continued"}
-    assert a["reducer"] != b["reducer"] and a["source_sha256"] != b["source_sha256"]
+    assert a["reducer"] != b["reducer"] and a["builds"] != b["builds"]
     assert schedule.manifest_hash(a) != schedule.manifest_hash(b)
     assert schedule.manifest_hash(a) == schedule.manifest_hash(schedule.manifest())      # engine == trainer by default
     schedule.assert_same_manifest(a, schedule.manifest(schedule.CHUNK))
@@ -140,4 +139,7 @@ def test_selection_is_explicit_and_pools_are_not_interchangeable_cpu():
         schedule.check_pool(schedule.CHUNK, Pool())
     for mod, red in ((cpr, "schedule.CHUNK"), (rec, "schedule.TOKEN")):
         assert f"schedule.check_pool({red}, pool)" in Path(mod.__file__).read_text()
-    assert "isoexec_kda_glm_sm100_cuda" not in sys.modules and "isoexec_kda_glm_rec_sm100_cuda" not in sys.modules
+    from isoexec.ops.kda.tests._fixtures import assert_imports_build_nothing
+
+    assert_imports_build_nothing("from isoexec.ops.kda import schedule;schedule.select(schedule.CHUNK);"
+                                 "schedule.select(schedule.TOKEN)")

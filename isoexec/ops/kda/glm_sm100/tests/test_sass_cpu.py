@@ -1,4 +1,5 @@
-"""SASS gates on the built extension (no GPU needed; builds the extension if it is not cached).
+"""SASS gates on the built extension (no GPU needed; builds the extension if it is not cached; skipped without
+nvcc / cuobjdump).
 
 No kernel of this package -- forward, decode, backward or layer stage -- contains an atomic or reduction
 instruction of any kind (ATOM, ATOMS, ATOMG, RED): every output element has one writer and every sum is a
@@ -18,6 +19,9 @@ ATOMIC = re.compile(r"\b(ATOM|ATOMS|ATOMG|RED)(\.|\s)")
 
 def _sass():
     from isoexec.ops.kda.glm_sm100._extension import extension
+    from isoexec.ops.kda.tests._fixtures import require_cuda_toolchain
+
+    require_cuda_toolchain()
 
     so = Path(extension().__file__)
     out = subprocess.run(["cuobjdump", "-sass", str(so)], capture_output=True, text=True, check=True).stdout

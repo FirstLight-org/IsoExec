@@ -65,10 +65,11 @@ def test_sections_are_16_byte_aligned_and_ordered_cpu():
 
 
 def test_the_record_is_smaller_than_the_one_it_replaces_cpu():
-    assert R.LEGACY_REC_BYTES == 220_944
-    assert R.REC_BYTES < R.LEGACY_REC_BYTES
-    assert R.LEGACY_REC_BYTES - R.REC_BYTES == 31_488      # 30,720 (state planes) + 3 x 256 (rows 63)
-    assert 220_944 / 65_536 > 3.3 > R.REC_BYTES / 65_536 > 2.8
+    legacy = 220_944                                       # S fp32 + S^ bf16 + the full open-chunk rows
+    assert not hasattr(R, "LEGACY_REC_BYTES")              # no code reads the replaced record's size
+    assert R.REC_BYTES < legacy
+    assert legacy - R.REC_BYTES == 31_488                  # 30,720 (state planes) + 3 x 256 (rows 63)
+    assert legacy / 65_536 > 3.3 > R.REC_BYTES / 65_536 > 2.8
 
 
 # ------------------------------------------------------------------------------------------------------ codec

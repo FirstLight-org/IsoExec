@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Torch bindings of the SM100 KDA kernels. Shape and dtype checks live in ops.py; this file marshals
-// pointers and launches on the current stream.
+// pointers and launches on the current stream of the inputs' device (CUDAGuard), and checks every launch.
+#include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/extension.h>
 
@@ -119,14 +121,17 @@ void bind_records(Plan &p, const c10::optional<at::Tensor> &rec, const c10::opti
 
 void plan(const at::Tensor &cu, at::Tensor &plan_buf, int64_t maxch, const c10::optional<at::Tensor> &rec,
           const c10::optional<at::Tensor> &slot_in, int64_t H) {
+  const c10::cuda::CUDAGuard guard(cu.device());
   Plan p = make_plan(cu, plan_buf, int(maxch));
   bind_records(p, rec, slot_in, int(H));
   plan_launch(p, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 int64_t rec_bytes() { return Rec::BYTES; }
 void decode_rec(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at::Tensor &g,
                 const at::Tensor &beta, at::Tensor &rec, const at::Tensor &slots, at::Tensor &o,
                 std::vector<at::Tensor> hand, int64_t null_slot) {
+  const c10::cuda::CUDAGuard guard(q.device());
   DecRecParams p{};
   p.q = ptr<const uint16_t>(q);
   p.k = ptr<const uint16_t>(k);
@@ -149,6 +154,7 @@ void decode_rec(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, c
   p.wpos = ptr<int>(hand[4]);
   p.null_slot = int(null_slot);
   decode_rec_launch(p, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 // decode_rec over fused inputs: q, k, v strided token rows of one projection output (head rows 128-contiguous,
 // one common token stride), the raw bf16 forget projection f [N, H*128] (row stride free) and the raw bf16
@@ -157,6 +163,7 @@ void decode_rec_fused(const at::Tensor &q, const at::Tensor &k, const at::Tensor
                       const at::Tensor &b, const at::Tensor &dt_bias, const at::Tensor &A_log, double lb,
                       at::Tensor &rec, const at::Tensor &slots, at::Tensor &o, std::vector<at::Tensor> hand,
                       int64_t null_slot) {
+  const c10::cuda::CUDAGuard guard(q.device());
   const int64_t N = q.size(0), H = q.size(1);
   for (const at::Tensor *t : {&q, &k, &v})
     TORCH_CHECK(t->scalar_type() == at::kBFloat16 && t->dim() == 3 && t->size(0) == N && t->size(1) == H &&
@@ -201,10 +208,13 @@ void decode_rec_fused(const at::Tensor &q, const at::Tensor &k, const at::Tensor
   p.beta_raw = 1;
   p.beta_ld = b.stride(0);
   decode_rec_launch(p, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void record_state(at::Tensor &rec, const at::Tensor &slots, at::Tensor &out) {
+  const c10::cuda::CUDAGuard guard(rec.device());
   RecRef rr{ptr<char>(rec), int(rec.size(1)), rec_slot_stride(rec, int(rec.size(1)))};
   record_state_launch(rr, ptr<const int>(slots), int(slots.size(0)), ptr<float>(out), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 int64_t carry_bytes() { return Carry::BYTES; }
 
@@ -218,6 +228,7 @@ void fwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
          const c10::optional<at::Tensor> &save_Xu, const c10::optional<at::Tensor> &save_Kg,
          const c10::optional<at::Tensor> &rec, const c10::optional<at::Tensor> &slot_in,
          const c10::optional<at::Tensor> &slot_out, const c10::optional<at::Tensor> &carry) {
+  const c10::cuda::CUDAGuard guard(q.device());
   FwdParams p{};
   p.q = ptr<const uint16_t>(q);
   p.k = ptr<const uint16_t>(k);
@@ -244,13 +255,20 @@ void fwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
   p.slot_out = opt<const int>(slot_out);
   p.carry = opt<char>(carry);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  if (run_intra && maxch > 0) intra_launch(p, stream);
-  if (run_state && p.plan.nseq > 0) state_launch(p, stream);
+  if (run_intra && maxch > 0) {
+    intra_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
+  if (run_state && p.plan.nseq > 0) {
+    state_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
 }
 
 void decode(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at::Tensor &g,
             const at::Tensor &beta, const c10::optional<at::Tensor> &h0, at::Tensor &ht, at::Tensor &o,
             std::vector<at::Tensor> rows) {
+  const c10::cuda::CUDAGuard guard(q.device());
   DecodeParams p{};
   p.q = ptr<const uint16_t>(q);
   p.k = ptr<const uint16_t>(k);
@@ -270,7 +288,10 @@ void decode(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const
   p.KD = ptr<uint16_t>(rows[3]);
   p.MQ = ptr<uint16_t>(rows[4]);
   p.GL = ptr<float>(rows[5]);
-  if (p.N > 0) decode_launch(p, at::cuda::getCurrentCUDAStream());
+  if (p.N > 0) {
+    decode_launch(p, at::cuda::getCurrentCUDAStream());
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
 }
 
 // Backward: `fw` = the forward recompute workspace and saves, `iw` = the intermediates, `out` = grads.
@@ -280,6 +301,7 @@ void bwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
          const at::Tensor &cu, const at::Tensor &plan_buf, int64_t maxch, std::vector<at::Tensor> fw,
          const at::Tensor &dO, const c10::optional<at::Tensor> &dht, std::vector<at::Tensor> iw,
          std::vector<at::Tensor> out) {
+  const c10::cuda::CUDAGuard guard(q.device());
   BwdParams p{};
   p.q = ptr<const uint16_t>(q);
   p.k = ptr<const uint16_t>(k);
@@ -318,28 +340,38 @@ void bwd(const at::Tensor &q, const at::Tensor &k, const at::Tensor &v, const at
   p.dbeta = out[4].data_ptr();
   p.dh0 = ptr<float>(out[5]);
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-  if (p.plan.nseq > 0) bwd_state_launch(p, stream);
+  if (p.plan.nseq > 0) {
+    bwd_state_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+  }
   if (maxch > 0) {
     bwd_inter_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     bwd_wy_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
     bwd_qkg_launch(p, stream);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
   }
 }
 
 // ---- layer stages (shapes and dtypes checked in integration.py)
 bool isbf(const at::Tensor &t) { return t.scalar_type() == at::kBFloat16; }
 void gate_fwd(const at::Tensor &f, const at::Tensor &dt_bias, const at::Tensor &A_log, double lb, at::Tensor &out) {
+  const c10::cuda::CUDAGuard guard(f.device());
   gate_fwd_launch(f.data_ptr(), isbf(f), ptr<const float>(dt_bias), ptr<const float>(A_log), float(lb),
                   ptr<float>(out), f.numel(), int(dt_bias.numel()), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void gate_bwd(const at::Tensor &dld, const at::Tensor &f, at::Tensor &df, const at::Tensor &dt_bias,
               const at::Tensor &A_log, double lb, at::Tensor &pdt, at::Tensor &pA, at::Tensor &colA,
               at::Tensor &ddt, at::Tensor &dA) {
+  const c10::cuda::CUDAGuard guard(f.device());
   const int HK = int(dt_bias.numel());
   gate_bwd_launch(ptr<const float>(dld), f.data_ptr(), isbf(f), df.data_ptr(), isbf(df), ptr<const float>(dt_bias),
                   ptr<const float>(A_log), float(lb), ptr<float>(pdt), ptr<float>(pA), ptr<float>(colA),
                   f.numel() / HK, HK, int(A_log.numel()), ptr<float>(ddt), ptr<float>(dA),
                   at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void leaf_tree(const at::Tensor &stacked, at::Tensor &out) {
   TORCH_CHECK(stacked.scalar_type() == at::kFloat && stacked.is_contiguous() && out.is_contiguous() &&
@@ -349,26 +381,36 @@ void leaf_tree(const at::Tensor &stacked, at::Tensor &out) {
   const int L = int(stacked.size(0));
   TORCH_CHECK(L >= 1 && L <= 8 && (L & (L - 1)) == 0, "leaf_tree: L must be a power of two <= 8");
   const bool f32 = out.scalar_type() == at::kFloat;
+  const c10::cuda::CUDAGuard guard(stacked.device());
   leaf_tree_launch(ptr<const float>(stacked), L, out.numel(), f32 ? ptr<float>(out) : nullptr,
                    f32 ? nullptr : ptr<uint16_t>(out), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void beta_fwd(const at::Tensor &b, at::Tensor &out) {
+  const c10::cuda::CUDAGuard guard(b.device());
   beta_fwd_launch(ptr<const uint16_t>(b), ptr<uint16_t>(out), b.numel(), at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void beta_bwd(const at::Tensor &dbeta, const at::Tensor &y, at::Tensor &db) {
+  const c10::cuda::CUDAGuard guard(y.device());
   beta_bwd_launch(dbeta.data_ptr(), isbf(dbeta), ptr<const uint16_t>(y), ptr<uint16_t>(db), y.numel(),
                   at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void gnorm_fwd(const at::Tensor &x, const at::Tensor &z, const at::Tensor &w, double eps, at::Tensor &y,
                at::Tensor &rstd) {
+  const c10::cuda::CUDAGuard guard(x.device());
   gnorm_fwd_launch(ptr<const uint16_t>(x), ptr<const uint16_t>(z), w.data_ptr(), isbf(w), float(eps),
                    ptr<uint16_t>(y), ptr<float>(rstd), x.numel() / 128, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 void gnorm_bwd(const at::Tensor &dy, const at::Tensor &x, const at::Tensor &z, const at::Tensor &w,
                const at::Tensor &rstd, at::Tensor &dx, at::Tensor &dz, at::Tensor &pw, at::Tensor &dw) {
+  const c10::cuda::CUDAGuard guard(x.device());
   gnorm_bwd_launch(ptr<const uint16_t>(dy), ptr<const uint16_t>(x), ptr<const uint16_t>(z), w.data_ptr(), isbf(w),
                    ptr<const float>(rstd), ptr<uint16_t>(dx), ptr<uint16_t>(dz), ptr<float>(pw), dw.data_ptr(),
                    isbf(dw), x.numel() / 128, at::cuda::getCurrentCUDAStream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 int64_t seg() { return seg_rows(); }
 
