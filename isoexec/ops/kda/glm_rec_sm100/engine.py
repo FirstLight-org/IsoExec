@@ -86,13 +86,13 @@ def _decode_fused(shard: KdaShard, x, batch, pool):
     from isoexec.ops.gdn.conv_sm100 import ops as conv_ops
     T, Hl, K = x.shape[0], shard.H, HEAD_DIM
     HK = Hl * K
-    y = linear(x, shard.w_in)                                              # [T, 3HK + 256 + H]
+    y = linear(x, shard.w_in)                                              # [T, 3HK + 256 + H + pad]
     mixed = conv_ops.update(y[:, :3 * HK], pool.conv, shard.conv_w, activation="silu",
                             cache_indices=batch.state_indices, null_block_id=batch.null_block_id)
     q, k, v = (mixed[:, i * HK:(i + 1) * HK].view(T, Hl, K) for i in range(3))
     low = y[:, 3 * HK:3 * HK + 2 * K].view(T, 2, K).transpose(0, 1)        # [2, T, 128]: (fa x, ga x)
     fg = _gen().bmm(low, shard.w_fg.transpose(1, 2))                       # [2, T, HK]: (f, gate)
-    core = ops.decode_step_fused(q, k, v, fg[0], y[:, 3 * HK + 2 * K:], shard.dt_bias, shard.A_log,
+    core = ops.decode_step_fused(q, k, v, fg[0], y[:, 3 * HK + 2 * K:3 * HK + 2 * K + Hl], shard.dt_bias, shard.A_log,
                                  shard.lower_bound, pool.state, batch.state_indices, null_slot=batch.null_block_id)
     normalized = gated_rms_norm(core, fg[1].view(T, Hl, K), shard.norm_w, shard.eps)
     return o_proj_leaves(normalized.view(T, HK), shard.w_o, shard.leaves, root_fp32=shard.world > 1)
