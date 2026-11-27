@@ -68,12 +68,12 @@ A row with border `B` is made of `n = ceil(B / SEG)` segments
 [k*SEG, min((k+1)*SEG, B))      for k = 0 .. n-1
 ```
 
-`SEG` is **fixed** and is the output of the schedule policy (`isoexec/ops/schedule_policy.py`, design
-version 7.3, rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
+`SEG` is **fixed** and is the output of the schedule policy (`isoexec/ops/schedule_policy.py`,
+rule 3; `ops.schedule_for`), not a table. It never depends on a call's batch, sequence
 length, KV length, chunk boundary, split count, grid or SM count.
 
 ```
-G   = pow2floor(min(p, cap, n // L)), at least 1          segments of a row of the declared longest context
+G   = pow2floor(min(p, max_segments, n // min_segment)), at least 1   segments of a row of the longest context
 SEG = 128 * ceil(n / (128 * G))
 p   = 1                                                    no target batch declared (the default)
 p   = 148 // (target batch * model KV heads * SMs per item)   a target batch declared
@@ -81,15 +81,15 @@ p   = 148 // (target batch * model KV heads * SMs per item)   a target batch dec
 
 | input | value | where |
 |---|---|---|
-| `L`, shortest segment worth a partial result | 512 keys (measured) | `ops.SOFTMAX_SHORTEST_SEGMENT` |
-| `cap`, segments of one output in flight | 16 (tuned; `params.h FOLD_MAX_RUN`) | `ops.SOFTMAX_SEGMENT_CAP` |
+| `min_segment`, shortest segment worth a partial result | 512 keys (measured) | `ops.SOFTMAX_SHORTEST_SEGMENT` |
+| `max_segments`, segments of one output in flight | 16 (tuned; `params.h FOLD_MAX_RUN`) | `ops.SOFTMAX_SEGMENT_CAP` |
 | SMs per work item | 2 at head dim 256 (a CTA pair), 1 at 128 | `ops.SMS_PER_ITEM` |
 | `n`, longest declared context | 10240 (the production `max_model_len` of the seam batteries) | `spec.LONGEST_CONTEXT` |
 | target batch (optional) | none by default; `ISOEXEC_TARGET_BATCH` in the launch environment | `spec.TARGET_BATCH` |
 | model KV heads (read only with a target batch) | 2 (the smallest of the release models) | `spec.MODEL_KV_HEADS` |
 
-`L`, `cap` and the occupancy behind `p` are the policy's cost parameters for this reducer, measured on
-B200. **With no target batch `p = 1`, so `G = 1` and `SEG = 10240` at both head dims**
+`min_segment`, `max_segments` and the occupancy behind `p` are the hardware specifications of this
+reducer, measured on B200. **With no target batch `p = 1`, so `G = 1` and `SEG = 10240` at both head dims**
 (`ops.segment_span`): a row of up to 10240 keys is one segment. A row longer than 10240 keys is served
 exactly, with more segments (the combine admits up to 4096). The head-dim-256 decode leaf holds a
 segment of at most 128 tiles (16384 keys) and refuses a longer SEG.
@@ -294,6 +294,9 @@ The reference is FA4 at the vendored commit, in production configuration: split-
 four causal sequences. The GPU was shared with small processes of other users (about 5 GB, mostly
 idle) during the run, so read the numbers as indicative rather than as a gate. The head-dim-256
 decode rows were measured on the general leaf, before the decode leaf (section 2) took them.
+
+The numbers below were taken on 2026-11-07 at the earlier fixed span of `SEG = 2048` keys; the default
+is now one segment over the declared longest context (section 1.3).
 
 | geometry (Hq/Hkv, D) | shape | gqa_sm100 (us) | FA4 (us) | ratio |
 |---|---|---:|---:|---:|

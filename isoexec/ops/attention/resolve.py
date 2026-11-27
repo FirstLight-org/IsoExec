@@ -24,7 +24,8 @@ def core_mla_impl(seg_tokens: int | None) -> str:
     if current_arch() == "sm100":
         if seg_tokens is None:
             raise refuse("attention.core.mla", site="core_mla_impl", asked={"seg_tokens": None},
-                         on_offer="an explicit positive segment span",
+                         on_offer="seg_tokens = mla_sm100.segment_span(), the schedule policy's span at "
+                                  "mla_sm100/spec.py's declarations (ISOEXEC_TARGET_BATCH, the longest context)",
                          why="FA3 absorbed MLA is SM90-only; SM100 uses its own SEG-tree recipe.")
         return "sm100_absorbed_segtree"
     return CORE_MLA_FA3_IMPL if seg_tokens is None else CORE_MLA_SEGTREE_IMPL
