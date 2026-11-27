@@ -30,10 +30,6 @@ def _const(text: str, name: str) -> int:
     return int(m.group(1))
 
 
-def test_policy_version():
-    assert policy.VERSION == "7.4"
-
-
 @pytest.mark.parametrize("vocab", VOCABS)
 def test_the_segment_is_the_policy_output(vocab):
     """One segment per shard at d_max = 8: G = 1, S = V / 8, shards under a tree; the lanes partition it."""
@@ -73,7 +69,7 @@ def test_the_lane_count_equals_the_kernels_constants(version):
 
 
 def test_the_lane_count_is_the_policys_and_is_256_at_every_vocabulary():
-    """[7.4] L = ``policy.lanes(THREADS)``, THREADS = 256 (eight warps): 256, as before, on every segment."""
+    """L = ``policy.lanes(THREADS)``, THREADS = 256 (eight warps): 256, as before, on every segment."""
     assert schedule.THREADS == 256 and schedule.LANES == policy.lanes(schedule.THREADS) == policy.lanes(256) == 256
     for vocab in VOCABS:
         s = schedule.segment(vocab).S

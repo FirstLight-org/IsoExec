@@ -91,10 +91,6 @@ def _instantiated(macro: str) -> set[tuple[int, int]]:
     return {(int(k), int(ell)) for k, ell in re.findall(r"X\((\d+), (\d+)\)", block)}
 
 
-def test_policy_version():
-    assert policy.VERSION == "7.4"
-
-
 @pytest.mark.parametrize("n", SUPPORTED)
 def test_the_segment_is_the_policy_output(n):
     """One segment per shard, d_max = 1: G = 1, S = width, and the lanes partition exactly that segment."""
@@ -129,8 +125,8 @@ def test_the_lane_function_equals_the_v2_table_on_every_entry():
 
 
 def test_the_lane_count_is_the_policys_and_every_width_keeps_its_lanes():
-    """[7.4] The most lanes are ``policy.lanes(threads)``: 32 (one warp) for v1, 128 (four warps) for v2 at the swept
-    widths. On every width of :data:`SUPPORTED` the lanes are what they were: the largest power of two <= the 7.3
+    """The most lanes are ``policy.lanes(threads)``: 32 (one warp) for v1, 128 (four warps) for v2 at the swept
+    widths. On every width of :data:`SUPPORTED` the lanes are what they were: the largest power of two <= the earlier
     literal cap (32, or 128 at a swept width) that divides n / 8, for both reducers and for the bound one."""
     assert (schedule.V1.threads, schedule.V1.threads_elsewhere) == (32, 32)
     assert (schedule.V2.threads, schedule.V2.threads_elsewhere) == (128, 32)

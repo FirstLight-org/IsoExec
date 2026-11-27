@@ -1,8 +1,7 @@
-"""The numerical-schedule policy (design version 7.4): three rules, no tables.
+"""The numerical-schedule policy (version 7.4): three rules, no tables.
 
-Canonical copy: project-x/policy_validation/port/schedule_policy.py. It is installed unchanged as
-isoexec/ops/schedule_policy.py; kernels take every segment count and segment length from here.
-Mirrors alloy_new/policy.py; the port's CPU test compares the two on every deployed shape.
+Kernels take every segment count and segment length from here, so that a trainer and an inference engine
+that run the same version cut every reduction in the same places.
 
 A reducer is the fixed way one segment is reduced: a DAG over the segment's terms that depends only on their
 positions inside the segment (a chain of blocks, interleaved lanes, an MMA accumulation). The policy decides
@@ -24,17 +23,11 @@ steps a whole block with one instruction of all its threads, and a reducer witho
 (L = 1). Lanes stay inside a segment, so they are independent of the three rules.
 
 min_segment, max_segments, the occupancy behind p and the threads behind L are the hardware specifications
-of a reducer on a GPU generation: min_segment is the shortest segment worth a partial result of its own, max_segments the
-most partial results the kernel holds for one output, p the workers free for the segments of one output. A
-reducer without them (min_segment absent) gets G = 1: one segment per shard. So does a deployment that
-declares no target batch (p absent): it is scheduled for throughput, where the outputs of a batch already
-fill the device.
-
-7.2 against 7.1: the form "a shortest segment without occupancy gives S = that length" is gone. The scalar
-sums that used it (the sum of squares of a norm, the log-sum-exp of the output) are one segment per shard;
-their interleaved lanes are the reducer's own DAG. The smallest batch is now an optional target batch.
-7.3 against 7.2: names only (L is min_segment, cap is max_segments); every schedule is unchanged.
-7.4 against 7.3: lanes() is added; every schedule is unchanged.
+of a reducer on a GPU generation: min_segment is the shortest segment worth a partial result of its own,
+max_segments the most partial results the kernel holds for one output, p the workers free for the segments
+of one output. A reducer without them (min_segment absent) gets G = 1: one segment per shard. So does a
+deployment that declares no target batch (p absent): it is scheduled for throughput, where the outputs of a
+batch already fill the device.
 """
 from dataclasses import dataclass
 from typing import Optional
