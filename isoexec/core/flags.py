@@ -112,8 +112,9 @@ FLAGS: List[Flag] = [
               "cuts a row into the segments the device has workers free for at that batch. Any batch size runs "
               "under any value and is batch-invariant under it; two different values are two different numerical "
               "programs, so it MUST match on the trainer and every engine. Both read it from the launch "
-              "environment (ops/attention/target_batch.py); the verl engine workers report the schedule they "
-              "bound in every weight acknowledgement and the first sync refuses a difference.",
+              "environment (ops/attention/target_batch.py). Under verl the training workers and the engine "
+              "workers each report the schedule they bound and every weight sync refuses a difference "
+              "(integrations/verl/schedule.py).",
     ),
     # Master switch.
     Flag(

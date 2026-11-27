@@ -14,7 +14,8 @@ values (verl's default: on) when the GDN composition resumes them exactly -- the
 composition from vLLM's state blocks, CPR from its private pool -- and are forced off otherwise
 (speculative decoding, other compositions); see :func:`_state_features`. Under CPR, an enabled feature
 turns on the engine flags it needs (``ISOEXEC_GDN_CHUNKED_PREFILL``, ``ISOEXEC_GDN_CPR_APC``), here and
-in every Ray worker through ``ray_kwargs.ray_init.runtime_env.env_vars``.
+in every Ray worker through ``ray_kwargs.ray_init.runtime_env.env_vars``. The driver's optional target batch
+(``ISOEXEC_TARGET_BATCH``) is forwarded to every Ray worker the same way (:func:`_forward_target_batch`).
 Each value it changes is printed. Parallel layout, model, data, sampling and the lifecycle limits
 (``total_training_steps`` and friends, checked by the trainer) stay the caller's.
 """
@@ -125,6 +126,32 @@ def _forward_state_feature_flags(config: Any, enabled: list[str]) -> list[str]:
     return changes
 
 
+def _forward_target_batch(config: Any) -> list[str]:
+    """Forward the driver's target batch declaration (``ISOEXEC_TARGET_BATCH``, possibly empty: none) to every
+    Ray worker, so the training workers and the engine workers bind one attention schedule whatever environment
+    their node's Ray daemon was started with. A different value already in the job's ``env_vars`` is refused;
+    a driver that declares nothing leaves the job's value (or the workers' inherited one) alone."""
+    from omegaconf import OmegaConf
+
+    from isoexec.ops.attention.target_batch import FLAG, parse
+
+    key = f"ray_kwargs.ray_init.runtime_env.env_vars.{FLAG}"
+    old = OmegaConf.select(config, key, default=None)
+    if old is not None:
+        parse(str(old))
+    if FLAG not in os.environ:
+        return []
+    here = os.environ[FLAG]
+    if old is None:
+        parse(here)
+        OmegaConf.update(config, key, here, force_add=True)
+        return [f"{key}: None -> {here!r} (the driver's declaration)"]
+    if parse(str(old)) != parse(here):
+        raise ValueError(f"isoexec.enable=true: the driver declares {FLAG}={here!r} but {key}={old!r}; the "
+                         f"training workers and the engines must bind one target batch")
+    return []
+
+
 def apply(config: Any) -> list[str]:
     """Write the IsoExec settings into ``config`` in place; return ``key: old -> new`` for each change."""
     from omegaconf import OmegaConf, open_dict
@@ -165,6 +192,7 @@ def apply(config: Any) -> list[str]:
                 OmegaConf.update(config, key, False, force_add=True)
                 changes.append(f"{key}: {old!r} -> False ({reason})")
         changes += _forward_state_feature_flags(config, enabled)
+        changes += _forward_target_batch(config)
         key = "actor_rollout_ref.rollout.engine_kwargs.vllm.async_scheduling"
         old = OmegaConf.select(config, key, default=None)
         # Async scheduling is on wherever the GDN state stays exact under it (_async_scheduling_safe).

@@ -8,12 +8,16 @@ bits as any other batch size under the same declaration; the declaration only sa
 different declarations are two different numerical programs.
 
 One place states it: ``ISOEXEC_TARGET_BATCH`` in the environment of the launch (declared in ``core/flags.py``,
-FUNCTION, forwarded to the trainer actors and the engine actors by ``runtimes/environment.resolved_environment``).
-The operators read it through :func:`declared` when their schedule is bound (import), never on a call.
+FUNCTION). ``runtimes/environment.resolved_environment`` carries it with the other flags: SkyRL puts that
+environment into the job's Ray runtime environment (trainer and engine actors alike), and verl's
+``isoexec.enable`` expansion forwards the driver's value to every Ray worker the same way
+(``integrations/verl/config.py``). The operators read it through :func:`declared` when their schedule is bound
+(import), never on a call.
 
 :func:`schedule_record` is what a process bound; :func:`require_same_schedule` compares two of them and refuses by
-name. The verl integration puts the record in every engine worker's weight acknowledgement and compares it at the
-first weight sync, before a token is generated (``integrations/verl``).
+name. In the verl integration every training worker records what it bound when its model is built and every
+engine worker reports it in its weight acknowledgement; each weight sync compares them all, the first one before
+a token is generated (``integrations/verl/schedule.py``).
 """
 
 from __future__ import annotations
@@ -72,9 +76,11 @@ def schedule_record() -> dict[str, Any]:
     }
 
 
-def require_same_schedule(mine: Mapping[str, Any], theirs: Mapping[str, Any] | None, *, who: str) -> None:
-    """Refuse unless ``theirs`` (the record of ``who``) is the record ``mine``; the message names the first field
-    that differs. A party that reports no record is refused: it cannot be shown to run the same schedule."""
+def require_same_schedule(mine: Mapping[str, Any], theirs: Mapping[str, Any] | None, *, who: str,
+                          here: str = "here") -> None:
+    """Refuse unless ``theirs`` (the record of ``who``) is the record ``mine`` (of ``here``); the message names the
+    first field that differs. A party that reports no record is refused: it cannot be shown to run the same
+    schedule."""
     if theirs is None:
         raise Refusal(f"attention_schedule.missing: {who} reported no attention schedule record")
 
@@ -85,7 +91,7 @@ def require_same_schedule(mine: Mapping[str, Any], theirs: Mapping[str, Any] | N
                 if found:
                     return found
             return None
-        return None if type(a) is type(b) and a == b else f"{path}: here {a!r}, {who} {b!r}"
+        return None if type(a) is type(b) and a == b else f"{path}: {here} {a!r}, {who} {b!r}"
 
     found = differ(mine, theirs, "")
     if found:

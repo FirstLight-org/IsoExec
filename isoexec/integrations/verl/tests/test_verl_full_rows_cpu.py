@@ -159,6 +159,13 @@ def test_acks_and_optimizer_gates(root):
 
     for rank in range(2):
         ack(rank)
+    # the training workers have not recorded the schedule they bound: the engines cannot be shown to match them
+    with pytest.raises(Refusal, match="attention_schedule.missing: 2 training workers"):
+        verify_acks(root, 0, 2)
+    from isoexec.integrations.verl.schedule import record_trainer_schedule
+
+    for rank in range(2):
+        record_trainer_schedule(root, rank)
     assert verify_acks(root, 0, 2)["workers"] == 2
     with pytest.raises(Refusal):
         verify_acks(root, 0, 4)

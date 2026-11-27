@@ -205,6 +205,12 @@ class IsoExecMegatronEngine(MegatronEngineWithLMHead):
         self._hf_export_tasks = None
         self._build_tf_config()
         self.module = self._build_megatron_module()
+        # This process computes the trainer forward: record the attention schedule it bound, for the comparison
+        # with the engine workers at every weight sync (schedule.py).
+        from .full_distribution import run_root
+        from .schedule import record_trainer_schedule
+
+        record_trainer_schedule(run_root(), torch.distributed.get_rank())
         from isoexec.core.local_memory import stack_limit
 
         # The per-thread stack limit at model build; offload lowers it back (runtimes/megatron/residency).
