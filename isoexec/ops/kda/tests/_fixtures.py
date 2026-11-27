@@ -12,7 +12,7 @@ def require_sm100():
     from isoexec.core.arch import live_device_arch
 
     if not torch.cuda.is_available() or live_device_arch() != "sm100":
-        pytest.skip("requires an SM100 device (run through tools/gpu_lease.py)")
+        pytest.skip("requires an SM100 device")
 
 
 def require_cuda_toolchain():

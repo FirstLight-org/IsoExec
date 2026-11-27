@@ -1,5 +1,5 @@
 """SASS gate: no float (or any) atomic/reduction instruction in any kernel of the recurrent recipe (no GPU needed;
-builds outside the lease if not cached; skipped without nvcc / cuobjdump)."""
+builds the extension if it is not cached; skipped without nvcc / cuobjdump)."""
 
 from __future__ import annotations
 
