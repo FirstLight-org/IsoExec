@@ -29,7 +29,7 @@ def _route(x, router_w, bias, top_k, routed_scale, E, return_logits=False):
 
 
 def _fold_f32(buf, rows):
-    """moe_sm100's combine program (acc = row 0; acc = RN32(acc + row j), j ascending in canonical
+    """moe_sm100's combine program (acc = +0; acc = RN32(acc + row j), j ascending in canonical
     order; one bf16 rounding) over the bf16-valued roots read through ``rows [T, S]``: the bf16 rows
     widened exactly to fp32, then moe_sm100's combine (``rows.fold_rows``)."""
     return cs.fold_rows(buf.float(), rows.contiguous())
