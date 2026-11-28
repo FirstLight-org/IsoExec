@@ -1,7 +1,7 @@
 """A relocatable, content-keyed store of IsoExec's compiled extensions, and the prebuilt-only mode.
 
 Every IsoExec torch extension is loaded through :func:`load_extension` (``build_cache.build_sm100_extension`` /
-``build_sm90_extension``, ``dsa_sm100``, the vendored DeepGEMM host module). Its KEY is a digest of what determines
+``build_sm90_extension``, ``sparse_sm100``, the vendored DeepGEMM host module). Its KEY is a digest of what determines
 the machine code, never of where the checkout or the cache lives:
 
 - the toolchain: ``nvcc --version``, the host compiler's ``--version`` (program name dropped), torch and its CUDA,
@@ -553,8 +553,10 @@ def load_extension(*, name: str, sources: Sequence[str], build_directory: str | 
 EXTENSIONS: tuple[tuple[str, str, str, tuple], ...] = (
     ("deep_gemm_C", "isoexec.ops._vendor.deep_gemm._extension", "extension", ()),
     ("deepseek_v41_rows", "isoexec.ops.attention.deepseek_v41_cache_sm100._extension", "extension", ()),
-    *((f"dsa_{sub}", "isoexec.ops.attention.dsa_sm100._extension", "extension", (sub,))
-      for sub in ("topk", "indexer", "attn", "prims", "bwd", "dualrail", "mqa")),
+    *((f"indexer_{sub}", "isoexec.ops.attention.indexer_sm100._extension", "extension", (sub,))
+      for sub in ("topk", "indexer", "mqa")),
+    *((f"sparse_{sub}", "isoexec.ops.attention.sparse_sm100._extension", "extension", (sub,))
+      for sub in ("attn", "prims", "bwd", "dualrail")),
     ("gqa_sm100", "isoexec.ops.attention.gqa_sm100._extension", "extension", ()),
     ("mla_sm100", "isoexec.ops.attention.mla_sm100._extension", "extension", ()),
     ("rope_sm100", "isoexec.ops.attention.rope_sm100._extension", "extension", ()),
@@ -564,6 +566,9 @@ EXTENSIONS: tuple[tuple[str, str, str, tuple], ...] = (
     ("fused_sm100", "isoexec.ops.fused_sm100._extension", "extension", ()),
     ("conv_sm100", "isoexec.ops.gdn.conv_sm100._extension", "extension", ()),
     ("gdn_cpr_sm100", "isoexec.ops.gdn.gdn_cpr_sm100._extension", "extension", ()),
+    ("kda_glm_sm100", "isoexec.ops.kda.glm_sm100._extension", "extension", ()),
+    ("kda_glm_rec_sm100", "isoexec.ops.kda.glm_rec_sm100._extension", "extension", ()),
+    ("kda_slot_reset_sm100", "isoexec.ops.kda.slot_reset_sm100", "extension", ()),
     ("logprobs_sm100", "isoexec.ops.logprobs.logprobs_sm100._extension", "extension", ()),
     ("logprobs_sm100_v2", "isoexec.ops.logprobs.logprobs_sm100._extension_v2", "extension", ()),
     ("logprobs_sm100_sampler", "isoexec.ops.logprobs.logprobs_sm100._extension_sampler", "extension", ()),

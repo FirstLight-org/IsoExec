@@ -3,8 +3,8 @@
 Program (per output element): ONE ascending K chain of 16-wide ``tcgen05.mma kind::f16`` steps (BLOCK_K = 64,
 UMMA_K = 16) from a non-accumulating first step, FP32 accumulator in tensor memory, one BF16 RNE of the root; no
 split-K (deterministic mode never splits K and never dispatches to cuBLASLt). That is ``mm_sm100``'s
-``sm100_tcgen05_segtree_v2`` program at a published segment count S = 1, so this provider serves ONLY weights whose
-published S is 1 (``mm_sm100.segments.segment_count``; policy v4 publishes S = 1 for every K) and the bits are
+``sm100_tcgen05_segtree_v2`` program at a segment count S = 1, so this provider serves ONLY weights whose
+schedule is one segment (``mm_sm100.segments.segment_count``: the schedule policy's G, 1 for every K) and the bits are
 those of the incumbent provider (the GPU gate compares them at every M). Tile shape, swap-AB, cluster, persistent schedule and PDL are ownership / launch
 timing only. Weights with S > 1 keep the incumbent provider (``aten::mm`` on the folded rows, through the installed
 ``mm`` chain: exactly ``F.linear``'s decomposition, but a runtime that overrides the composite ``aten::linear`` /
@@ -21,8 +21,8 @@ IMPLEMENTATION = "vendored_deepgemm_sm100_bf16_gemm_v1"
 
 
 def serves(n: int, k: int) -> bool:
-    """True when this provider's program equals the incumbent's for an ``[n, k]`` BF16 weight: the published
-    mm_sm100 segment count is 1 (one chain) and the shape is a legal DeepGEMM operand."""
+    """True when this provider's program equals the incumbent's for an ``[n, k]`` BF16 weight: the schedule
+    policy's segment count (``mm_sm100.segments``) is 1 (one chain) and the shape is a legal DeepGEMM operand."""
     from isoexec.ops.mm.mm_sm100 import segments as seg
     if k % 64 or n % 16 or not seg.supported(k, n):
         return False

@@ -24,7 +24,8 @@ def core_mla_impl(seg_tokens: int | None) -> str:
     if current_arch() == "sm100":
         if seg_tokens is None:
             raise refuse("attention.core.mla", site="core_mla_impl", asked={"seg_tokens": None},
-                         on_offer="an explicit positive segment span",
+                         on_offer="seg_tokens = mla_sm100.segment_span(), the schedule policy's span at "
+                                  "mla_sm100/spec.py's declarations (ISOEXEC_TARGET_BATCH, the longest context)",
                          why="FA3 absorbed MLA is SM90-only; SM100 uses its own SEG-tree recipe.")
         return "sm100_absorbed_segtree"
     return CORE_MLA_FA3_IMPL if seg_tokens is None else CORE_MLA_SEGTREE_IMPL
@@ -89,13 +90,24 @@ def resolve(
             from isoexec.ops.attention.mla_trainer import mla_core_absorbed
 
             return resolution(op, impl, mla_core_absorbed, provider="ops.attention", site=site)
-        if type(seg_tokens) is not int or seg_tokens <= 0 or seg_tokens % 128:
+        from isoexec.ops.attention.mla_trainer import mla_core_segtree
+        from isoexec.ops._dispatch import current_arch
+
+        if current_arch() == "sm100":
+            # SM100: the span is the schedule policy's output at the deployment's declarations (the optional
+            # target batch among them), on both hosts. A model config whose seg_tokens was written under another
+            # declaration is refused here, at resolution, before either party runs a token.
+            from isoexec.ops.attention.mla_sm100.fwd import segment_span
+
+            if type(seg_tokens) is not int or seg_tokens != segment_span():
+                raise refuse(op, site=site, asked={"seg_tokens": seg_tokens}, on_offer=segment_span(),
+                             why="on SM100 seg_tokens is isoexec.ops.schedule_policy's span at "
+                                 "mla_sm100/spec.py's declarations (mla_sm100.segment_span()), not a caller's choice.")
+        elif type(seg_tokens) is not int or seg_tokens <= 0 or seg_tokens % 128:
             # Reject invalid spans before recording them in the execution digest.
             raise refuse(op, site=site, asked={"seg_tokens": seg_tokens},
                          on_offer="a positive multiple of 128",
                          why="seg_tokens is the span the SEG-tree merges over, not a capacity knob.")
-        from isoexec.ops.attention.mla_trainer import mla_core_segtree
-        from isoexec.ops._dispatch import current_arch
 
         return resolution(op, impl, mla_core_segtree(seg_tokens, arch=current_arch()), provider="ops.attention", site=site,
                           inputs={"seg_tokens": int(seg_tokens)})

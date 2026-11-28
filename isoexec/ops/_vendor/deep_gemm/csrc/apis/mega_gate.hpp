@@ -68,9 +68,8 @@ static void bf16_mega_gate_isoexec(const torch::Tensor& x,
                                    const float& routed_scaling_factor,
                                    const int& forced_num_split_k,
                                    const int& forced_num_mma_ctas) {
-    constexpr int kHiddenAlignment = 256, kNumMaxRoutedExperts = 512, kNumMaxSlots = 32;
-    DG_STATIC_ASSERT(kHiddenAlignment == static_cast<int>(mega_gate_layout::kNumSegments * mega_gate_layout::BLOCK_K),
-                     "The hidden alignment is the segment count times the K block");
+    constexpr int kHiddenAlignment = static_cast<int>(mega_gate_layout::kNumSegments * mega_gate_layout::BLOCK_K);
+    constexpr int kNumMaxRoutedExperts = 512, kNumMaxSlots = 32;
     const auto [num_tokens, hidden] = get_shape<2>(x);
     const auto num_routed_experts = static_cast<int>(weight.size(0));
     DG_HOST_ASSERT(hidden > 0 and hidden % kHiddenAlignment == 0);

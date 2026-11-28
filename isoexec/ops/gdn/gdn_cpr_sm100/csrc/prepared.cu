@@ -526,8 +526,7 @@ __global__ __launch_bounds__(THREADS / SPLIT) void gdn_prep_b(Params p, PrepRef 
       for (int x = tid; x < (open.jf - r0) * 16; x += NT) {
         const int i = r0 + (x >> 4), c = x & 15;
         *reinterpret_cast<float4 *>(p.st.pb(so, h) + (i - pb0) * C + c * 4) =
-            *reinterpret_cast<const float4 *>(reinterpret_cast<const float *>(cy + Carry::P) +
-                                              (i - pb0) * C + c * 4);
+            p_row_chunk(reinterpret_cast<const float *>(cy + Carry::P) + (i - pb0) * C + c * 4, c, pb0);
       }
     }
   }

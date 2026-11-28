@@ -32,11 +32,10 @@ TWIN_CLAIMS = {
 #: The EP 1/2/4 battery for ``KORDER`` on SM100 (NCCL, the 35B layer).
 EP_BATTERY = "isoexec/ops/moe/moe_sm100/tests/test_ep_korder_gpu.py"
 
-#: The class whose other member is SM90's, recorded in TWIN_PROOFS instead of on the record.
-#: The id that computes it, named so the cross-arch claim has colocated evidence too.
-CROSS_ARCH_CLAIMS = {
-    "sm100_fused_topk_v1": spec.SORTED_TOPK,
-}
+#: Classes whose other member is SM90's, recorded in TWIN_PROOFS instead of on the record. None since
+#: ``sm100_fused_topk_v2``: its selected-set sum is the schedule policy's ascending-id chain, sm90's is
+#: the half fold, so the two routers' weights are not one program and the claim was withdrawn.
+CROSS_ARCH_CLAIMS: dict = {}
 
 
 def test_package_declares_sm100_only():
@@ -143,7 +142,7 @@ def test_expert_mlp_declares_its_caller_inputs():
 
 
 @pytest.mark.parametrize(
-    "cls", [spec.SORTED_TOPK, spec.KORDER, spec.SEGMENT_TREE_GLU]
+    "cls", [spec.KORDER, spec.SEGMENT_TREE_GLU]
 )
 def test_every_twin_class_names_this_package_battery(cls):
     assert cls in TWIN_PROOFS, cls
@@ -244,7 +243,91 @@ def test_the_expert_mlp_seam_is_wired_to_the_declared_id():
 
 
 def test_importing_the_package_builds_nothing():
-    """The extension is built on the first call, never on import."""
-    import isoexec.ops.moe.moe_sm100._extension as ext
+    """The extension is built on the first call, never on import. A fresh interpreter: in this one an earlier
+    test of the session may have built it."""
+    import subprocess
+    import sys
 
-    assert ext.extension.cache_info().currsize == 0
+    code = ("import isoexec.ops.moe.moe_sm100, isoexec.ops.moe.moe_sm100.ops;"
+            "import isoexec.ops.moe.moe_sm100._extension as ext;"
+            "assert ext.extension.cache_info().currsize == 0")
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+# ------------------------------------------------------------ the schedule is the policy's output
+
+_MOE_FIXTURES = (
+    "isoexec/models/qwen3_5_moe/tests/fixtures/qwen3_5_35b_a3b.json",
+    "isoexec/models/qwen3_moe/tests/fixtures/qwen3_30b_a3b.json",
+    "isoexec/models/qwen2_moe/tests/fixtures/qwen1_5_moe_a2_7b.json",
+)
+
+
+def _deployed_moe_shapes():
+    """(hidden, routed intermediate, shared intermediate or 0, top_k) of every MoE model fixture in the tree."""
+    import json
+
+    out = []
+    for rel in _MOE_FIXTURES:
+        with open(os.path.join(_REPO_ROOT, rel)) as fh:
+            raw = json.load(fh)
+        cfg = raw.get("text_config", raw)
+        out.append((int(cfg["hidden_size"]), int(cfg["moe_intermediate_size"]),
+                    int(cfg.get("shared_expert_intermediate_size") or 0), int(cfg["num_experts_per_tok"])))
+    return out
+
+
+def test_the_schedule_is_the_schedule_policy_on_the_deployed_shapes():
+    """Fails if a segment count, a segment length or a merge of this operator differs from
+    ``isoexec/ops/schedule_policy.py`` on the models the tree ships."""
+    from isoexec.ops import schedule_policy as P
+    from isoexec.ops.moe.moe_sm100 import ops
+    from isoexec.runtimes.trainer_installs import PIK_LEAVES
+
+    assert ops.REDUCER_BLOCK == 16 and ops.REDUCER_SHORTEST is None
+    # rule 2: the selected-set sum and the combine
+    assert ops.SELECTED == P.selected() == P.Segments(1, None, "chain")
+    shapes = _deployed_moe_shapes()
+    assert shapes
+    for hidden, routed, shared, top_k in shapes:
+        # rule 3, the hidden axis (route_score, fc1): never sharded, one segment
+        fc1 = ops.projection_schedule(hidden)
+        assert fc1 == P.reduce(hidden, b=16) == P.Segments(hidden, 1, "tree"), hidden
+        # rule 3, the intermediate axis (fc2): d_max shards of one segment each; the tree's declared d_max
+        # is the leaf count (ISOEXEC_PIK_LEAVES / Placement.leaves, 8 by default)
+        for inter in filter(None, (routed, shared)):
+            for d_max in (1, 2, 4, 8):
+                if inter % (8 * d_max):
+                    continue
+                shard = ops.projection_schedule(inter, d_max)
+                assert shard == P.reduce(inter // d_max, b=16) and shard.G == 1, (inter, d_max)
+                assert ops.fc2_leaves(inter, d_max) == d_max
+        assert ops.fc2_leaves(routed, PIK_LEAVES) == PIK_LEAVES == 8
+        assert 1 <= top_k <= 32
+    import inspect
+
+    for fn in (ops.fc2, ops.experts, ops.moe, ops.routed_forward):
+        assert inspect.signature(fn).parameters["leaves"].default == PIK_LEAVES, fn.__name__
+    with pytest.raises(ValueError):
+        ops.projection_schedule(512, 3)            # a degree that is not a power of two is refused
+
+
+def test_the_kernel_source_runs_the_rule_2_chain():
+    """``csrc/route.cu``: the selected-set sum is a chain in ascending expert id (from +0; the half fold of v1
+    is gone) and the combine a chain in canonical slot order that starts from the first slot, taken as is. A
+    source check, because the order is code and not a parameter; the bits are gated by ``moe_relations_gpu.py``
+    (router phase, combine phase)."""
+    with open(os.path.join(_REPO_ROOT, "isoexec/ops/moe/moe_sm100/csrc/route.cu")) as fh:
+        src = fh.read()
+    assert "halffold_sum" not in src and "chain_sum" not in src
+    start = src.index("__device__ __forceinline__ float selected_sum(")
+    body = src[start:src.index("//: THE SELECTED-SET WEIGHTS", start)]
+    assert "lower += pick[l] < pick[j]" in body and "float acc = 0.f;" in body and "__fadd_rn(acc, term)" in body
+    assert src.count("selected_sum<K, BK>(sel, pick)") == 2          # softmax_renorm and sigmoid
+    kernel = src[src.index("void combine_kernel("):src.index("void combine_kernel(") + 3200]
+    # both paths start the chain from slot 0 as is and add slots 1.. in order; no +0 seed (-0 + -0 stays -0)
+    assert "acc[i] = v[0][i];" in kernel and "for (int j = 1; j < KT; ++j)" in kernel
+    assert "load(0, acc);" in kernel and "int j = 1;" in kernel
+    assert "0.f;" not in kernel.replace("col + i < hidden ? src[i] : 0.f;", "")
+    assert spec.SM100_SELECTED_SUM == "ascending_expert_chain_from_zero"
+    assert spec.SM100_COMBINE_ORDER == "ascending_expert_then_slot"

@@ -1,4 +1,4 @@
-"""Recipe 3 (sm100_dsa_sparse_dualrail_sink_v1) through this package's sink attention: forward and backward vs
+"""Recipe 3 (sm100_sparse_dualrail_sink_v1) through this package's sink attention: forward and backward vs
 float64 autograd, the backward deterministic, and recipe 3 close to recipe 1 (different rounding programs)."""
 import pytest
 import torch

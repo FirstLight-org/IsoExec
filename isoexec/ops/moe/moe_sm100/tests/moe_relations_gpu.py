@@ -10,6 +10,7 @@ import torch
 
 from isoexec.core.arch import live_device_arch
 from isoexec.ops.moe.moe_sm100.tests._program import (
+    selected_sum_reference,
     biteq,
     canonical_plan,
     combine_reference,
@@ -64,16 +65,17 @@ def make_weights(E, H, I, device, dtype, seed):
     return gu, dn, rw
 
 
-def _sum_shape_diagnosis(selected: torch.Tensor, got: torch.Tensor) -> str:
+def _sum_shape_diagnosis(selected: torch.Tensor, got: torch.Tensor, indices: torch.Tensor) -> str:
     """Which fp32 summation tree over the selected scores reproduces ``got``."""
     m = torch.amax(selected, dim=-1, keepdim=True)
     e = torch.exp(selected - m)
     k = e.shape[-1]
-    variants = {"torch.sum": torch.sum(e, dim=-1, keepdim=True)}
+    variants = {"torch.sum": torch.sum(e, dim=-1, keepdim=True),
+                "ascending-id chain from +0 (schedule policy rule 2)": selected_sum_reference(e, indices)}
     chain = e[..., :1].clone()
     for j in range(1, k):
         chain = chain + e[..., j : j + 1]
-    variants["ascending chain"] = chain
+    variants["selection-order chain"] = chain
     fold = e.clone()
     width = k
     while width > 1:
@@ -81,7 +83,7 @@ def _sum_shape_diagnosis(selected: torch.Tensor, got: torch.Tensor) -> str:
         fold = fold[..., :width] + fold[..., width : 2 * width]
     variants["power-of-two half fold"] = fold[..., :1]
     hits = [name for name, total in variants.items() if biteq(got, (e / total).contiguous())]
-    return f"kernel matches: {hits or 'none of torch.sum / chain / half-fold'}"
+    return f"kernel matches: {hits or 'none of torch.sum / id chain / selection chain / half-fold'}"
 
 
 # --------------------------------------------------------------------------- router ---
@@ -96,13 +98,24 @@ def router_relations(ops, device):
         idx, probs = ops.route_mechanics(logits, k)
         clean = torch.where(torch.isnan(logits), torch.full_like(logits, float("-inf")), logits)
         rv, ri = stable_topk(clean, k)
-        rp = softmax_rows(rv)
+        # The declared program: amax, exp, the selected-set sum as the schedule policy's rule-2 chain
+        # (ascending expert id, from +0), one IEEE divide. NOT ``softmax_rows`` (torch.sum's half fold in
+        # selection order), which was this kernel's v1 program and is still sm90's.
+        ev = torch.exp(rv - torch.amax(rv, dim=-1, keepdim=True))
+        rp = (ev / selected_sum_reference(ev, ri)).contiguous()
         check(f"selection E={E} k={k}", torch.equal(idx, ri))
         ok = biteq(probs, rp)
         # The selected-set sum's shape is the one thing a transcription can get wrong without
         # any visible error, so when it disagrees say WHICH tree the kernel implemented. Naming
         # the disagreement is what turns a failure into a one-line fix.
-        check(f"probabilities E={E} k={k} bitwise", ok, _sum_shape_diagnosis(rv, probs))
+        check(f"probabilities E={E} k={k} bitwise", ok, _sum_shape_diagnosis(rv, probs, ri))
+        # accuracy against the fp64 softmax over the selected, old (half fold) and new (id chain) programs
+        ref64 = torch.softmax(rv.double(), -1)
+        fin = torch.isfinite(ref64).all(-1) & torch.isfinite(probs).all(-1)
+        if bool(fin.any()):
+            new_err = (probs.double() - ref64)[fin].abs().max().item()
+            old_err = (softmax_rows(rv).double() - ref64)[fin].abs().max().item()
+            print(f"         max abs error vs fp64, E={E} k={k}: id chain {new_err:.3e}, half fold {old_err:.3e}")
 
     print("router: selection under +inf and NaN (integer ids, not NaN payloads)")
     for E, k in ((64, 4), (256, 8)):
@@ -122,7 +135,7 @@ def router_relations(ops, device):
     keyed = torch.where(torch.isnan(keyed), torch.full_like(keyed, float("-inf")), keyed)
     _, ri = stable_topk(keyed, k)
     selected = torch.gather(scores, -1, ri.long())
-    rp = (selected / (selected.sum(-1, keepdim=True) + 1e-20)) * scale
+    rp = (selected / (selected_sum_reference(selected, ri) + 1e-20)) * scale
     check("sigmoid/no-aux selection", torch.equal(idx, ri))
     check("sigmoid/no-aux probabilities bitwise", biteq(probs, rp.contiguous()))
 
@@ -484,7 +497,7 @@ def main(argv=None) -> int:
     # This battery is the named proof for these classes on this arch. Running it where the
     # registry does not cite it would produce evidence nothing reads, so fail loudly.
     mine = "isoexec/ops/moe/moe_sm100/tests/moe_relations_gpu.py"
-    for cls in ("moe.route.sorted_topk", "moe.combine.korder_fp32", "moe.expert_mlp.segment_tree_glu"):
+    for cls in ("moe.combine.korder_fp32", "moe.expert_mlp.segment_tree_glu"):
         if cls not in TWIN_PROOFS:
             print(f"FAIL: twin class {cls!r} is not declared in core/registry.TWIN_PROOFS")
             return 1

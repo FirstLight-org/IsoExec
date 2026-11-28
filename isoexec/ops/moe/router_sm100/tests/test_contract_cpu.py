@@ -7,18 +7,23 @@ from isoexec.ops.moe.router_sm100 import reference as R, spec
 
 def test_spec_constants():
     assert spec.ARCH == "sm100"
-    assert spec.IMPL_GROUPED == "sm100_route_grouped_v1"
-    assert spec.IMPL_SQRTSOFTPLUS == "sm100_route_sqrtsoftplus_v1"
+    assert spec.IMPL_GROUPED == "sm100_route_grouped_v2"
+    assert spec.IMPL_SQRTSOFTPLUS == "sm100_route_sqrtsoftplus_v2"
+    assert spec.IMPL_BACKWARD == "sm100_route_bwd_v2"
     assert spec.TABLE_SLOT_ORDER == "ascending_global_expert_id"
-    assert all(h // 64 % s == 0 for h, s in spec.LOGIT_SEGMENTS.items())
+    assert all(spec.logit_segments(h) == 1 for h in (2048, 4096, 5120, 7168))
     assert spec.SEG_T % 16 == 0
 
 
 def test_ops_import_builds_nothing():
-    import isoexec.ops.moe.router_sm100.ops as ops  # noqa: F401
-    from isoexec.ops.moe.router_sm100 import _extension
+    """A fresh interpreter: in this one an earlier test of the session may have built the extension."""
+    import subprocess
+    import sys
 
-    assert _extension.extension.cache_info().currsize == 0
+    code = ("import isoexec.ops.moe.router_sm100.ops;"
+            "from isoexec.ops.moe.router_sm100 import _extension;"
+            "assert _extension.extension.cache_info().currsize == 0")
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_reference_backward_cpu_matches_autograd_in_float64():

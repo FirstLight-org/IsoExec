@@ -731,7 +731,7 @@ __device__ void wy_chunk(const Params &p, SM &sm, const ChunkGeo &g, int h, int 
       for (int x = tid; x < (open.jf - r0) * 16; x += THREADS) {
         const int i = r0 + (x >> 4), c = x & 15;
         *reinterpret_cast<float4 *>(p.st.pb(so, h) + (i - pb0) * C + c * 4) =
-            *reinterpret_cast<const float4 *>(sm.P() + (i - pb0) * C + c * 4);
+            p_row_chunk(sm.P() + (i - pb0) * C + c * 4, c, pb0);
       }
     }
   }

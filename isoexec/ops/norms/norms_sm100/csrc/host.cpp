@@ -76,6 +76,9 @@ struct FwdOut {
 
 FwdOut rms_forward(const Tensor &x, const std::optional<Tensor> &r, const std::optional<Tensor> &w,
                    double eps, int mode) {
+  // The RMS kernels have no no-weight instance (launch_rms_fwd takes modes 1..3, each reads w): refuse
+  // here, before any launch, as the public rms_norm / add_rms_norm do. (Gated norm has mode 0.)
+  TORCH_CHECK(w.has_value() && w->defined(), "norms_sm100: rms norm requires a weight (got None)");
   int64_t n = x.size(-1);
   const c10::cuda::CUDAGuard guard(x.device());
   Tensor x2 = rows(x, n, "x"), r2, w2 = weight(w, n);
@@ -98,6 +101,8 @@ FwdOut rms_forward(const Tensor &x, const std::optional<Tensor> &r, const std::o
 std::pair<Tensor, Tensor> rms_backward(const Tensor &dy, const Tensor &x, const Tensor &rstd,
                                        const Tensor &w, const Tensor &dres, int mode,
                                        int64_t max_bands) {
+  // launch_rms_bwd takes modes 1..2, each reads w: refuse a missing weight before any launch.
+  TORCH_CHECK(w.defined(), "norms_sm100: rms norm backward requires a weight (got None)");
   int64_t n = x.size(-1);
   const c10::cuda::CUDAGuard guard(x.device());
   activate(x);

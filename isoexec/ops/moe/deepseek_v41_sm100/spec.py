@@ -15,13 +15,20 @@ from isoexec.core.registry import ImplSpec
 ARCH = "sm100"
 OP = "moe.deepseek_v41"
 ROUTE_OP = "moe.deepseek_v41.route"
-IMPL = "sm100_deepseek_v41_bf16_actor_v1"
+#: v2 of the impl: the same recipe (``RECIPE`` names the program family) on the schedule policy's schedule
+#: (``isoexec/ops/schedule_policy.py``): router logits ONE chain over the hidden axis (v1: 4 segments and a tree),
+#: renormaliser the rule-2 chain in ascending expert id from +0 (v1: a half fold in selection-rank order).
+#: FC1 / FC2 were one chain already, and the combine is v1's: the rule-2 chain in ascending expert id that
+#: starts from the first contribution, taken as is.
+IMPL = "sm100_deepseek_v41_bf16_actor_v2"
 RECIPE = "deepseek_v41_bf16_actor_v1"
 ROUTING = "sqrtsoftplus_bias_select"
+#: Leaves of FC2's tree: d_max shards of the policy's one segment. The intermediate axis is not sharded in this
+#: recipe (TP shards FC2's output columns, EP shards experts), so d_max = 1.
 FC2_LEAVES = 1
 
 IMPLS: tuple[ImplSpec, ...] = (
-    ImplSpec(op=OP, impl_id=IMPL, version=1, supported_archs=frozenset({ARCH})),
+    ImplSpec(op=OP, impl_id=IMPL, version=2, supported_archs=frozenset({ARCH})),
 )
 
 __all__ = ["ARCH", "FC2_LEAVES", "IMPL", "IMPLS", "OP", "RECIPE", "ROUTE_OP", "ROUTING"]

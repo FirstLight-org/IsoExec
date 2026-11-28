@@ -20,8 +20,8 @@ def resolve(op: str, *, site: str, **unused: Any):
         from isoexec.ops.mm.mm_sm100 import segments
         from isoexec.ops.mm.sm100 import mm_linear
         return resolution(op, "sm100_tcgen05_segtree", mm_linear, provider="ops.mm.mm_sm100", site=site,
-                          inputs={"segment_table_digest": segments.table_digest(),
-                                  "segment_policy_version": segments.POLICY_VERSION})
+                          inputs={"schedule_digest": segments.schedule_digest(),
+                                  "schedule_policy_version": segments.schedule_policy.VERSION})
     from isoexec.ops.mm.trainer import mm_trainer, pin_recorded_impl
 
     impl = pin_recorded_impl()

@@ -4,8 +4,7 @@ Nothing here builds a kernel or touches a device. What it pins:
 
 * the recipe's declarations, its twin class and the batteries that prove it;
 * the dispatch row selecting this package on SM100 and the trainer core it resolves to;
-* the SEG table -- every entry a multiple of the KV tile width, monotone in max_context, resolved
-  to the smallest row at or above a declared context -- and the recipe's fixed SEG;
+* the recipe's fixed SEG (the schedule policy's; test_schedule_policy_cpu.py pins how it is derived);
 * the canonical adjacent-pair tree and ``node_size_at``, against an independent recomputation, so a
   change to the tree shape fails here before it reaches a GPU;
 * that importing the package builds nothing and loads no vendored backward.
@@ -15,7 +14,6 @@ from __future__ import annotations
 
 import math
 import sys
-from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -32,10 +30,10 @@ def test_the_package_declares_both_cores_in_one_twin_class():
     impls = reg.ops["attention.core.gqa"].impls
     assert set(impls) == {spec.TRAINER_IMPL, spec.PAGED_IMPL}
     for impl in impls.values():
-        assert impl.version == spec.RECIPE_VERSION == 2
+        assert impl.version == spec.RECIPE_VERSION == 3
         assert impl.supported_archs == frozenset({"sm100"})
         assert impl.twin_class == spec.TWIN_CLASS
-        assert not impl.inputs  # SEG is the recipe's (SEG_CONTEXT), not a caller's
+        assert not impl.inputs  # SEG is the recipe's (spec's declarations), not a caller's
     root = Path(__file__).resolve().parents[5]
     batteries = runnable_batteries(spec.TWIN_CLASS)
     assert all((root / p).is_file() for p in batteries), TWIN_PROOFS[spec.TWIN_CLASS]
@@ -59,7 +57,7 @@ def test_resolution_binds_the_trainer_core_on_sm100(monkeypatch):
     monkeypatch.setattr(_dispatch, "ARCH", "sm100")
     assert set(build_registry().get_op("attention.core.gqa").impls) == {spec.TRAINER_IMPL, spec.PAGED_IMPL}
     bound = resolve("attention.core.gqa", site="t")
-    assert (bound.impl, bound.version, bound.provider) == (spec.TRAINER_IMPL, 2, "ops.attention.gqa_sm100")
+    assert (bound.impl, bound.version, bound.provider) == (spec.TRAINER_IMPL, 3, "ops.attention.gqa_sm100")
     assert bound.fn is integration.trainer_core
     assert integration.PAGED_IMPL == spec.PAGED_IMPL
 
@@ -73,8 +71,8 @@ def test_the_engine_cache_contract():
 
 def test_the_recipe_reads_one_seg_per_head_dim():
     assert spec.HEAD_DIMS == ops.HEAD_DIMS == (128, 256)
-    assert {d: ops.segment_span(d) for d in spec.HEAD_DIMS} == {128: 2048, 256: 2048}
-    assert ops.segment_span(256) == ops.SEG_TOKENS[(256, spec.SEG_CONTEXT)]
+    assert {d: ops.segment_span(d) for d in spec.HEAD_DIMS} == {128: 10240, 256: 10240}
+    assert ops.segment_span(256) == ops.seg_for(256, spec.LONGEST_CONTEXT)
 
 
 def test_arch_and_tile_width():
@@ -89,33 +87,6 @@ def test_leaf_choices_mirror_the_kernel():
     kernel = {name: int(value) for name, value in re.findall(r"\b(LEAF_\w+|DECODE_ROWS) = (\d+)", params)}
     assert kernel == {"LEAF_AUTO": ops.LEAF_AUTO, "LEAF_GENERAL": ops.LEAF_GENERAL, "LEAF_DECODE": ops.LEAF_DECODE,
                       "DECODE_ROWS": ops.DECODE_ROWS}
-
-
-def test_seg_table_rows_are_multiples_of_the_tile_width():
-    assert ops.SEG_TOKENS, "the SEG table is part of the op's identity and may not be empty"
-    for (head_dim, context), seg in ops.SEG_TOKENS.items():
-        assert head_dim in (128, 256), head_dim
-        assert seg > 0 and seg % ops.KEY_TILE == 0, (head_dim, context, seg)
-        assert seg <= context, "a segment may not be longer than the context it serves"
-        assert (seg & (seg - 1)) == 0, "the table keeps SEG a power of two so n_max is exact"
-
-
-def test_seg_table_is_monotone_in_context():
-    for head_dim in (128, 256):
-        rows = sorted((c, s) for (d, c), s in ops.SEG_TOKENS.items() if d == head_dim)
-        assert rows, head_dim
-        for (c0, s0), (c1, s1) in pairwise(rows):
-            assert s1 >= s0, f"SEG must not shrink as max_context grows: {c0}->{c1}"
-
-
-def test_seg_for_resolves_to_the_row_at_or_above_the_declared_context():
-    assert ops.seg_for(128, 8192) == ops.SEG_TOKENS[(128, 8192)]
-    assert ops.seg_for(128, 6000) == ops.SEG_TOKENS[(128, 8192)]
-    assert ops.seg_for(128, 2048) == ops.SEG_TOKENS[(128, 2048)]
-    with pytest.raises(ValueError):
-        ops.seg_for(128, 1 << 30)
-    with pytest.raises(ValueError):
-        ops.seg_for(64, 8192)
 
 
 def test_segment_bounds_are_anchored_at_key_zero():

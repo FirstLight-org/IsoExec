@@ -1,10 +1,10 @@
-"""The trainer sparse-attention backward (``ops._SinkFn``: compact lists + ``dsa_sparse_attn_bwd`` + ``sink_grad``)
+"""The trainer sparse-attention backward (``ops._SinkFn``: compact lists + ``sparse_attn_bwd`` + ``sink_grad``)
 is invariant to batch composition and row chunking, and bitwise run to run.
 
 Relations (equalities on integer views):
 * batch composition (informational, xfail: backward kernels need run-to-run determinism only): a sequence's dq rows and dkv rows are the same bits alone and at every position of a
   microbatch of B = 2 / 3 sequences (T not a multiple of any chunk or block size);
-* chunking: ``dsa_sparse_attn_bwd`` with forced chunks of 1, 7, 64, 1000 rows == the default plan (dq, dkv);
+* chunking: ``sparse_attn_bwd`` with forced chunks of 1, 7, 64, 1000 rows == the default plan (dq, dkv);
 * run to run: dq, dkv, dsink x 5;
 * accuracy: dq, dkv, dsink against a float64 reference (relative L2 < 0.015).
 """
@@ -84,15 +84,15 @@ def test_batch_composition(ratio):
 
 
 def test_chunking_and_repeat():
-    from isoexec.ops.attention.dsa_sm100.bwd import dsa_sparse_attn_bwd
+    from isoexec.ops.attention.sparse_sm100.bwd import sparse_attn_bwd
     s = _seq(7, 777, 2)
     sink = _sink()
     q, dO, kv, lists = _batch([s])
     out, lse = ops.sink_forward(q, kv, lists, sink, SCALE, 3)
     compact = extension().compact_lists(lists)
-    ref = dsa_sparse_attn_bwd(q, kv, compact, out, lse, dO, SCALE, recompute_delta=True)
+    ref = sparse_attn_bwd(q, kv, compact, out, lse, dO, SCALE, recompute_delta=True)
     for chunk in (1, 7, 64, 1000):
-        got = dsa_sparse_attn_bwd(q, kv, compact, out, lse, dO, SCALE, recompute_delta=True, chunk=chunk)
+        got = sparse_attn_bwd(q, kv, compact, out, lse, dO, SCALE, recompute_delta=True, chunk=chunk)
         assert torch.equal(_bits(got[0]), _bits(ref[0])), chunk
         assert torch.equal(_bits(got[1]), _bits(ref[1])), chunk
     first = _grads(q, dO, kv, lists, sink)

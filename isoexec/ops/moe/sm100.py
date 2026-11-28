@@ -172,8 +172,8 @@ def resolve_sm100(op, *, site, routing, side, weight_after_fc2=False):
             fn = engine_shared_expert_owner(fn, mm=mm_linear, gate_mm=mm_vendored)
         return resolution(op, integration.SHARED_IMPL, fn, provider=provider, site=site)
     if op == "moe.route_mechanics":
-        impl = {"softmax_renorm": "sm100_fused_topk_v1",
-                "sigmoid_noaux_bias_select": "sm100_sigmoid_noaux_bias_select_v1"}.get(routing)
+        impl = {"softmax_renorm": "sm100_fused_topk_v2",
+                "sigmoid_noaux_bias_select": "sm100_sigmoid_noaux_bias_select_v2"}.get(routing)
         if impl is not None:
             return resolution(op, impl, mechanics(routing), provider=provider, site=site)
     if op == "moe.combine":

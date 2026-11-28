@@ -13,10 +13,11 @@ host sync for the expert row offsets and one GEMM launch per expert). Each state
   ``torch.sum`` over the row (a fixed order for a fixed shape; not a declared tree).
 * ``dgrad``  per expert ``dX_e = dY_e @ W_e`` (bf16 x bf16 -> fp32) on ``mm_sm100/general``: one ascending K
   chain per output at the V4.1 shapes (K = hidden 5120 or 2 x expert width 4608, below the 16384 at which
-  ``general``'s K-segment rule first splits a row-major B).
+  ``general``'s published min_segment = 8192 first gives two segments under the schedule policy's rule 3).
 * ``wgrad``  per expert ``dW_e = dY_e^T @ X_e``: the token axis zero-padded to a multiple of 64 (exact zero
-  products), reduced by ``mm_sm100/general``'s K-segment tree (``sm100_tcgen05_ksegtree_v1``: segments of at
-  least 8192 tokens, balanced adjacent-pair fold, FP32 root).
+  products), reduced by ``mm_sm100/general``'s K-segment tree (``sm100_tcgen05_ksegtree_v1``: the schedule
+  policy's rule 3 on the kernel's published min_segment = 8192 and max_segments 16 -- segments of at least
+  8192 tokens, balanced adjacent-pair fold, FP32 root).
 * ``fold_rows``  moe_sm100's combine program (one fp32 chain per token over its rows in canonical slot
   order, one bf16 rounding).
 

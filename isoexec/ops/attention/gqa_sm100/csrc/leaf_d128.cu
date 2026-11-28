@@ -667,12 +667,12 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
             // transitively implies K(g+1) has landed.
             if (lane == 0) {
                 bar_wait(&loaded_q[0], 0);
-                arrive_local(&query_ready[0]);
+                arrive_local_release(&query_ready[0]);
                 bar_wait(&loaded_k[0], 0);
-                arrive_local(&keys_ready[0]);
+                arrive_local_release(&keys_ready[0]);
                 if constexpr (WAVES > 1) {
                     bar_wait(&loaded_q[1], 0);
-                    arrive_local(&query_ready[1]);
+                    arrive_local_release(&query_ready[1]);
                 }
             }
             for (int ordinal = 1; ordinal < 2 * total; ++ordinal) {
@@ -682,7 +682,7 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
                 if (is_key) {
                     if (lane == 0) {
                         bar_wait(&loaded_k[slot], phase);
-                        arrive_local(&keys_ready[slot]);
+                        arrive_local_release(&keys_ready[slot]);
                     }
                     continue;
                 }
@@ -711,6 +711,7 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
             bar_wait(&query_ready[0], 0);
             {
                 bar_wait(&keys_ready[0], 0);
+                asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                 qk_sequence128(tmem + uint32_t(score_column(0)), descriptor(s.q[0], false),
                                descriptor(s.k[0], false), qk_instruction);
                 commit_one(&qk_done[0][0]);
@@ -726,6 +727,7 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
                     if (g + 1 < total) {
                         const int s_phase = (cycle + slot) & 1;
                         bar_wait(&keys_ready[slot ^ 1], s_phase);
+                        asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                         qk_sequence128(tmem + uint32_t(score_column(slot ^ 1)),
                                        descriptor(s.q[0], false), descriptor(s.k[slot ^ 1], false),
                                        qk_instruction);
@@ -735,8 +737,8 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
                     //: tile g -- its O rescale and its read of the stats lane -- which is what makes
                     //: the QK one iteration later into this slot safe (hazard (i)).
                     bar_wait(&probabilities[slot][0], cycle);
-                    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                     bar_wait(&values_ready[slot], cycle);
+                    asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                     const uint32_t probability = tmem + uint32_t(score_column(slot));
                     const uint64_t values = descriptor(s.v[slot], true);
                     pv_keys_0_63(out, probability, values, pv_instruction, u != 0);
@@ -755,10 +757,12 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
             //: -- the order of TileFoundry's port, verbatim.
             bar_wait(&query_ready[0], 0);
             bar_wait(&keys_ready[0], 0);
+            asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
             qk_sequence128(tmem + uint32_t(score_column(0)), descriptor(s.q[0], false),
                            descriptor(s.k[0], false), qk_instruction);
             commit_one(&qk_done[0][0]);
             bar_wait(&query_ready[1], 0);
+            asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
             qk_sequence128(tmem + uint32_t(score_column(1)), descriptor(s.q[1], false),
                            descriptor(s.k[0], false), qk_instruction);
             commit_one(&qk_done[1][0]);
@@ -770,8 +774,8 @@ __global__ __launch_bounds__(128 * WAVES + 256, 1) void gqa_leaf_d128(
                     #pragma unroll 1
                     for (int wave = 0; wave < WAVES; ++wave) {
                         bar_wait(&probabilities[wave][0], parity);
-                        asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                         bar_wait(&values_ready[slot], cycle & 1);
+                        asm volatile("tcgen05.fence::after_thread_sync;" ::: "memory");
                         const uint32_t out = tmem + uint32_t(slot_column<WAVES>(0, wave));
                         const uint32_t probability = tmem + uint32_t(score_column(wave));
                         const uint64_t values = descriptor(s.v[slot], true);

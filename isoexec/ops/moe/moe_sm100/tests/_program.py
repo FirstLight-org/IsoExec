@@ -62,6 +62,17 @@ def combine_reference(rows_fp32: torch.Tensor, combine_rows: torch.Tensor, dtype
     return acc.to(dtype)
 
 
+def selected_sum_reference(terms: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """The selected-set sum of ``route_mechanics`` (schedule policy rule 2): ``terms [T, k]`` in selection
+    order, their experts ``indices [T, k]``; one fp32 chain in ASCENDING EXPERT ID seeded with +0."""
+    order = torch.argsort(indices.to(torch.int64), dim=1, stable=True)
+    by_id = torch.gather(terms, 1, order)
+    acc = torch.zeros_like(by_id[:, :1])
+    for j in range(by_id.shape[1]):
+        acc = acc + by_id[:, j : j + 1]
+    return acc
+
+
 def biteq(a: torch.Tensor, b: torch.Tensor) -> bool:
     """Integer-view equality: a tolerance would not be a proof of anything here."""
     if a.shape != b.shape or a.dtype != b.dtype:

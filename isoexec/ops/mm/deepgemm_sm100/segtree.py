@@ -11,8 +11,8 @@
 
 So this is ``mm_sm100``'s cut-tree plan (one CTA per segment, ``COMBINE`` mode) executed by other kernels: the bits
 are those of ``mm_sm100`` at the same S (``segments.segment_count``), which the GPU gate compares at every M. S is the
-caller's: a fixed leaf count (``wo_b``'s TP leaves, the router's logit segments) or the weight's published
-segment count (1 for every K under mm_sm100 policy v4). Tile shape,
+caller's: a fixed leaf count (``wo_b``'s TP leaves, the router's logit segments) or the weight's
+segment count from the schedule policy (``mm_sm100.segments.segment_count``: 1 for every K). Tile shape,
 swap-AB and the CTA count are ownership only. Forward only (no autograd); the callers keep their incumbent
 paths under autograd.
 

@@ -25,12 +25,15 @@ static constexpr uint32_t kNumMaxLogicalCtas = 64;
 // Expert count granularity of the API (the selection itself is router_sm100's, see `epilogue/sm100_mega_gate.cuh`)
 static constexpr uint32_t kNumExpertsPerLaneVector = 4;
 
-// IsoExec router logits program: the hidden axis is cut into `kNumSegments` fixed segments (H / 4 each, whole
-// `BLOCK_K` blocks; `kHiddenAlignment = 256` makes it 4 for every admitted H). Segment g is ONE ascending tcgen05 chain
-// from zero in its own FP32 TMEM accumulator; the logit is the balanced adjacent-pair tree of the 4 segment roots,
-// ((s0 + s1) + (s2 + s3)), one __fadd_rn a node. A split-K slice owns `kNumSegments / num_split_k` whole segments
-// (folded in its epilogue: a subtree), the gate folds the slices (the tree's upper levels): the same tree for every split.
-static constexpr uint32_t kNumSegments = 4;
+// IsoExec router logits program: the hidden axis is cut into `kNumSegments` fixed segments (whole `BLOCK_K` blocks).
+// Segment g is ONE ascending tcgen05 chain from zero in its own FP32 TMEM accumulator; the logit is the balanced
+// adjacent-pair tree of the segment roots, one __fadd_rn a node. A split-K slice owns `kNumSegments / num_split_k`
+// whole segments (folded in its epilogue: a subtree), the gate folds the slices (the tree's upper levels).
+// THE COUNT IS THE SCHEDULE POLICY'S (`isoexec/ops/schedule_policy.py`, rule 3: a tensor-core sum publishes no
+// shortest segment, so one segment per shard): 1, i.e. one chain over the whole hidden axis, and K is never split.
+// `isoexec/ops/moe/router_sm100/ops.py::mega_gate_segments` reads this line and refuses the MegaGate path if it
+// differs from `schedule_policy.reduce(H, b = 16).G`; a CPU test compares the two.
+static constexpr uint32_t kNumSegments = 1;
 
 // TMEM budget: `kNumEpilogueStages` x segments-per-CTA accumulators share the 512 columns, `kNumMaxBlockTokens / SL`
 // columns each. A 128-expert group on a CTA pair holds `N / 2` columns per CTA (the token halves on the two lane

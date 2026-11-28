@@ -54,7 +54,7 @@ def _in_window(a, b, ke):
 def _random_q(rows, g):
     q = torch.randn((rows, 64, 128), generator=g, device="cuda") * 3
     q[:, 32:] = 0
-    from isoexec.ops.attention.dsa_sm100.tests._inputs import fp8_row_quantize
+    from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
     codes, sf = fp8_row_quantize(q)
     sf = sf.view(rows, 64).clone()
     sf[:, 32:] = ONE
@@ -64,7 +64,7 @@ def _random_q(rows, g):
 
 
 def _paged_keys(rows, width, g):
-    from isoexec.ops.attention.dsa_sm100.tests._inputs import fp8_row_quantize
+    from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
     pages = rows * (width // 64)
     k = torch.randn((pages, 64, 128), generator=g, device="cuda")
     kc, ks = fp8_row_quantize(k)
@@ -91,7 +91,7 @@ def test_canonical_equals_split_tp4_paged(rows, width):
 
 @pytest.mark.parametrize("rows,C", [(64, 640), (257, 1024)])
 def test_canonical_equals_split_tp4_contiguous(rows, C):
-    from isoexec.ops.attention.dsa_sm100.tests._inputs import fp8_row_quantize
+    from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
     g = torch.Generator(device="cuda").manual_seed(C)
     codes, sf, w = _random_q(rows, g)
     kc, ks = fp8_row_quantize(torch.randn((C, 128), generator=g, device="cuda"))
@@ -191,7 +191,7 @@ def test_index_weights_and_queries_through_the_real_mm(heads):
                     torch.zeros((64 - heads, cfg.hidden_size), dtype=torch.bfloat16, device="cuda")), 0).contiguous()
     assert torch.equal(w.view(torch.int16), ops.mm(x, wp)[:, :hs].view(torch.int16))
     if hs in (32, 64):
-        from isoexec.ops.attention.dsa_sm100.tests._inputs import fp8_row_quantize
+        from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
         kc, ks = fp8_row_quantize(torch.randn((640, 128), generator=g, device="cuda"))
         ke = torch.full((N,), 640, dtype=torch.int32, device="cuda")
         kv = dict(keys=(kc.view(torch.uint8).contiguous(), ks.contiguous()))

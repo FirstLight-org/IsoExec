@@ -12,10 +12,10 @@ SUB_RECIPES = {
     "pool": "deepseek_channel_softmax_pool_fp32_v1",     # channel_pool_sm100 scalar graph
     "mm": "sm100_tcgen05_segtree_v1",                     # mm/mm_sm100 (compressor, index k/weights)
     "grouped": "sm100_tcgen05_v1",                        # moe/moe_sm100 fc1: grouped wo_a (one K chain)
-    "indexer": "sm100_dsa_index_logits_dg_v1",            # dsa_sm100 (INDEX_FOLD): DeepGEMM's SM100 MQA logits fold
-    "topk": "sm100_dsa_topk_v1",                          # dsa_sm100
-    "sparse": "sm100_dsa_sparse_sink_v1",                 # dsa_sm100 learned-sink root, G = 1, fused epilogue
-    "sparse_bwd": "sm100_dsa_sparse_sink_bwd_v2",
+    "indexer": "sm100_dsa_index_logits_dg_v1",            # sparse_sm100 (INDEX_FOLD): DeepGEMM's SM100 MQA logits fold
+    "topk": "sm100_dsa_topk_v1",                          # sparse_sm100
+    "sparse": "sm100_sparse_sink_v1",                 # sparse_sm100 learned-sink root, G = 1, fused epilogue
+    "sparse_bwd": "sm100_sparse_sink_bwd_v2",
 }
 BACKWARD_RECIPE = "deepseek_v41_attn_bf16_actor_bwd_v1"
 

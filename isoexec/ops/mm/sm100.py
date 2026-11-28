@@ -11,7 +11,7 @@ class _SM100Mm(_MmFn):
         from isoexec.ops.mm.mm_sm100.ops import mm_sm100
         from isoexec.ops.mm.mm_sm100.segments import PITCH_ALIGN_N
 
-        ctx.save_for_backward(x, w)
+        _MmFn.setup_context_for_backward(ctx, x, w)
         n = w.shape[0]
         pad = -n % PITCH_ALIGN_N
         if pad:

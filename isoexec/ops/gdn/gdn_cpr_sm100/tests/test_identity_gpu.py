@@ -159,6 +159,59 @@ def test_trainer_forward_is_the_stateless_prefill():
             assert used.numel() == 0 or torch.isfinite(used).all(), name
 
 
+def _trainer_saves(d, monkeypatch, fill):
+    """`trainer_forward(save_states=True)` with every `torch.empty` buffer pre-filled with ``fill`` bytes."""
+    real_empty = torch.empty
+
+    def filled(*a, **kw):
+        t = real_empty(*a, **kw)
+        if t.numel():
+            t.view(torch.uint8).fill_(fill)
+        return t
+
+    with monkeypatch.context() as m:
+        m.setattr(torch, "empty", filled)
+        return G.trainer_forward(d["q"], d["k"], d["v"], d["a"], d["b"], d["A_log"], d["dt_bias"], d["cut"],
+                                 save_states=True)
+
+
+def test_the_trainer_saves_repeat_on_exactly_the_rows_the_forward_writes(monkeypatch):
+    """`h` has `T // 64 + N` rows and the forward writes `K = sum(ceil(len / 64))` of them.
+
+    Out of buffers pre-filled with 0x00 and with 0xFF: the output, every other save and `h[:K]` are
+    bit-identical, and `h[K:]` is still the fill -- those rows are not written (`ops.trainer_forward`
+    documents it), which is the whole of the run-to-run difference a raw comparison of `h` shows.
+    """
+    d = make([200, 64, 1, 129, 63], 4, 8, seed=33)
+    K = sum(-(-L // 64) for L in d["lanes"])
+    (o0, s0), (o1, s1) = _trainer_saves(d, monkeypatch, 0x00), _trainer_saves(d, monkeypatch, 0xFF)
+    assert s0["h"].size(0) == sum(d["lanes"]) // 64 + len(d["lanes"]) > K
+    assert biteq(o0, o1)
+    for name in s0:
+        if name == "h":
+            assert biteq(s0[name][:K], s1[name][:K])
+            assert bool((s0[name][K:].view(torch.uint8) == 0x00).all()), "h[K:] was written"
+            assert bool((s1[name][K:].view(torch.uint8) == 0xFF).all()), "h[K:] was written"
+        else:
+            assert biteq(s0[name], s1[name]), name
+
+
+def test_the_backward_does_not_read_the_rows_of_h_the_forward_leaves_unwritten(monkeypatch):
+    """The seven gradients are bit-identical whether `h[K:]` holds 0x00 or 0xFF (NaN in every element)."""
+    from isoexec.ops.gdn.gdn_cpr_sm100 import integration
+
+    d = make([200, 64, 1, 129, 63], 4, 8, seed=33)
+    do = (torch.randn(sum(d["lanes"]), 8, 128, device="cuda", generator=torch.Generator("cuda").manual_seed(5))
+          * 0.01).to(torch.bfloat16)
+    grads = []
+    for fill in (0x00, 0xFF):
+        _, saved = _trainer_saves(d, monkeypatch, fill)
+        grads.append(integration._fla_grads(saved, d["a"], d["b"], d["A_log"], d["dt_bias"], d["cut"], do))
+    for name, g0, g1 in zip(("q", "k", "v", "a", "b", "A_log", "dt_bias"), *grads):
+        assert torch.isfinite(g0.float()).all(), name
+        assert biteq(g0, g1), name
+
+
 def test_decode_only_stream_equals_one_prefill():
     """A sequence fed entirely one token at a time, across two chunk boundaries."""
     d = make([130], 4, 8, seed=77)

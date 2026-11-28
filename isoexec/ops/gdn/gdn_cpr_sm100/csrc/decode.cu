@@ -295,7 +295,7 @@ __global__ __launch_bounds__(DEC_THREADS) void gdn_decode_rec(Params p) {
       for (int x = tid; x < (jf - lo) * 16; x += DEC_THREADS) {
         const int i = lo + (x >> 4), c = x & 15;
         *reinterpret_cast<float4 *>(p.st.pb(so, h) + int64_t(i - pb0) * C + c * 4) =
-            *reinterpret_cast<const float4 *>(sm.P + (i - pb0) * C + c * 4);
+            p_row_chunk(sm.P + (i - pb0) * C + c * 4, c, pb0);
       }
     }
     if (tid >= r_first && tid < jf) {

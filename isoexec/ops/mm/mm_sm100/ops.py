@@ -66,7 +66,7 @@ def config_info(name: str) -> dict:
 
 
 def require_sm100() -> None:
-    """Refuse anywhere but a Blackwell device whose SM count the segment policy was written for."""
+    """Refuse anywhere but a Blackwell device whose SM count the planner was written for."""
     from isoexec.core.arch import live_device_arch
 
     arch = live_device_arch()
@@ -75,8 +75,8 @@ def require_sm100() -> None:
     live = extension().sm_count()
     if live != seg.TARGET_SM_COUNT:
         raise RuntimeError(
-            f"the sm100 mm segment policy is published for {seg.TARGET_SM_COUNT} SMs and this "
-            f"device has {live}; S would differ, so this is refused rather than served"
+            f"the sm100 mm planner is written for {seg.TARGET_SM_COUNT} SMs and this "
+            f"device has {live}; this is refused rather than served"
         )
 
 

@@ -15,8 +15,8 @@ import torch
 
 from isoexec.ops.attention.deepseek_v41_cache_sm100 import ops, paged
 from isoexec.ops.attention.deepseek_v41_cache_sm100.tests import test_paged_gpu as tpg
-from isoexec.ops.attention.dsa_sm100 import index_logits as il
-from isoexec.ops.attention.dsa_sm100.tests._inputs import fp8_row_quantize
+from isoexec.ops.attention.indexer_sm100 import index_logits as il
+from isoexec.ops.attention.sparse_sm100.tests._inputs import fp8_row_quantize
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
 

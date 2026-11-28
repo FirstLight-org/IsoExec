@@ -325,39 +325,37 @@ __global__ __launch_bounds__(32, 8) void score_thread_kernel(const T *__restrict
 
 // --------------------------------------------------------------- route_mechanics ---
 
-//: torch.sum over a length-BK contiguous last dim: the power-of-two half-fold tree.
-template <int BK> __device__ __forceinline__ float halffold_sum(float (&v)[BK]) {
-  float a[BK];
+//: THE selected-set sum. Schedule policy rule 2 (``isoexec/ops/schedule_policy.py`` ``selected()``): a sum over
+//: data-selected coordinates is ONE SEGMENT PER COORDINATE, chained in ASCENDING EXPERT ID from +0. ``v[j]`` is
+//: the term of expert ``pick[j]`` and ``pick`` is in selection order; the chain visits the terms by the rank of
+//: their id, so the sum does not depend on the selection order or on which rank holds which expert. One line,
+//: one place: ``moe_relations_gpu.py``'s router phase compares the weights against this chain.
+template <int K, int BK>
+__device__ __forceinline__ float selected_sum(const float (&v)[BK], const int (&pick)[K]) {
+  int rank[K];
 #pragma unroll
-  for (int i = 0; i < BK; ++i)
-    a[i] = v[i];
+  for (int j = 0; j < K; ++j) {
+    int lower = 0;
 #pragma unroll
-  for (int w = BK / 2; w >= 1; w /= 2)
+    for (int l = 0; l < K; ++l)
+      lower += pick[l] < pick[j];
+    rank[j] = lower;
+  }
+  float acc = 0.f;
 #pragma unroll
-    for (int i = 0; i < w; ++i)
-      a[i] = __fadd_rn(a[i], a[i + w]);
-  return a[0];
-}
-
-//: the same length-BK sum as an ascending chain, kept beside the fold because torch.sum over a
-//: short contiguous last dim on CUDA is the authority and the battery names which one it is.
-template <int BK> __device__ __forceinline__ float chain_sum(float (&v)[BK]) {
-  float a = v[0];
+  for (int s = 0; s < K; ++s) {
+    float term = 0.f;
 #pragma unroll
-  for (int i = 1; i < BK; ++i)
-    a = __fadd_rn(a, v[i]);
-  return a;
-}
-
-//: THE selected-set sum. One line, one place: ``moe_relations_gpu.py``'s router phase reports
-//: which tree reproduces ``torch.sum``, and this is where that answer is written down.
-template <int BK> __device__ __forceinline__ float selected_sum(float (&v)[BK]) {
-  return halffold_sum<BK>(v);
+    for (int j = 0; j < K; ++j)
+      term = rank[j] == s ? v[j] : term;
+    acc = __fadd_rn(acc, term);
+  }
+  return acc;
 }
 
 //: THE SELECTED-SET WEIGHTS, on lane 0, for both scan shapes. One definition so that holding the
 //: lane's keys in registers cannot move a rounding point: the expression below is the whole of
-//: the declared program after selection -- amax, ``expf``, the power-of-two half fold, the IEEE
+//: the declared program after selection -- amax, ``expf``, the ascending-id chain, the IEEE
 //: non-flushing divide -- and it is reached identically from either scan.
 template <int K, int BK, int MODE>
 __device__ __forceinline__ void mechanics_weights(const float *__restrict__ logits,
@@ -380,7 +378,7 @@ __device__ __forceinline__ void mechanics_weights(const float *__restrict__ logi
 #pragma unroll
     for (int j = 0; j < K; ++j)
       sel[j] = expf(best[j] - m);
-    const float s = selected_sum<BK>(sel);
+    const float s = selected_sum<K, BK>(sel, pick);
 #pragma unroll
     for (int j = 0; j < K; ++j)
       p[j] = sel[j] / s;   // IEEE divide, no subnormal flush
@@ -389,7 +387,7 @@ __device__ __forceinline__ void mechanics_weights(const float *__restrict__ logi
 #pragma unroll
     for (int j = 0; j < K; ++j)
       sel[j] = 1.f / (1.f + expf(-logits[int64_t(t) * E + pick[j]]));
-    const float s = __fadd_rn(selected_sum<BK>(sel), 1e-20f);
+    const float s = __fadd_rn(selected_sum<K, BK>(sel, pick), 1e-20f);
 #pragma unroll
     for (int j = 0; j < K; ++j)
       p[j] = __fmul_rn(sel[j] / s, scale);

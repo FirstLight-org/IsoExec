@@ -1,6 +1,6 @@
 """SASS gate (no GPU needed): no atomic or reduction instruction of any kind in any kernel of this
 package's extension -- forward row kernels, cache writes, candidate masks, and every backward kernel.
-The reused dsa_sm100 sink/backward kernels carry their own scans (dsa_sm100/tests).
+The reused sparse_sm100 sink/backward kernels carry their own scans (sparse_sm100/tests).
 """
 import re
 
@@ -40,7 +40,7 @@ def test_no_atomics_anywhere_cpu(sass):
 def test_reused_kernels_have_no_float_atomics_cpu():
     """Every other extension the composition launches (forward and backward): integer/shared
     bookkeeping atomics and mbarrier arrives only -- no floating-point ATOM/RED anywhere."""
-    from isoexec.ops.attention.dsa_sm100._extension import extension as dsa
+    from isoexec.ops.attention.sparse_sm100._extension import extension as dsa
     from isoexec.ops.mm.mm_sm100._extension import extension as mm
     from isoexec.ops.moe.moe_sm100._extension import extension as moe
     # extension() is lru_cached, and other packages' "importing builds nothing" tests read that
@@ -51,7 +51,9 @@ def test_reused_kernels_have_no_float_atomics_cpu():
     cached = [fn for fn in (moe, mm, dsa) if fn.cache_info().currsize == 0]
     try:
         scans = [kernel_sass(moe, family="moe", cutlass=True), kernel_sass(mm, family="mm", cutlass=True)]
-        scans += [kernel_sass(lambda s=s: dsa(s), family="dsa", cutlass=True) for s in ("attn", "bwd", "indexer", "topk")]
+        scans += [kernel_sass(lambda s=s: dsa(s), family="sparse", cutlass=True) for s in ("attn", "bwd")]
+        from isoexec.ops.attention.indexer_sm100._extension import extension as idx
+        scans += [kernel_sass(lambda s=s: idx(s), family="indexer", cutlass=True) for s in ("indexer", "topk")]
         pat = re.compile(r"\b(ATOM|ATOMS|ATOMG|RED)\.[A-Z0-9._]*(F16|F32|F64|BF16|FADD|FMIN|FMAX)")
         for funcs in scans:
             for name, lines in funcs.items():

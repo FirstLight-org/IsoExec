@@ -91,8 +91,8 @@ __global__ __launch_bounds__(256) void bwd_select_kernel(const float *__restrict
     lq[q] = logits[t * stride + id];
     dq[q] = dp[t * K + q];
   }
-  // D: the forward's renormaliser, bit for bit (half-fold in RANK order, + 1e-20)
-  const float D = __fadd_rn(halffold<K, K>(sw[0]), 1e-20f);
+  // D: the forward's renormaliser, bit for bit (the ascending-expert-id chain from +0, + 1e-20)
+  const float D = __fadd_rn(selected_sum<K>(sw[0], win[0]), 1e-20f);
   // A = sum_q RN(dp_q * s_q), an ascending chain in slot order from +0.0
   float A = 0.f;
 #pragma unroll

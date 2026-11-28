@@ -69,7 +69,7 @@ def test_unsplit_weights_are_bit_identical_to_cublas(mm):
 
     N, K = 4096, 4096
     if seg.segment_count(K, torch.bfloat16) != 1:
-        pytest.skip("the published table splits this weight, so the bits differ by design")
+        pytest.skip("the schedule splits this weight, so the bits differ by design")
     a, b = operands(64, N, K)
     assert torch.equal(_bits(mm.mm_sm100(a, b)), _bits(torch.matmul(a, b)))
 
@@ -79,7 +79,7 @@ def test_segments_per_cta_does_not_change_the_bits(mm):
     from isoexec.ops.mm.mm_sm100 import segments as seg
 
     N, K = 1152, 2048
-    plans = seg.plans_at_split(512, K, N, 2)  # an execution split: the table publishes S = 1
+    plans = seg.plans_at_split(512, K, N, 2)  # an execution split: the policy gives S = 1
     spcs = {p.spc for p in plans}
     if len(spcs) < 2:
         pytest.skip("this shape admits one cut of the tree only")
@@ -149,3 +149,37 @@ def test_narrow_weights_are_plan_and_batch_invariant(K, N):
             assert whole.spc == whole.split
             root = mm_ops.run_plan(a, b, whole, root_dtype=torch.float32)
             assert torch.equal(root.to(torch.bfloat16).view(torch.int16), bits[:M]), (M, whole.config)
+
+
+def test_the_schedule_policy_is_not_on_the_per_call_path(monkeypatch):
+    """The policy is evaluated when a (shape, strides, device) key is first planned; repeated calls take the host
+    fast path of ``ops.mm_sm100`` and never reach ``schedule_policy`` or the planner again."""
+    from isoexec.ops import schedule_policy
+    from isoexec.ops.mm.mm_sm100 import ops
+    from isoexec.ops.mm.mm_sm100 import segments as seg
+    from isoexec.ops.mm.sm100 import mm_linear
+
+    calls = {"reduce": 0, "plan_for": 0}
+    real_reduce, real_plan = schedule_policy.reduce, seg.plan_for
+
+    def counted_reduce(*a, **k):
+        calls["reduce"] += 1
+        return real_reduce(*a, **k)
+
+    def counted_plan(*a, **k):
+        calls["plan_for"] += 1
+        return real_plan(*a, **k)
+
+    monkeypatch.setattr(schedule_policy, "reduce", counted_reduce)
+    monkeypatch.setattr(seg, "plan_for", counted_plan)
+    for M, K, N in ((3, 768, 328), (130, 1280, 200)):        # shapes no other test of this module plans
+        x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
+        w = torch.randn(N, K, device="cuda", dtype=torch.bfloat16)
+        ops._FAST.pop((x.shape, w.t().shape, x.stride(), w.t().stride(), x.dtype, w.dtype, x.device, w.device), None)
+        first = mm_linear(x, w)
+        after_first = dict(calls)
+        assert after_first["plan_for"] >= 1 and after_first["reduce"] >= 1
+        for _ in range(50):
+            assert torch.equal(mm_linear(x, w).view(torch.int16), first.view(torch.int16))
+        assert calls == after_first, (calls, after_first)
+        calls.update(reduce=0, plan_for=0)

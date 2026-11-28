@@ -24,6 +24,7 @@ TWIN_PROOFS: Dict[str, tuple] = {
         "isoexec/ops/attention/gqa_sm100/tests/test_seam_gpu.py",
         "isoexec/ops/attention/gqa_sm100/tests/test_relations_gpu.py",
         "isoexec/ops/attention/gqa_sm100/tests/test_ops_gpu.py",
+        "isoexec/ops/attention/gqa_sm100/tests/test_schedule_boundary_gpu.py",
     ),
     "gdn.cpr": (
         "isoexec/ops/gdn/gdn_cpr_sm100/tests/test_identity_gpu.py",
@@ -34,7 +35,6 @@ TWIN_PROOFS: Dict[str, tuple] = {
         "isoexec/ops/gdn/shared/tests/gdn_native_kernel_parity_test_gpu.py",
     ),
     "moe.route.sorted_topk": (
-        "isoexec/ops/moe/moe_sm100/tests/moe_relations_gpu.py",
         "isoexec/ops/moe/moe_sm90/tests/moe_router_fused_o2_gpu.py",
     ),
     "moe.expert_mlp.sm90_wgmma_v1": (

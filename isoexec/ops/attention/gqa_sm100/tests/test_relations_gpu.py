@@ -87,7 +87,9 @@ class Rec:
 
 
 def _seg(head_dim: int, ctx: int) -> int:
-    return ops.seg_for(head_dim, 8192 if ctx <= 8192 else 32768)
+    """The policy's span at a target batch of 1 (512 or 2048 keys), so these relations see rows of
+    several segments; the default span's own boundaries are in test_schedule_boundary_gpu.py."""
+    return ops.seg_for(head_dim, 8192 if ctx <= 8192 else 32768, target_batch=1)
 
 
 def _rows(batch, i: int, out, lse):

@@ -116,7 +116,7 @@ def test_fc1_glu_is_the_epilogue_of_the_projection(ops, H, E, I, k):
 
 
 def test_router_matches_the_dense_reference(ops):
-    from isoexec.ops.moe.moe_sm100.tests._program import biteq
+    from isoexec.ops.moe.moe_sm100.tests._program import biteq, selected_sum_reference
     from isoexec.ops.moe.routing import softmax_rows, stable_topk
 
     logits = (torch.randn(128, 256, generator=torch.Generator().manual_seed(2))).to("cuda")
@@ -124,7 +124,11 @@ def test_router_matches_the_dense_reference(ops):
         idx, probs = ops.route_mechanics(logits, 8)
     vals, ref_idx = stable_topk(logits, 8)
     assert torch.equal(idx, ref_idx)
-    assert biteq(probs, softmax_rows(vals))
+    # the selected-set sum is the schedule policy's rule-2 chain (ascending expert id, from +0), not
+    # ``softmax_rows``' torch.sum (the half fold in selection order, this kernel's v1 program)
+    e = torch.exp(vals - torch.amax(vals, dim=-1, keepdim=True))
+    assert biteq(probs, (e / selected_sum_reference(e, ref_idx)).contiguous())
+    torch.testing.assert_close(probs, softmax_rows(vals), rtol=1e-6, atol=1e-7)
 
 
 def test_forward_only(ops):

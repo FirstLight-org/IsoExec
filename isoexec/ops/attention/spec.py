@@ -45,20 +45,20 @@ __all__ = ("IMPLS", "KV_DTYPE", "NUM_SPLITS")
 
 
 # Registry.add groups flat declarations by op; family ordering affects presentation only.
-#: DeepSeek Sparse Attention on Blackwell (attention/dsa_sm100): three sub-ops, each recipe its own id,
+#: Sparse attention on Blackwell (attention/sparse_sm100) with the indexer and the top-k: each recipe its own id,
 #: no twin class (nothing else implements them). The backward recipes have no atomics and are not
 #: required to be bitwise; they are float64-accurate.
-_DSA: tuple[ImplSpec, ...] = (
+_SPARSE: tuple[ImplSpec, ...] = (
     ImplSpec(op="attention.dsa.indexer", impl_id="sm100_dsa_indexer_v1", version=1, supported_archs=_SM100),
     ImplSpec(op="attention.dsa.topk", impl_id="sm100_dsa_topk_v1", version=1, supported_archs=_SM100),
-    ImplSpec(op="attention.dsa.sparse", impl_id="sm100_dsa_sparse_segtree_v1", version=1, supported_archs=_SM100),
+    ImplSpec(op="attention.sparse", impl_id="sm100_sparse_segtree_v1", version=1, supported_archs=_SM100),
     # v2: v1 + the lazy rescale at 8 log2 units; its own bits.
-    ImplSpec(op="attention.dsa.sparse", impl_id="sm100_dsa_sparse_v2", version=2, supported_archs=_SM100),
+    ImplSpec(op="attention.sparse", impl_id="sm100_sparse_v2", version=2, supported_archs=_SM100),
     # the dual-rail leaf (FlashMLA-derived, no split) and its learned-sink form; their own bits.
-    ImplSpec(op="attention.dsa.sparse", impl_id="sm100_dsa_sparse_dualrail_v1", version=1, supported_archs=_SM100),
-    ImplSpec(op="attention.dsa.sparse", impl_id="sm100_dsa_sparse_dualrail_sink_v1", version=1, supported_archs=_SM100),
-    ImplSpec(op="attention.dsa.sparse_bwd", impl_id="sm100_dsa_sparse_bwd_v1", version=1, supported_archs=_SM100),
+    ImplSpec(op="attention.sparse", impl_id="sm100_sparse_dualrail_v1", version=1, supported_archs=_SM100),
+    ImplSpec(op="attention.sparse", impl_id="sm100_sparse_dualrail_sink_v1", version=1, supported_archs=_SM100),
+    ImplSpec(op="attention.sparse_bwd", impl_id="sm100_sparse_bwd_v1", version=1, supported_archs=_SM100),
     ImplSpec(op="attention.dsa.indexer_bwd", impl_id="sm100_dsa_indexer_bwd_v1", version=1, supported_archs=_SM100),
 )
 
-__getattr__ = family_impls(__name__, "rope", "gqa", own=_CORE + _DSA)
+__getattr__ = family_impls(__name__, "rope", "gqa", own=_CORE + _SPARSE)

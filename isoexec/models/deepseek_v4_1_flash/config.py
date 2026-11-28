@@ -529,7 +529,7 @@ def program_recorded() -> dict:
     from .providers import EP_EXCHANGE_ENV, TP_REDUCER_ENV
     from .training import trained_set
     return {"tp_reducer": os.environ.get(TP_REDUCER_ENV, "tree"), "ep_exchange": os.environ.get(EP_EXCHANGE_ENV, "mega"),
-            "attention_backward": os.environ.get("ISOEXEC_DSA_BWD", "cudnn_det"), "trained_set": trained_set()}
+            "attention_backward": os.environ.get("ISOEXEC_SPARSE_BWD", "cudnn_det"), "trained_set": trained_set()}
 
 
 __all__ = [

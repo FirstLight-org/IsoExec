@@ -121,7 +121,9 @@ def _jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def verify_acks(root: Path, version: int, expected: int) -> dict[str, Any]:
+def verify_acks(root: Path, version: int, expected: int, trainer_ranks: int | None = None) -> dict[str, Any]:
+    """Every one of the ``expected`` engine workers acknowledged ``version``, and they and the ``trainer_ranks``
+    training workers (default: as many as engine workers, the colocated layout) bound one attention schedule."""
     from .worker_extension import ack_directory
 
     directory = ack_directory(root, version)
@@ -129,6 +131,13 @@ def verify_acks(root: Path, version: int, expected: int) -> dict[str, Any]:
     identities = {(ack["replica_rank"], ack["dp_rank"], ack["rank"]) for ack in acks}
     if len(acks) != expected or len(identities) != expected or any(ack["version"] != version for ack in acks):
         raise Refusal(f"weight_sync.acks: version {version} has {len(acks)} worker acks, expected {expected}")
+    # The parties that compute bound one attention schedule (the optional target batch among its inputs): every
+    # training worker's record against every engine worker's. This process (verl's task runner) computes no
+    # attention, so its own environment is not compared. A party launched with another declaration computes
+    # other bits and is refused here, at version 0 before the first rollout and again at every later version.
+    from .schedule import require_same_schedules
+
+    require_same_schedules(root, acks, expected if trainer_ranks is None else trainer_ranks)
     return {"workers": len(acks), "runner_classes": sorted({ack["runner_class"] for ack in acks}),
             "parameter_sha256": {f"r{a['replica_rank']}d{a['dp_rank']}k{a['rank']}": a["parameter_sha256"] for a in acks}}
 

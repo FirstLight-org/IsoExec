@@ -132,6 +132,13 @@ Upstream files changed locally (each listed with its edit in the manifest):
     (a subtree), the gate folds the slices (the upper levels), so every split evaluates
     ((s0 + s1) + (s2 + s3)) with `__fadd_rn`. Because the split is bit-neutral,
     deterministic mode no longer forbids it (`heuristics/mega_gate.hpp`).
+  - Schedule-policy port (isoexec/ops/schedule_policy.py): `kNumSegments` is now 1 -- the policy gives a
+    tensor-core sum one segment per shard -- so the logit is ONE chain over the whole hidden axis, K is never
+    split (`num_split_k` = 1; `heuristics/mega_gate.hpp` sets `deterministic` when there is one segment) and the
+    hidden alignment is one K block (64). The paragraph above describes the 4-segment program this replaced.
+    The gate's renormaliser is `select.cuh`'s `selected_sum` (a chain in ascending expert id from +0). The
+    canonical MegaMoE combine is unchanged: its chain starts from the first contribution, taken as is
+    (`impls/sm100_bf16_mega_moe.cuh`).
   - TMEM budget: both epilogue stages of all segment accumulators share the 512 columns
     (`kAccumCols = 256 / segments-per-CTA`), so each heuristic candidate's largest token
     block is `get_max_block_tokens` (a 128-expert group on a CTA pair holds N/2 columns

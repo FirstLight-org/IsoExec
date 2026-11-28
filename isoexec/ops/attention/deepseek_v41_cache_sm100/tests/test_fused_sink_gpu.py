@@ -1,5 +1,5 @@
-"""The learned-sink root fused into the G = 1 dsa_sm100 leaf epilogue (an execution change) produces
-exactly the bits of the published leaf -> fp32 partials -> dsa_sink_combine_kernel program."""
+"""The learned-sink root fused into the G = 1 sparse_sm100 leaf epilogue (an execution change) produces
+exactly the bits of the published leaf -> fp32 partials -> sparse_sink_combine_kernel program."""
 import pytest
 import torch
 
@@ -7,7 +7,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a G
 
 
 def _ext():
-    from isoexec.ops.attention.dsa_sm100._extension import extension
+    from isoexec.ops.attention.sparse_sm100._extension import extension
     return extension("attn")
 
 
