@@ -65,7 +65,7 @@ PY
 
 Set `CUDA_VISIBLE_DEVICES` to four GPUs allocated to this job. `RAY_ADDRESS=local` starts a local Ray instance. The existing recipe supplies the SkyRL model package, optimizer, GRPO loss and vLLM settings. The overrides below select the measured single-node run, including its 2 GiB KV cache, disk-backed FP32 Adam moments and unfrozen routed experts.
 
-Both reference engines enabled chunked prefill with a 256-token scheduler budget and disabled prefix caching. Native vLLM captured 35 piecewise and 19 full CUDA graph sizes. The IsoExec launcher requested `FULL_AND_PIECEWISE`, but its vLLM engine reported that compilation mode 0 required a downgrade to `FULL_DECODE_ONLY` and captured 19 full graph sizes. To reproduce the measured IsoExec graph mode on a runtime that supports both modes, append `generator.inference_engine.engine_init_kwargs.compilation_config.cudagraph_mode=FULL_DECODE_ONLY` to `args` before validation and launch.
+The six-layer runs use chunked prefill with a 256-token scheduler budget and disable prefix caching. On this branch the SkyRL integration selects vLLM Model Runner V2 and enables breakable CUDA graphs. The FirstLight and native runs each captured 35 piecewise and 19 full graph sizes. The earlier IsoExec reference run used `FULL_DECODE_ONLY`. To reproduce that earlier mode, append `generator.inference_engine.engine_init_kwargs.compilation_config.cudagraph_mode=FULL_DECODE_ONLY` to `args` before validation and launch.
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -96,6 +96,7 @@ args=(
   generator.inference_engine.pipeline_parallel_size=1 generator.inference_engine.gpu_memory_utilization=0.8
   generator.inference_engine.max_num_batched_tokens=256
   generator.inference_engine.engine_init_kwargs.kv_cache_memory_bytes=2147483648
+  generator.inference_engine.engine_init_kwargs.cudagraph_metrics=true
   generator.n_samples_per_prompt=2 generator.sampling_params.max_generate_length=64
   "trainer.ckpt_path=$RUN/checkpoints" "trainer.log_path=$RUN/logs" "trainer.export_path=$RUN/exports"
 )
@@ -112,9 +113,12 @@ Look for `trainer/global_step = 1`, a nonzero `grad_norm` and a completed `timin
 grep -E 'trainer/global_step|timing/sync_weights|grad_norm|rollout_(train_)?logprobs_abs_diff_(mean|max)' "$RUN/skyrl.log"
 ```
 
-| Six-layer reference run | Generated tokens | Mean absolute difference (nats) | Maximum (nats) |
-| --- | ---: | ---: | ---: |
-| SkyRL native Megatron + vLLM | 512 | 0.215999484 | 2.735767841 |
-| SkyRL with IsoExec | 512 | 0 | 0 |
+| Six-layer run | Generated tokens | Mean absolute difference (nats) | Maximum (nats) | First step (s) |
+| --- | ---: | ---: | ---: | ---: |
+| SkyRL native Megatron + vLLM | 512 | 0.215999484 | 2.735767841 | 1,200.707 |
+| IsoExec before the port, full decode graphs | 512 | 0 | 0 | 1,024.408 |
+| FirstLight IsoExec, piecewise prefill and full decode graphs | 512 | 0 | 0 | 1,364.711 |
 
-These measurements are from the source implementation before the FirstLight port (IsoExec `9db5de37`, integrated SkyRL `2d580b25`). Both arms completed one optimizer update and weight sync. The [native launch](v41-six-layer-native.md) used its own V4.1-capable Megatron/vLLM environment, the same checkpoint, tokenizer and prompts, and native `FLASHMLA_SPARSE_DSV41` attention. Its reduced-depth loaders honored `engram_hash_layer_ids` on both sides. Each arm sampled its own responses; the difference above compares rollout and trainer **within each arm**.
+The FirstLight run used IsoExec `6d43a57f`, the patched SkyRL revision above and vLLM 0.33.0. During rollout, vLLM dispatched five 256-token batches and one 57-token batch padded to 64 in piecewise mode. It also reported 63 full-graph dispatches. Megatron recorded a gradient norm of 0.2006974 and the updated weights synchronized in 14.5709 s. The first step includes initial compilation and the disk-backed optimizer update. The B200 host was shared during timing.
+
+The native and pre-port measurements are the earlier reference pair (IsoExec `9db5de37`, integrated SkyRL `2d580b25`). The [native launch](v41-six-layer-native.md) used its own V4.1-capable Megatron/vLLM environment, the same checkpoint, tokenizer and prompts, and native `FLASHMLA_SPARSE_DSV41` attention. Its reduced-depth loaders honored `engram_hash_layer_ids` on both sides. Each run sampled its own responses. The reported differences compare rollout and trainer within each run at equal weights.
