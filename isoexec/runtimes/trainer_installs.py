@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import torch
 
+from isoexec.core import load_timers
 from isoexec.ops.logprobs.temperature import temperature_divide
 
 if TYPE_CHECKING:
@@ -142,6 +143,20 @@ def install_trainer_process(model_path: str, *, source: Any, raw_config: Mapping
     return installs
 
 
+def _trainer_timers_start() -> None:
+    from isoexec.core import load_timers
+
+    load_timers.mark("install_kernels")
+    load_timers.emit_at_exit("trainer")
+
+
+def _trainer_timers_end() -> None:
+    from isoexec.core import load_timers
+
+    load_timers.install_triton_listener()
+
+
+@load_timers.timed("trainer.install_kernels", before=_trainer_timers_start, after=_trainer_timers_end)
 def install_trainer_kernels(
     model_path: str | None = None,
     *,
@@ -150,6 +165,9 @@ def install_trainer_kernels(
     deterministic_attention_backward: bool = False,
 ) -> dict[str, Any]:
     """Perform the trainer's process-wide kernel installs once and return what was installed.
+
+    Timed as ``trainer.install_kernels`` (``core/load_timers``); the trainer's cold-start record is emitted after its
+    first backward, or at exit.
 
     ``source`` and ``raw_config`` (the effective HF config the model is built from) select the
     model whose GEMM census the installed GEMM providers report coverage against; ``model_path`` labels it. A process

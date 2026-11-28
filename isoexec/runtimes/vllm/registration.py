@@ -7,6 +7,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from importlib import import_module
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -45,6 +46,29 @@ def engine_environment(cudagraph_mode: str) -> dict[str, str]:
 def requested_cudagraph_mode(vllm_config) -> str | None:
     """The mode ``register_native`` was asked for, as recorded in the engine's ``additional_config``."""
     return ((getattr(vllm_config, "additional_config", None) or {}).get("isoexec") or {}).get("cudagraph_mode")
+#: Engine settings a model package may choose with ``engine_settings()`` on its model class, with
+#: release's defaults (``None``: not set here). A model that declares ``None`` leaves the setting to
+#: vLLM's own selection. Everything else ``register_native``
+#: pins is part of the IsoExec engine contract and is not model-selectable.
+ENGINE_SETTING_DEFAULTS: Mapping[str, Any] = MappingProxyType({
+    "attention_backend": "CUSTOM",
+    "enable_chunked_prefill": False,
+    "kv_cache_dtype": None,
+    "block_size": None,
+})
+
+
+def model_engine_settings(model: object) -> dict[str, Any]:
+    """Validated engine settings an author model declares; ``{}`` when it declares none."""
+    declare = getattr(model, "engine_settings", None)
+    if not callable(declare):
+        return {}
+    settings = dict(declare())
+    unknown = sorted(set(settings) - set(ENGINE_SETTING_DEFAULTS))
+    if unknown:
+        raise ValueError(f"engine_settings(): {unknown} are not model-selectable engine settings "
+                         f"(selectable: {sorted(ENGINE_SETTING_DEFAULTS)})")
+    return settings
 
 
 def register_native(source: ModelSource, raw_config: Mapping[str, Any], *, checkpoint: str,
@@ -73,6 +97,9 @@ def register_native(source: ModelSource, raw_config: Mapping[str, Any], *, check
     ``enable_chunked_prefill=True`` is the caller's explicit opt-in, which the GDN binding
     admits only for compositions that resume exactly
     (``gdn_engine_patch.assert_engine_args_compatible``).
+    A model package may choose the engine settings listed in ``ENGINE_SETTING_DEFAULTS``
+    (``engine_settings()`` on its model class: its own cache encoding, block size,
+    chunked prefill). The model's declaration takes precedence for these settings.
     """
     from pathlib import Path
 
@@ -107,8 +134,14 @@ def register_native(source: ModelSource, raw_config: Mapping[str, Any], *, check
         checkpoint = str(path.parent)
     additional["isoexec"] = settings
     overrides = dict(kwargs.get("hf_overrides") or {})
-    hybrid = any(isinstance(module, isoexec.nn.GDN) for module in source.build_meta(raw_config).modules())
+    meta = source.build_meta(raw_config)
+    hybrid = any(isinstance(module, isoexec.nn.GDN) for module in meta.modules())
+    declared = model_engine_settings(meta)
     overrides["architectures"] = [NATIVE_ARCH if hybrid else NATIVE_DENSE_ARCH]
+    if raw_config.get("quantization_config") is not None:
+        # The package's checkpoint conversions read the stored encodings themselves (raw_config keeps
+        # the declaration); vLLM must not also apply its own quantization method to the layers.
+        overrides["quantization_config"] = None
     compilation = compilation_config_values(kwargs.get("compilation_config"))
     compilation["mode"] = 0  # CompilationMode.none
     compilation["cudagraph_mode"] = cudagraph_mode
@@ -132,6 +165,14 @@ def register_native(source: ModelSource, raw_config: Mapping[str, Any], *, check
     if enable_chunked_prefill:
         forced.pop("enable_chunked_prefill", None)
     kwargs.update(forced)
+    if declared:
+        # V4.1 owns its paged caches and the encodings passed to its attention backend.
+        kwargs["enable_prefix_caching"] = False
+        for name, value in declared.items():
+            if value is None:
+                kwargs.pop(name, None)
+            else:
+                kwargs[name] = value
     register_plugin()
     return kwargs
 
@@ -236,6 +277,7 @@ def register_plugin() -> None:
         patch_vllm_cumem_sleep,
         patch_vllm_full_vocabulary_logprobs,
         patch_vllm_kernel_warmup,
+        patch_vllm_load_timers,
         patch_vllm_v2_cudagraph_census,
         patch_vllm_v2_fused_sampler,
         patch_vllm_v2_request_census,
@@ -259,6 +301,8 @@ def register_plugin() -> None:
     patch_vllm_cumem_sleep()
     # IsoExec models own their kernels: vLLM's SM100 CuTe-DSL router warmup has nothing to build.
     patch_vllm_kernel_warmup()
+    # Per-component cold-start timers of the worker (core/load_timers), emitted once after the first step.
+    patch_vllm_load_timers()
 
     # vLLM caches the GDN backend's batch-invariance answer; lift the veto before anything asks.
     # GDN core binding lifts it again, idempotently.
@@ -286,9 +330,11 @@ def register_plugin() -> None:
 
 __all__ = [
     "NATIVE_ARCH",
+    "ENGINE_SETTING_DEFAULTS",
     "NATIVE_DENSE_ARCH",
     "compilation_config_values",
     "engine_environment",
+    "model_engine_settings",
     "register_native",
     "requested_cudagraph_mode",
     "register_native_model_class",

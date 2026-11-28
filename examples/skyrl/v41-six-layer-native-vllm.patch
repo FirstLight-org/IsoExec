@@ -1,0 +1,27 @@
+--- a/vllm/models/deepseek_v41/common/engram.py
++++ b/vllm/models/deepseek_v41/common/engram.py
+@@ -461,8 +461,12 @@
+                 "would be silently rehashed."
+             )
+         self.pad_id = token_map[layout.pad_token_id]
++        text_config = getattr(model_config, "hf_text_config", None) or model_config.hf_config
++        hash_ids = getattr(text_config, "engram_hash_layer_ids", layout.layer_ids)
++        if len(hash_ids) != len(layout.layer_ids):
++            raise ValueError("expected a production hash ID for each Engram layer")
+         multipliers = compute_hash_multipliers(
+-            layout.layer_ids, layout.max_ngram_size, vocab_size
++            hash_ids, layout.max_ngram_size, vocab_size
+         )
+         self.register_buffer(
+             "token_map", torch.tensor(token_map, dtype=torch.int32), persistent=False
+--- a/vllm/models/deepseek_v41/common/ops/cache_utils.py
++++ b/vllm/models/deepseek_v41/common/ops/cache_utils.py
+@@ -788,7 +788,7 @@
+     ``current_platform.is_fp8_fnuz()`` for ``swa_k_cache`` (C++ encoder
+     writes FNUZ on gfx942 and OCP on gfx950).
+     """
+-    if has_cutedsl() and k_cache.shape[-1] != V41_NVFP4_BYTES_PER_TOKEN:
++    if has_cutedsl() and k_cache.stride(0) % 32 == 0 and k_cache.shape[-1] != V41_NVFP4_BYTES_PER_TOKEN:
+         # lazily import, otherwise some tests fail due to CUDA driver init failure.
+         from vllm.models.deepseek_v4.nvidia.ops.dequant_gather_k_cutedsl import (
+             _DEQUANT_GATHER_K_CACHE_CUTEDSL_KERNEL,

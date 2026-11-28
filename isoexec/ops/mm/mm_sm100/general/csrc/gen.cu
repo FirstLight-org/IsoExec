@@ -158,25 +158,26 @@ __global__ __launch_bounds__(kThreads, 1) void gemm_kernel(Problem p, const __gr
       acc_empty(lane - 2 * STAGES - kGens)->init(CL * kEpiWarps);
     cutlass::arch::fence_barrier_init();
   }
+  // TMEM base handoff (mature reference: mm_sm100_leaf.cuh, "No sentinel"): the allocating warp writes the slot through
+  // tcgen05.alloc and the readers take it after a RELEASING + ACQUIRING barrier. The former form stored a 0xffffffff
+  // sentinel and then crossed a RELAXED cluster arrive, which orders no memory: a reader could load the slot before the
+  // sentinel store was visible and take the stale shared-memory word a previous kernel left there as the TMEM base
+  // (tcgen05.ld "misaligned address" in the epilogue), and under cta_group::2 the pair's allocation can land in this
+  // CTA's slot before its own sentinel store, which would then overwrite the base. Synchronization only: no numerics.
   if (warp == 2) {
-    if (cute::elect_one_sync())
-      asm volatile("st.shared.u32 [%0], %1;" ::"l"(__cvta_generic_to_shared(tmem_slot)), "r"(0xffffffffu));
-    asm volatile("fence.proxy.async.shared::cta;" ::: "memory");
-    __syncwarp();
     Allocator().allocate(kTmemCols, tmem_slot);
     Allocator().release_allocation_lock();
     asm volatile("tcgen05.fence::before_thread_sync;");
   }
   if constexpr (CL == 2) {
-    cute::cluster_arrive_relaxed();
-    cute::cluster_wait();
+    cute::cluster_sync();
   } else {
     __syncthreads();
   }
   uint32_t tmem_base = 0;
   if (warp == 1 || warp >= kEpiWarp0) {
-    while ((tmem_base = ld_shared_u32(tmem_slot)) == 0xffffffffu) {
-    }
+    asm volatile("tcgen05.fence::after_thread_sync;");
+    tmem_base = ld_shared_u32(tmem_slot);
   }
 
   const uint32_t tiles = p.m_tiles * p.n_tiles;

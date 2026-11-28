@@ -1,0 +1,26 @@
+--- a/skyrl/backends/skyrl_train/patches/megatron/deepseek_v41/engram.py
++++ b/skyrl/backends/skyrl_train/patches/megatron/deepseek_v41/engram.py
+@@ -120,7 +120,12 @@
+         self.max_ngram_size = spec.max_ngram_size
+         self.primes = torch.tensor(primes)  # [L, n-1, heads]
+         self.offsets = torch.tensor(np.array([np.cumsum([0, *sizes[:-1]]) for sizes in flat]))  # [L, cols]
+-        self.multipliers = compute_hash_multipliers(spec.layer_ids, spec.max_ngram_size, vocab)  # [L, n]
++        with open(os.path.join(spec.hf_path, "config.json")) as config_file:
++            raw = json.load(config_file)
++        hash_ids = raw.get("text_config", raw).get("engram_hash_layer_ids", spec.layer_ids)
++        if len(hash_ids) != len(spec.layer_ids):
++            raise ValueError("expected a production hash ID for each Engram layer")
++        self.multipliers = compute_hash_multipliers(hash_ids, spec.max_ngram_size, vocab)  # [L, n]
+         self.token_map = torch.tensor(token_map)
+         self.pad_id = token_map[spec.pad_token_id]
+ 
+@@ -209,7 +214,8 @@
+             key = f"{prefix}.{suffix}"
+             with safe_open(os.path.join(self.spec.hf_path, weight_map[key]), framework="pt") as f:
+                 part_rows = f.get_slice(key)[start:end]
+-                rows[suffix] = part_rows.pin_memory() if ENGRAM_TABLE_DEVICE == "cpu" else part_rows.to(device)
++                # CPU lookup gathers into a fresh pinned staging tensor below. Keep the table file-backed.
++                rows[suffix] = part_rows if ENGRAM_TABLE_DEVICE == "cpu" else part_rows.to(device)
+         self._table = (rows["weight"], rows["scale"].view(torch.uint8), start)
+ 
+     @torch.no_grad()

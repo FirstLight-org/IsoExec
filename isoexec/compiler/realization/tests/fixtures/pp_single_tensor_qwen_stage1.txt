@@ -1,0 +1,21 @@
+
+
+
+def forward(self, input_ids, seq, hidden_states):
+    sym_size_int = torch.ops.aten.sym_size.int(hidden_states, 0)
+    layers_1_attn_norm = getattr(self.layers, "1").attn_norm(hidden_states)
+    _checked_output_5 = isoexec_compiler_capture_export_normalize__checked_output(layers_1_attn_norm, torch.bfloat16, 'layers.1.attn_norm', [sym_size_int, 16], [16, 1], device(type='cpu'), (hidden_states,));  layers_1_attn_norm = None
+    layers_1_mixer = getattr(self.layers, "1").mixer(_checked_output_5, seq)
+    _checked_output_6 = isoexec_compiler_capture_export_normalize__checked_output(layers_1_mixer, torch.bfloat16, 'layers.1.mixer', [sym_size_int, 16], [16, 1], device(type='cpu'), (_checked_output_5,));  layers_1_mixer = _checked_output_5 = None
+    add_29 = torch.ops.aten.add.Tensor(hidden_states, _checked_output_6);  hidden_states = _checked_output_6 = None
+    layers_1_mlp_norm = getattr(self.layers, "1").mlp_norm(add_29)
+    _checked_output_7 = isoexec_compiler_capture_export_normalize__checked_output(layers_1_mlp_norm, torch.bfloat16, 'layers.1.mlp_norm', [sym_size_int, 16], [16, 1], device(type='cpu'), (add_29,));  layers_1_mlp_norm = None
+    layers_1_mlp = getattr(self.layers, "1").mlp(_checked_output_7, seq);  seq = None
+    _checked_output_8 = isoexec_compiler_capture_export_normalize__checked_output(layers_1_mlp, torch.bfloat16, 'layers.1.mlp', [sym_size_int, 16], [16, 1], device(type='cpu'), (_checked_output_7,));  layers_1_mlp = _checked_output_7 = None
+    add_39 = torch.ops.aten.add.Tensor(add_29, _checked_output_8);  add_29 = _checked_output_8 = None
+    norm = self.norm(add_39)
+    _checked_output_9 = isoexec_compiler_capture_export_normalize__checked_output(norm, torch.bfloat16, 'norm', [sym_size_int, 16], [16, 1], device(type='cpu'), (add_39,));  norm = add_39 = None
+    head = self.head(_checked_output_9)
+    _checked_output_10 = isoexec_compiler_capture_export_normalize__checked_output(head, torch.float32, 'head', [sym_size_int, 128], [128, 1], device(type='cpu'), (_checked_output_9,));  head = sym_size_int = _checked_output_9 = None
+    return _checked_output_10
+    

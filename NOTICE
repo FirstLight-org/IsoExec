@@ -254,3 +254,15 @@ Used in:
   - isoexec/ops/_vendor/flash_attn_cute/quack/ (the QuACK modules FlashAttention-4's SM100 backward imports,
     quack/ at tag v0.5.0, commit 25b4b879b66cbab75ca127c5f5b1c3d84c84aadb, imports rewritten to the package;
     LICENSE kept as licenses/quack.txt)
+
+====================================================================================================
+DeepSeek-V4.1-Flash SM100 operators
+
+DeepGEMM and DeepJIT (MIT), and their CUTLASS headers (BSD-3-Clause):
+  isoexec/ops/_vendor/deep_gemm/PROVENANCE.md and licenses/
+FlashInfer batch-invariant MoE and its upstream components:
+  isoexec/ops/_vendor/flashinfer_bi_moe/PROVENANCE.md and licenses/
+FlashMLA (MIT) and associated sparse attention sources:
+  isoexec/ops/attention/dsa_sm100/csrc/dualrail/PROVENANCE.md and LICENSE-FlashMLA.txt
+vLLM sources used by the V4.1 MoE:
+  isoexec/ops/moe/deepseek_v41_sm100/csrc/PROVENANCE.md and licenses/

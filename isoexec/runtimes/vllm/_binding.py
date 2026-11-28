@@ -8,18 +8,19 @@ from typing import TYPE_CHECKING
 
 import torch
 from torch import distributed as dist
-from torch import fx
+from torch import fx, nn
 
 from isoexec.core.bindings import BoundOp
 from isoexec.nn import GDN, MLP, Attention, Embedding, LMHead, MoE, RMSNorm
 from isoexec.nn._seams import _identity
-from isoexec.nn.component import Component
+from isoexec.nn.head import head_selection
+from isoexec.nn.component import Component, placement_generation
 from isoexec.nn.inspect import executed_modules
 from isoexec.ops.collectives.tp_bytes import bind_vocab_parallel_embed
 from isoexec.ops.collectives.tp_tree import bind_row_parallel
 from isoexec.ops.table import OpResolutionError, OpTable
 from isoexec.runtimes.engine_ops import SLICE_IMPL, engine_resolution, gdn_core_resolution, lm_head_slice_sampled_rows
-from isoexec.runtimes.parallel import validate_component_placement
+from isoexec.runtimes.parallel import package_component, validate_component_placement
 from isoexec.schema import Axis, Placement
 
 from .bindings import PagedAttentionBinding
@@ -59,6 +60,66 @@ def placement_from_groups(*, tp_group: dist.ProcessGroup, pp_group: dist.Process
                      leaf_dtype="bf16" if _leaf_dtype() == torch.bfloat16 else "fp32")
 
 
+def engine_expert_group(tp_group: dist.ProcessGroup) -> dist.ProcessGroup:
+    """vLLM's expert-parallel group, which must order the same ranks as the TP group.
+
+    Token ownership follows the TP group (every TP rank holds the same tokens), so EP is
+    admitted over exactly the TP ranks; data-parallel expert groups are refused.
+    """
+    try:
+        from vllm.distributed import get_ep_group
+
+        group = get_ep_group().device_group
+    except (ImportError, AttributeError, AssertionError) as error:
+        raise ValueError("VllmModel construction requires vLLM's expert-parallel group "
+                         "for enable_expert_parallel=True") from error
+    same = group.size() == tp_group.size() and group.rank() == tp_group.rank()
+    if same and dist.is_initialized() and group.size() > 1:
+        same = dist.get_process_group_ranks(group) == dist.get_process_group_ranks(tp_group)
+    if not same:
+        raise ValueError("VllmModel construction requires the expert-parallel group to order the TP ranks "
+                         "(data-parallel expert groups are not supported)")
+    return group
+
+
+def narrow_held_experts(body: fx.GraphModule, placement: Placement | None) -> None:
+    """Drop the experts other EP ranks own from placement-bound components before allocation, keeping global
+    expert names (``nn.MoE`` narrows itself in ``VllmModel``)."""
+    if placement is None or placement.ep.size == 1:
+        return
+    for site, module in list(executed_modules(body, prefix="body")):
+        narrow = getattr(module, "narrow_held", None)
+        if isinstance(module, Component) and module.PLACEMENT_BOUND and callable(narrow):
+            narrow(placement, site=site)
+
+
+def refuse_uncapturable_expert_parallel(body: fx.GraphModule, mode: str) -> None:
+    """Refuse decode graphs over EP movement that synchronizes with the host.
+
+    An EP binding that sizes its exchange on the host cannot be replayed from a captured graph;
+    such bindings run with ``cudagraph_mode`` NONE. A binding marks itself ``graph_capturable``
+    when its exchange is sized on the device.
+    """
+    if mode == "NONE":
+        return
+    for site, module in executed_modules(body, prefix="body"):
+        fn = None
+        if isinstance(module, MoE):
+            fn = module.slots.resolved()["expert_mlp"].fn
+        elif isinstance(module, Component) and module.PLACEMENT_BOUND:
+            # A placement-bound component names its bound expert exchange (None: it runs none).
+            exchange = getattr(module, "engine_expert_exchange", None)
+            fn = exchange() if callable(exchange) else None
+            if fn is None:
+                continue
+        else:
+            continue
+        if not getattr(fn, "graph_capturable", False):
+            raise ValueError(f"{site}: VllmModel construction requires a CUDA-graph capturable expert-parallel "
+                             f"exchange for cudagraph_mode={mode}; this binding sizes its exchange on the host, "
+                             "so use cudagraph_mode NONE with enable_expert_parallel")
+
+
 def bind_body_ops(body: fx.GraphModule, *, tp_group: dist.ProcessGroup, placement: Placement | None = None) -> None:
     """Bind body operations using the supplied native TP group.
 
@@ -70,16 +131,191 @@ def bind_body_ops(body: fx.GraphModule, *, tp_group: dist.ProcessGroup, placemen
     bound; the caller must discard it.
     """
     table = OpTable()
+    owners: list[str] = []
+    bound: list[str] = []
     for site, module in executed_modules(body, prefix="body"):
-        if isinstance(module, MoE):
+        if any(site.startswith(owner + ".") for owner in owners):
+            continue  # a placement-bound component binds its own children
+        if isinstance(module, Component) and module.PLACEMENT_BOUND:
+            if placement is None:
+                raise OpResolutionError(f"{site}: {type(module).__name__} engine binding requires a placement")
+            module.apply_placement(placement, site=site, op_table=table)
+            owners.append(site)
+        elif isinstance(module, MoE):
             if placement is None:
                 raise OpResolutionError(f"{site}: MoE engine binding requires a placement")
             module.apply_placement(placement, site=site, op_table=table)
+            bound.append(site)
         elif isinstance(module, (Embedding, RMSNorm, MLP, Attention, GDN)):
             _bind_component(module, site, table, tp_group=tp_group)
+            bound.append(site)
+        elif package_component(module, site, bound, placement):
+            # A package's own component binds itself from the placement (its ``_place``).
+            module.apply_placement(placement, site=site, op_table=table)
+            bound.append(site)
     if placement is not None:
         # Construction check of the MoE leaf plan.
         validate_component_placement(body, placement)
+
+
+def has_placement_bound(module: nn.Module) -> bool:
+    """Whether any executed component binds itself by placement."""
+    return any(isinstance(child, Component) and child.PLACEMENT_BOUND for _, child in executed_modules(module))
+
+
+def bind_engine_states(body: fx.GraphModule, *, vllm_config: VllmConfig, prefix: str = "") -> None:
+    """Let placement-bound components attach their native engine state (cache layers) after allocation."""
+    for site, module in executed_modules(body, prefix="body"):
+        if isinstance(module, Component) and module.PLACEMENT_BOUND:
+            module.bind_engine_state(vllm_config=vllm_config, layer_prefix=f"{prefix}.{site}" if prefix else site)
+
+
+def placement_bound(body: fx.GraphModule):
+    """``(site, component)`` of every executed placement-bound component, in execution order."""
+    return [(site, module) for site, module in executed_modules(body, prefix="body")
+            if isinstance(module, Component) and module.PLACEMENT_BOUND]
+
+
+def finish_engine_load(body: fx.GraphModule) -> list[str]:
+    """After the checkpoint load: every placement-bound component prepares what its engine execution needs
+    from the loaded weights (``prepare_engine_execution``: e.g. expert workspaces, collective and outside
+    capture, every rank in the same order). Returns the sites prepared."""
+    sites = []
+    for site, module in placement_bound(body):
+        prepare = getattr(module, "prepare_engine_execution", None)
+        if callable(prepare):
+            prepare()
+            sites.append(site)
+    return sites
+
+
+def engine_execution_scopes(body: fx.GraphModule) -> list:
+    """The distinct runtime-owned execution scopes (``execution_scope(capture=...)`` owners) the placement-bound
+    components declare (``engine_execution_scopes``), in execution order; rows of one TP group share one."""
+    owners, seen = [], set()
+    for _, module in placement_bound(body):
+        declare = getattr(module, "engine_execution_scopes", None)
+        for owner in (declare() if callable(declare) else ()):
+            if id(owner) not in seen:
+                seen.add(id(owner))
+                owners.append(owner)
+    return owners
+
+
+def refresh_derived_weights(body: fx.GraphModule) -> int:
+    """After an in-place weight update: every placement-bound component re-derives its cached weight copies
+    into their existing storage (captured graphs keep the addresses). Returns the entries refreshed."""
+    total = 0
+    for _, module in placement_bound(body):
+        refresh = getattr(module, "refresh_derived_weights", None)
+        if callable(refresh):
+            total += int(refresh())
+    return total
+
+
+def zero_engine_caches(body: fx.GraphModule) -> int:
+    """Every placement-bound component zeroes the engine cache pages it owns that are mapped
+    (``zero_engine_caches``); returns the tensors zeroed. Called after each KV-cache wake (fresh pages of
+    unspecified content) so a woken engine holds the bytes an update commit leaves."""
+    total = 0
+    for _, module in placement_bound(body):
+        zero = getattr(module, "zero_engine_caches", None)
+        if callable(zero):
+            total += int(zero())
+    return total
+
+
+def stale_derived_weights(body: fx.GraphModule) -> list[str]:
+    """Derived weight copies whose sources changed since derivation (a write that bypassed the refresh)."""
+    stale = []
+    for site, module in placement_bound(body):
+        check = getattr(module, "stale_derived_weights", None)
+        if callable(check):
+            stale += [f"{site}: {name}" for name in check()]
+    return stale
+
+
+class DerivedWeightCheck:
+    """``stale_derived_weights`` for a host that checks before every step, without walking the module tree.
+
+    The placement-bound components are resolved once (``placement_bound``), again on ``rebuild`` (the
+    runtime calls it after the load and after every weight-update commit) and whenever a component was
+    placed since (``placement_generation``). Each component's per-step check is its
+    ``derived_weight_guard()`` (an object whose ``stale()`` compares versions of entries it collected once;
+    guards of one class with a ``combine`` classmethod merge into one flat comparison), else its
+    ``stale_derived_weights()``. Every captured derived copy stays guarded: a write that bypassed the
+    commit fails ``stale()`` on the next step.
+
+    Two sampled sweeps cover what a version compare cannot: ``probe_content()`` re-derives one entry per
+    call on the device (source writes no version counter records), ``moved_sample(count)`` checks ``count``
+    parameters the graphs read in place (``moved_parameter_sample``: replaced or rebound since the engine
+    prepared), round robin over the components."""
+
+    def __init__(self, body: fx.GraphModule) -> None:
+        self.body = body
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        self.placements = placement_generation()
+        self.bound = placement_bound(self.body)
+        guards, calls = [], []
+        for site, module in self.bound:
+            make = getattr(module, "derived_weight_guard", None)
+            if callable(make):
+                guards.append(make())
+                continue
+            check = getattr(module, "stale_derived_weights", None)
+            if callable(check):
+                calls.append((site, check))
+        by_class: dict = {}
+        for guard in guards:
+            by_class.setdefault(type(guard), []).append(guard)
+        merged = []
+        for cls, group in by_class.items():
+            combine = getattr(cls, "combine", None)
+            merged += [combine(group)] if callable(combine) and len(group) > 1 else group
+        self.guards, self.calls = merged, calls
+        self.probes = [g for g in merged if callable(getattr(g, "probe_content", None))]
+        self.movable = [(site, m) for site, m in self.bound if callable(getattr(m, "moved_parameter_sample", None))]
+        self._probe = self._row = self._offset = 0
+
+    def current(self) -> None:
+        if self.placements != placement_generation():
+            self.rebuild()
+
+    def stale(self) -> list[str]:
+        self.current()
+        out = []
+        for guard in self.guards:
+            out += guard.stale()
+        for site, check in self.calls:
+            out += [f"{site}: {name}" for name in check()]
+        return out
+
+    def probe_content(self):
+        """``(label, device flag)`` of the next derived entry (nonzero: it differs from its re-derivation)."""
+        self.current()
+        for _ in range(len(self.probes)):
+            guard = self.probes[self._probe % len(self.probes)]
+            self._probe += 1
+            hit = guard.probe_content()
+            if hit is not None:
+                return hit
+        return None
+
+    def moved_sample(self, count: int) -> list[str]:
+        """Graph-read parameters of the next ``count`` (one component per call) that moved since preparation."""
+        self.current()
+        if not self.movable:
+            return []
+        site, module = self.movable[self._row % len(self.movable)]
+        total = module.graph_parameter_count()
+        moved = [f"{site}: {name}" for name in module.moved_parameter_sample(self._offset, count)]
+        self._offset += count
+        if self._offset >= total:
+            self._offset = 0
+            self._row += 1
+        return moved
 
 
 def bind_attention_cores(body: fx.GraphModule, *, vllm_config: VllmConfig, prefix: str = "") -> None:
@@ -262,7 +498,7 @@ def bind_head_ops(head: LMHead, *, tp_group: dist.ProcessGroup) -> None:
     head.tp_group = tp_group
     head.site = head.slots.site = "head"
     head.slots.head = table.bind("logprobs.head", site="head.head",
-                                 inputs={"tp": tp, "boundary_out_dtype": "fp32"})
+                                 inputs={"tp": tp, "boundary_out_dtype": "fp32"}, **head_selection(head))
     head.slots.lm_head_slice = engine_resolution("logprobs.lm_head_slice", SLICE_IMPL,
                                                lm_head_slice_sampled_rows, provider="runtimes.vllm")
     head.slots.tp_copy = _identity("collectives.tp_copy", tp=tp, side="engine", sp=False)

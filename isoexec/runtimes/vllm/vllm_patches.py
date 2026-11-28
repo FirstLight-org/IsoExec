@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.abc
 import logging
 import os
+import sys
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -457,6 +460,156 @@ def patch_vllm_kernel_warmup() -> bool:
 
     _warmup_bf16x3_router_gemm._isoexec_skips_native = True  # type: ignore[attr-defined]
     kernel_warmup._warmup_bf16x3_router_gemm = _warmup_bf16x3_router_gemm
+    return True
+
+
+#: vLLM GPU worker lifecycle methods timed as ``engine.<label>`` (``core/load_timers``), in call order.
+_WORKER_PHASES = (("init_device", "init_device"), ("load_model", "load_model"),
+                  ("determine_available_memory", "profile"), ("initialize_from_config", "kv_cache"),
+                  ("compile_or_warm_up_model", "warmup"))
+
+
+_GPU_WORKER = "vllm.v1.worker.gpu_worker"
+
+
+class _AfterImport:
+    """A one-shot meta-path finder: run ``hook`` right after ``name`` is first imported (a process that never
+    imports the GPU worker, such as the API server, pays nothing)."""
+
+    def __init__(self, name, hook):
+        self.name, self.hook = name, hook
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname != self.name:
+            return None
+        import importlib.util
+
+        sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(fullname)
+        if spec is None or spec.loader is None:
+            return spec
+        loader, hook = spec.loader, self.hook
+
+        class _Loader(importlib.abc.Loader):
+            def create_module(self, spec):
+                return loader.create_module(spec)
+
+            def exec_module(self, module):
+                loader.exec_module(module)
+                hook()
+
+        spec.loader = _Loader()
+        return spec
+
+
+def patch_vllm_load_timers() -> bool:
+    """Cold-start timers in every vLLM worker: one ``engine.<phase>`` record per lifecycle method, the graph capture
+    per bucket (``engine.graph_capture.<MODE>.<tokens>``), and the first real step (``engine.first_step``: the first
+    ``execute_model`` after warm-up through its ``sample_tokens``, closed by ONE device synchronisation), after which
+    the worker emits its record once (``ISOEXEC_LOAD_TIMERS``). Host clock reads only, otherwise. Installed when the
+    GPU worker module is imported (now, if it already is)."""
+    from isoexec.core import load_timers
+
+    if not load_timers.enabled():
+        return False
+    if _GPU_WORKER in sys.modules:
+        return _install_load_timers()
+    if not any(isinstance(f, _AfterImport) for f in sys.meta_path):
+        sys.meta_path.insert(0, _AfterImport(_GPU_WORKER, _install_load_timers))
+    return True
+
+
+def _install_load_timers() -> bool:
+    try:
+        from vllm.v1.worker import gpu_worker
+        from vllm.v1.worker.gpu import cudagraph_utils
+    except Exception as e:  # pragma: no cover - vLLM without the V1 GPU worker / Model Runner V2
+        logger.warning("[isoexec] cannot install load timers: %s", e)
+        return False
+    from isoexec.core import load_timers
+
+    worker = gpu_worker.Worker
+    if getattr(worker, "_isoexec_load_timers", False):
+        return True
+    state = {"warm": False, "first": None, "done": False}
+
+    def timed(name, label):
+        original = getattr(worker, name)
+
+        def method(self, *args, **kwargs):
+            if label == "init_device":
+                load_timers.mark("init_device")
+                load_timers.emit_at_exit("engine")
+            with load_timers.phase(f"engine.{label}"):
+                result = original(self, *args, **kwargs)
+            if label == "load_model":
+                load_timers.install_triton_listener()
+            if label == "warmup":
+                state["warm"] = True
+                load_timers.mark("ready")
+            return result
+
+        method.__wrapped__ = original
+        setattr(worker, name, method)
+
+    for name, label in _WORKER_PHASES:
+        if hasattr(worker, name):
+            timed(name, label)
+
+    def finish_first_step():
+        import torch
+
+        torch.cuda.synchronize()
+        load_timers.add("engine.first_step", time.monotonic() - state["first"])
+        load_timers.mark("first_step")
+        state["done"] = True
+        load_timers.emit("engine")
+
+    execute = worker.execute_model
+
+    def execute_model(self, *args, **kwargs):
+        if state["warm"] and state["first"] is None:
+            state["first"] = time.monotonic()
+        result = execute(self, *args, **kwargs)
+        if state["first"] is not None and not state["done"] and result is not None:
+            finish_first_step()        # the step returned its output here (no separate sample_tokens)
+        return result
+
+    execute_model.__wrapped__ = execute
+    worker.execute_model = execute_model
+    if hasattr(worker, "sample_tokens"):
+        sample = worker.sample_tokens
+
+        def sample_tokens(self, *args, **kwargs):
+            result = sample(self, *args, **kwargs)
+            if state["first"] is not None and not state["done"]:
+                finish_first_step()
+            return result
+
+        sample_tokens.__wrapped__ = sample
+        worker.sample_tokens = sample_tokens
+
+    manager = cudagraph_utils.CudaGraphManager
+    capture = manager.capture
+
+    def capture_timed(self, create_forward_fn, *args, **kwargs):
+        marks = []
+
+        def create(desc, warmup):
+            if warmup:
+                marks.append((f"{desc.cg_mode.name}.{desc.num_tokens}", time.monotonic()))
+            return create_forward_fn(desc, warmup=warmup)
+
+        with load_timers.phase("engine.graph_capture"):
+            result = capture(self, create, *args, **kwargs)
+        end = time.monotonic()
+        for (label, start), nxt in zip(marks, [m[1] for m in marks[1:]] + [end]):
+            load_timers.add(f"engine.graph_capture.{label}", nxt - start)
+        return result
+
+    capture_timed.__wrapped__ = capture
+    manager.capture = capture_timed
+    worker._isoexec_load_timers = True
     return True
 
 
@@ -1073,4 +1226,47 @@ def patch_vllm_v2_shard_sampler() -> bool:
     runner_cls.sample = sample
     runner_cls._isoexec_shard_sampler = True
     print("[ISOEXEC-SHARD-SAMPLER] Model Runner V2 vocab-parallel sampling head INSTALLED", flush=True)
+    return True
+
+
+def _local_kv_cache_tensors(config):
+    """``config`` with the KV cache tensors of layers this worker does not hold removed.
+
+    vLLM 0.33 projects the global KV cache groups onto a pipeline stage (``_project_kv_cache_groups_to_worker``)
+    and keeps a group none of whose layers is on the stage with its full ``UniformTypeKVCacheSpecs`` (models with
+    packed per-layer specs, e.g. DeepSeek V4.1), so the per-worker config lists tensors of other stages' layers and
+    the worker's ``allocate_kv_cache`` finds no group for them (``StopIteration``). Such a tensor names only
+    layers of no group of this worker; it is dropped. Every other tensor is kept unchanged (offsets and strides
+    are absolute), so a config without such tensors -- every single-stage config, every model without packed
+    group specs -- is returned as it was."""
+    held = {name for group in config.kv_cache_groups for name in group.layer_names}
+    kept = [t for t in config.kv_cache_tensors if any(name in held for name in t.layers)]
+    if len(kept) == len(config.kv_cache_tensors):
+        return config
+    mixed = [t for t in kept if not all(name in held for name in t.layers)]
+    if mixed:
+        raise ValueError(f"a KV cache tensor mixes held and foreign layers: {mixed[0].layers}")
+    config.kv_cache_tensors = kept
+    return config
+
+
+def patch_vllm_pp_kv_cache_tensors() -> bool:
+    """Wrap the engine core's ``get_kv_cache_configs`` with ``_local_kv_cache_tensors`` per worker (idempotent)."""
+    try:
+        from vllm.v1.engine import core
+    except Exception:  # pragma: no cover - vLLM absent
+        return False
+    original = getattr(core, "get_kv_cache_configs", None)
+    if original is None:
+        return False
+    if getattr(original, "_isoexec_orig", None) is not None:
+        return True
+    from functools import wraps
+
+    @wraps(original)
+    def wrapped(*args, **kwargs):
+        return [_local_kv_cache_tensors(config) for config in original(*args, **kwargs)]
+
+    wrapped._isoexec_orig = original
+    core.get_kv_cache_configs = wrapped
     return True

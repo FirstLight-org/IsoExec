@@ -69,13 +69,58 @@ def leaf_fp32_optimizer_shards(enabled: bool):
         native._build_model_and_main_param_groups = original
 
 
+def require_uniform_cpu_capability(group=None) -> str:
+    """Refuse CPU-offloaded Adam across ranks whose ATen CPU kernels differ.
+
+    Megatron's offloaded Adam is ``torch.optim.AdamW(fused=True)`` on the host (``HybridDeviceOptimizer``). Its
+    bits depend on the ATen CPU capability (measured: DEFAULT differs from AVX2 / AVX512, which agree; thread
+    count does not matter). Parameters every rank holds and updates itself (the EP-summed router and shared
+    expert at EP > 1, ``mark_ep_summed``) stay equal across ranks only if every rank runs the same kernels.
+    Collective over ``group`` (default: the world); pin ``ATEN_CPU_CAPABILITY`` on every node to fix a mix."""
+    import torch.distributed as dist
+
+    mine = str(torch.backends.cpu.get_cpu_capability())
+    if not dist.is_initialized() or dist.get_world_size(group) == 1:
+        return mine
+    every: list = [None] * dist.get_world_size(group)
+    dist.all_gather_object(every, mine, group=group)
+    if len(set(every)) != 1:
+        ranks = {cap: [r for r, c in enumerate(every) if c == cap] for cap in sorted(set(every))}
+        raise RuntimeError(f"CPU_ADAM_CAPABILITY_MIXED: optimizer_cpu_offload runs Adam on the host and its bits "
+                           f"depend on the ATen CPU capability; ranks differ: {ranks} (set ATEN_CPU_CAPABILITY "
+                           "to one value on every node)")
+    return mine
+
+
 def finish_native_optimizer_step(modules: Sequence[Any]) -> None:
-    """Complete native writes and parameter gathers before the next model consumer."""
+    """Complete native writes and parameter gathers before the next model consumer.
+
+    The optimizer writes parameters through the DDP buffers, which leaves their
+    version counters unchanged; components that cache weight-derived copies
+    (``refresh_derived_weights``) re-derive them in place here.
+    """
     for module in modules:
         for bucket in (*module.bucket_groups, *module.expert_parallel_bucket_groups):
             if bucket.ddp_config.overlap_param_gather:
                 bucket.finish_param_sync(skip_next_bucket_dispatch=True)
     torch.cuda.synchronize()
+    refresh_derived_weights(modules)
 
 
-__all__ = ["dtype_uniform_param_group_overrides", "finish_native_optimizer_step", "leaf_fp32_optimizer_shards"]
+def refresh_derived_weights(modules: Sequence[Any]) -> int:
+    """Re-derive every weight-derived copy the components of ``modules`` cache, in place. Returns the count."""
+    from isoexec.nn.component import Component
+
+    count = 0
+    for module in modules:
+        for component in module.modules():
+            refresh = getattr(component, "refresh_derived_weights", None)
+            if isinstance(component, Component) and refresh is not None:
+                count += refresh()
+    if count:
+        torch.cuda.synchronize()
+    return count
+
+
+__all__ = ["dtype_uniform_param_group_overrides", "finish_native_optimizer_step", "leaf_fp32_optimizer_shards",
+           "refresh_derived_weights", "require_uniform_cpu_capability"]

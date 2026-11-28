@@ -19,6 +19,10 @@ class StateSpec:
     tokens_per_entry: int | None = None
     retention: Literal["full_history", "sliding_window"] | None = None
     window_tokens: int | None = None
+    # "request": the state lives as long as its request. "segment": a sliding window that holds only the
+    # positions of the current decoder segment of an encoder-decoder program (rebuilt by every replay, never
+    # prefix-cached); a window of a segment never reads a position before the segment's start.
+    scope: Literal["request", "segment"] = "request"
 
 
 @dataclass(frozen=True)

@@ -135,3 +135,20 @@ def test_forward_rejects_inputs_outside_the_native_token_path(model, forward_con
         model(**args)
 
     assert not body_calls
+
+
+def test_forward_publishes_the_model_state_inputs_for_its_duration(model, forward_context, body_calls, monkeypatch):
+    from isoexec.runtimes.vllm._inputs import current_engine_inputs
+    seen = []
+    forward = model.body.forward
+
+    def observe(input_ids, seq):
+        seen.append(current_engine_inputs())
+        return forward(input_ids, seq)
+
+    monkeypatch.setattr(model.body, "forward", observe)
+    window = torch.full((4, 3), -1, dtype=torch.int32)
+    model(torch.tensor([4, 5, 6]), torch.tensor([0, 1, 2]), lookback_token_ids=window)
+    model(torch.tensor([4, 5]), torch.tensor([0, 1]))
+    assert seen[0]["lookback_token_ids"] is window and dict(seen[1]) == {}
+    assert current_engine_inputs() is None

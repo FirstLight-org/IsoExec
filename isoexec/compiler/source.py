@@ -107,6 +107,13 @@ class ModelSource:
         if (not isinstance(architectures, list) or not architectures
                 or any(not isinstance(name, str) or not name.isidentifier() for name in architectures)):
             raise ModelSourceError("HF config.json requires a nonempty architectures list of class names")
+        # A package that ships its own config class names it (``CONFIG_CLASS`` in model.py): the AutoConfig
+        # mapping is process-wide, and a runtime may have registered another class for the same model_type.
+        declared = getattr(self._module("model"), "CONFIG_CLASS", None)
+        if declared is not None:
+            if getattr(declared, "model_type", None) != model_type:
+                raise ModelSourceError(f"CONFIG_CLASS parses model_type {declared.model_type!r}, not {model_type!r}")
+            return declared(**data)
         return AutoConfig.for_model(model_type, **data)
 
     def apply_overrides(self, base: Mapping[str, object], patch: Mapping[str, object]) -> dict[str, Any]:

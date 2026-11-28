@@ -40,6 +40,13 @@ COALESCE_BYTES = 1 << 20
 
 _installed = False
 _discarded: set[int] = set()  # id() of models whose Parameter bytes are discarded (fast-path emptiness test)
+_failed: set[int] = set()  # id() of models whose last weight update failed (fast-path emptiness test)
+
+
+def mark_update_failed(model, failed: bool) -> None:
+    """Recorded by ``VllmModel`` at every update start (False) and failure (True): the execute guard refuses
+    generation after a failed update until a complete one finishes."""
+    (_failed.add if failed else _failed.discard)(id(model))
 
 
 class narrowed_named_buffers:
@@ -291,6 +298,25 @@ def _weights_allocations(alloc) -> dict[int, int]:
             if d.tag == WEIGHTS_TAG and not d.is_asleep}
 
 
+def cumem_asleep(tensor: Any) -> bool:
+    """Whether ``tensor``'s bytes lie in a vLLM cumem allocation that is asleep right now (unmapped: any access
+    faults with an illegal address). False without sleep mode or outside the pool. The SkyRL colocated loop
+    wakes ``weights`` before a weight update and ``kv_cache`` only after it, so an update commit that touches
+    cache pages must not write them while asleep."""
+    try:
+        from vllm.device_allocator.cumem import CuMemAllocator
+    except Exception:  # pragma: no cover - vLLM absent
+        return False
+    alloc = CuMemAllocator.instance
+    if alloc is None:
+        return False
+    ptr = int(tensor.data_ptr())
+    for base, data in alloc.pointer_to_data.items():
+        if int(base) <= ptr < int(base) + int(data.handle[1]):
+            return bool(data.is_asleep)
+    return False
+
+
 def _exact_sleep(worker, orig_sleep, level: int):
     import gc
 
@@ -377,6 +403,47 @@ def _install_level2_guard(_gw) -> None:
     _gw.Worker._ix_level2_guard = True
 
 
+KV_CACHE_TAG = "kv_cache"
+
+
+def _wakes_kv_cache(tags) -> bool:
+    return tags is None or KV_CACHE_TAG in tags
+
+
+def install_cache_wake_hook() -> bool:
+    """Wrap ``Worker.wake_up`` so an IsoExec model zeroes its engine cache pages right after the KV-cache pool is
+    mapped again (idempotent). vLLM's ``CuMemAllocator.wake_up`` maps NEW physical memory for a discarded tag and
+    clears it only on ROCm: on CUDA the woken KV pages hold unspecified bytes. The mature precedent is the GDN CPR
+    arena (``ops/gdn/shared/gdn_cpr_sleep``: wake re-maps, zeroes, resets). Runs in every worker inside its own
+    wake call, so before any request is scheduled and once per wake that maps ``kv_cache``."""
+    from vllm.v1.worker import gpu_worker as _gw
+
+    if getattr(_gw.Worker.wake_up, "_ix_cache_wake", False):
+        return True
+    orig_wake = _gw.Worker.wake_up
+
+    def wake_up(self, tags=None):
+        out = orig_wake(self, tags)
+        model = _isoexec_model(self)
+        if model is not None and _wakes_kv_cache(tags):
+            zero = getattr(model, "zero_engine_caches", None)
+            if callable(zero):
+                import torch
+
+                t0 = time.perf_counter()
+                n = int(zero())
+                torch.cuda.synchronize()
+                if n:
+                    _say(f"wake(kv_cache): zeroed {n} engine cache tensors in {time.perf_counter() - t0:.3f}s")
+        return out
+
+    wake_up.__wrapped__ = orig_wake
+    wake_up.__name__, wake_up.__qualname__, wake_up.__doc__ = orig_wake.__name__, orig_wake.__qualname__, orig_wake.__doc__
+    wake_up._ix_cache_wake = True
+    _gw.Worker.wake_up = wake_up
+    return True
+
+
 def install_exact_sleep_hooks() -> bool:
     """Wrap ``Worker.sleep``/``wake_up``/``execute_model`` (idempotent; refuses loudly on a surface change).
 
@@ -439,8 +506,14 @@ def install_exact_sleep_hooks() -> bool:
         return out
 
     def execute_model(self, scheduler_output, *args, **kwargs):
-        if _discarded and getattr(scheduler_output, "total_num_scheduled_tokens", 0) > 0:
-            check_weights_live(_isoexec_model(self))
+        if getattr(scheduler_output, "total_num_scheduled_tokens", 0) > 0:
+            model = _isoexec_model(self) if (_discarded or _failed) else None
+            if _discarded:
+                check_weights_live(model)
+            if model is not None and getattr(model, "_weight_update_failed", False):
+                raise WeightsDiscardedError("IsoExec engine: the last weight update failed (e.g. "
+                                            "PROGRAM_IDENTITY_MISMATCH); generation stays refused until a complete "
+                                            "update succeeds")
         return orig_exec(self, scheduler_output, *args, **kwargs)
 
     for fn, orig in ((sleep, orig_sleep), (wake_up, orig_wake), (execute_model, orig_exec)):
@@ -455,7 +528,7 @@ def install_exact_sleep_hooks() -> bool:
 
 
 __all__ = [
-    "COALESCE_BYTES", "FLAG", "Stash", "WeightsDiscardedError", "backup_ranges", "check_weights_live",
+    "COALESCE_BYTES", "FLAG", "KV_CACHE_TAG", "cumem_asleep", "install_cache_wake_hook", "Stash", "WeightsDiscardedError", "backup_ranges", "check_weights_live",
     "exact_sleep_enabled", "install_exact_sleep_hooks", "mark_discarded", "mark_restored", "merge_ranges",
     "narrowed_named_buffers",
     "parameter_ranges", "weights_discarded",

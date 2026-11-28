@@ -19,11 +19,21 @@ from isoexec.schema.token_layout import TokenLayoutContract, TokenLayoutEffect
 
 #: Family policy, not an argument: the head is held bf16, tied or not.
 HELD_DTYPE = "bf16"
+#: Logit precisions a head may produce: "bf16" rounds the head GEMM to bf16 and widens it at the
+#: output boundary; "fp32" returns the GEMM's FP32 root unrounded.
+LOGITS_DTYPES = ("bf16", "fp32")
 
 #: The keyword-only seam ``logprobs.log_softmax`` exposes for the vocab-parallel process group,
 #: named identically to ``runtimes/parallel.py::SEAM_GROUP`` so a reader can put the two side by
 #: side. A binding that lacks it at TP>1 is refused by name rather than run over a column shard.
 SEAM_GROUP = "group"
+
+
+def head_selection(head: "LMHead") -> dict[str, dict[str, str]]:
+    """Binding keywords selecting the head GEMM: none for the bf16 head (the established binding),
+    ``facts={"logits": "fp32"}`` for the FP32 root."""
+    facts = head.head_facts()
+    return {"facts": facts} if facts else {}
 
 
 class LMHead(Component):
@@ -59,15 +69,19 @@ class LMHead(Component):
         hidden: int,
         padded_vocab: int | None = None,
         tied_to: nn.Parameter | None = None,
+        logits_dtype: str = "bf16",
         device: torch.device | str = "meta",
     ) -> None:
         padded = vocab if padded_vocab is None else padded_vocab
+        if logits_dtype not in LOGITS_DTYPES:
+            raise ValueError(f"LMHead: logits_dtype must be one of {LOGITS_DTYPES}, got {logits_dtype!r}")
         if min(vocab, hidden) < 1:
             raise ValueError(f"LMHead: vocab and hidden must be >= 1, got {(vocab, hidden)}")
         if padded < vocab:
             raise ValueError(f"LMHead: padded_vocab={padded} is smaller than vocab={vocab}")
         super().__init__()
         self.vocab, self.hidden, self.padded_vocab = vocab, hidden, padded
+        self.logits_dtype = logits_dtype
         self.tied = tied_to is not None
         self.tp_group: torch.distributed.ProcessGroup | None = None
         if tied_to is None:
@@ -96,6 +110,7 @@ class LMHead(Component):
             "hidden": self.hidden,
             "tied": self.tied,
             "held_dtype": HELD_DTYPE,
+            **({"logits_dtype": self.logits_dtype} if self.logits_dtype != "bf16" else {}),
         }
 
 
@@ -110,7 +125,8 @@ class LMHead(Component):
         # Under SP, the forward seam first gathers the full token stream.
         self.slots.tp_copy = self.seams.tp_copy()
         self.slots.head = self.bind_op(
-            "logprobs.head", site=f"{self.site}.head", inputs={"tp": tp, "boundary_out_dtype": "fp32"}
+            "logprobs.head", site=f"{self.site}.head", inputs={"tp": tp, "boundary_out_dtype": "fp32"},
+            **head_selection(self),
         )
         # The two remaining stages, by side. See "Which side owes them" in the module docstring.
         if placement.side == "trainer":
@@ -126,6 +142,10 @@ class LMHead(Component):
                 "the engine adapter assigns it: it carries the engine's own vocab-parallel group, which "
                 "is a host handle a component never creates",
             )
+
+    def head_facts(self) -> dict[str, str]:
+        """Selection facts of the head GEMM: none for the bf16 head, ``logits`` for the FP32 root."""
+        return {} if self.logits_dtype == "bf16" else {"logits": self.logits_dtype}
 
     def _resolve_trainer_stages(self, placement: Placement) -> None:
         """Bind identity row selection and log-softmax on the trainer. At TP greater than one,
@@ -184,4 +204,4 @@ class LMHead(Component):
         return f"vocab={self.vocab}, padded_vocab={self.padded_vocab}, hidden={self.hidden}, tied={self.tied}"
 
 
-__all__ = ["HELD_DTYPE", "SEAM_GROUP", "LMHead"]
+__all__ = ["head_selection", "HELD_DTYPE", "SEAM_GROUP", "LMHead"]

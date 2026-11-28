@@ -20,8 +20,11 @@ from isoexec.runtimes.megatron import residency
 from .aux_batch import install_worker as install_aux_batches
 from .aux_batch import worker_microbatches
 from .aux_loss import build_wrapper
+from .device_ordinal import VisibleDeviceOrdinal
 from .megatron import build_module, finish_optimizer_step, init_configs
 from .online_prescore import install_worker as install_online_prescore
+from .rollout import admit_generator
+from .scoring import _find_isoexec_stage
 from .weight_source import build_weight_source
 
 
@@ -65,6 +68,7 @@ class _IsoExecWorker:
     ):
         module = build_module(self, wrap_with_ddp=wrap_with_ddp, ddp_config=ddp_config, lora_config=lora_config, bf16=bf16)
         self._isoexec_stack_baseline = residency.baseline()
+        admit_generator(self.cfg, _find_isoexec_stage(module))
         return module
 
     def offload_to_cpu(self, *args, **kwargs):
@@ -74,7 +78,7 @@ class _IsoExecWorker:
         return result
 
 
-class IsoExecPolicyWorker(_IsoExecWorker, MegatronPolicyWorkerBase):
+class IsoExecPolicyWorker(VisibleDeviceOrdinal, _IsoExecWorker, MegatronPolicyWorkerBase):
     strategy_cls = IsoExecMegatronStrategy
     _isoexec_section_name = "policy"
 
@@ -111,7 +115,7 @@ class IsoExecPolicyWorker(_IsoExecWorker, MegatronPolicyWorkerBase):
         return build_weight_source(self.actor_module, dtype, backend, verify=verify)
 
 
-class IsoExecRefWorker(_IsoExecWorker, MegatronRefWorkerBase):
+class IsoExecRefWorker(VisibleDeviceOrdinal, _IsoExecWorker, MegatronRefWorkerBase):
     _isoexec_section_name = "ref"
 
     def _build_model_wrapper(self):

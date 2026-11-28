@@ -171,6 +171,7 @@ def fake_vllm(monkeypatch):
     monkeypatch.setattr(sys.modules["vllm.v1.worker"], "gpu_worker", gw, raising=False)
     monkeypatch.setattr(ws, "_installed", False)
     monkeypatch.setattr(ws, "_discarded", set())
+    monkeypatch.setattr(ws, "_failed", set())
     return types.SimpleNamespace(Worker=Worker, CuMemAllocator=CuMemAllocator, calls=calls)
 
 
@@ -256,3 +257,20 @@ def test_surface_change_refuses_loudly(fake_vllm, monkeypatch):
     fake_vllm.Worker.sleep = sleep
     with pytest.raises(RuntimeError, match=ws.FLAG):
         ws.install_exact_sleep_hooks()
+
+
+def test_execute_refuses_scheduled_tokens_after_a_failed_update(fake_vllm, monkeypatch):
+    """A failed update (e.g. PROGRAM_IDENTITY_MISMATCH at finish) keeps generation refused until one succeeds."""
+    monkeypatch.delenv(ws.FLAG, raising=False)
+    ws.install_exact_sleep_hooks()
+    model = torch.nn.Module()
+    monkeypatch.setattr(ws, "_isoexec_model", lambda worker: model)
+    w = fake_vllm.Worker(model)
+    model._weight_update_failed = True
+    ws.mark_update_failed(model, True)
+    assert w.execute_model(types.SimpleNamespace(total_num_scheduled_tokens=0)) == "ran"
+    with pytest.raises(ws.WeightsDiscardedError, match="last weight update failed"):
+        w.execute_model(types.SimpleNamespace(total_num_scheduled_tokens=5))
+    model._weight_update_failed = False
+    ws.mark_update_failed(model, False)
+    assert w.execute_model(types.SimpleNamespace(total_num_scheduled_tokens=5)) == "ran"

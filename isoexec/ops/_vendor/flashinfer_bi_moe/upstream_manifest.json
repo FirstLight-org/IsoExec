@@ -1,0 +1,348 @@
+{
+ "source": "FlashInfer v0.7.5rc3 (tag ed086f9d9e927bb189edb7d8de8269831a40e697), wheel sha256 c1b588a773cb8c6fea9ac396b9ac94453962bdf1d82228e6666aad28193cc655",
+ "files": [
+  {
+   "path": "__init__.py",
+   "upstream": "flashinfer/__init__.py",
+   "upstream_sha256": "74e1b236d76ddb9c10b1272d498126e6c1b729b393d6b4e51aab509b6f50c5bf",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/__init__.py",
+   "upstream": "flashinfer/batch_invariant/__init__.py",
+   "upstream_sha256": "22aec7eda597f9aaa9ef017ab9079686ead965509a7389b00a99775cf13746b0",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/canon.py",
+   "upstream": "flashinfer/batch_invariant/canon.py",
+   "upstream_sha256": "9b94dd64a4425aac0ac0a63246e3303edf432d79c7f62d4c43b7f738e3fd13e2",
+   "local_sha256": "9b94dd64a4425aac0ac0a63246e3303edf432d79c7f62d4c43b7f738e3fd13e2",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/fp_interface/__init__.py",
+   "upstream": "flashinfer/batch_invariant/fp_interface/__init__.py",
+   "upstream_sha256": "6f64e11d90d930e2eb083fb9335e820d6eddde8ee680ff0fb9504d7d66194a40",
+   "local_sha256": "6f64e11d90d930e2eb083fb9335e820d6eddde8ee680ff0fb9504d7d66194a40",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/fp_interface/cute.py",
+   "upstream": "flashinfer/batch_invariant/fp_interface/cute.py",
+   "upstream_sha256": "25352616d2beb07dbcf798a8e58efe7e8cbb088c985914c01c3ff7cdaf2f7466",
+   "local_sha256": "25352616d2beb07dbcf798a8e58efe7e8cbb088c985914c01c3ff7cdaf2f7466",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/fp_interface/exact.py",
+   "upstream": "flashinfer/batch_invariant/fp_interface/exact.py",
+   "upstream_sha256": "54488c7ea81324b06caceb36a289eaba703b1da60fbc98c6f826770cf4bd2955",
+   "local_sha256": "54488c7ea81324b06caceb36a289eaba703b1da60fbc98c6f826770cf4bd2955",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/fp_interface/term.py",
+   "upstream": "flashinfer/batch_invariant/fp_interface/term.py",
+   "upstream_sha256": "28552340a68b34d0e3fe6f3ca17e04e71b6bfaa0801faaa9565d8c4f7e57186c",
+   "local_sha256": "28552340a68b34d0e3fe6f3ca17e04e71b6bfaa0801faaa9565d8c4f7e57186c",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/jit.py",
+   "upstream": "flashinfer/batch_invariant/jit.py",
+   "upstream_sha256": "4b6803cd01f163d3aa5ac93ec531278b8c3fb66855d5ea640b21ecc6ba832cb4",
+   "local_sha256": "432c47b76971f9079ffb4756197a1bbf4b311513bc5689ab73f87fc71f45a56e",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/quantization/__init__.py",
+   "upstream": "flashinfer/batch_invariant/quantization/__init__.py",
+   "upstream_sha256": "6dcf2af4d49c4ae2332c96be8742ba9d32240c087fdc55ee9a320a8a27b03cad",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/quantization/cute_ext.py",
+   "upstream": "flashinfer/batch_invariant/quantization/cute_ext.py",
+   "upstream_sha256": "e4c17683b3c582920dacab2ca64495ce21fae7ff8fe8bfccd7684fcce077e936",
+   "local_sha256": "c447e63676c717832c7f1ef7f5ad53652f7630331e8c79324118309330930230",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/sampling/__init__.py",
+   "upstream": "flashinfer/batch_invariant/sampling/__init__.py",
+   "upstream_sha256": "d7b3a4f498a14f52b5092cde55b6741c14dbe3f052d237ffbc992943b1c310ef",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "batch_invariant/sampling/sterm.py",
+   "upstream": "flashinfer/batch_invariant/sampling/sterm.py",
+   "upstream_sha256": "e7a11c55aba0b692e7df0c9d22cfa96d3870b293b9020b40ddadcd0557fc380e",
+   "local_sha256": "e7a11c55aba0b692e7df0c9d22cfa96d3870b293b9020b40ddadcd0557fc380e",
+   "modified": false
+  },
+  {
+   "path": "batch_invariant/support.py",
+   "upstream": "flashinfer/batch_invariant/support.py",
+   "upstream_sha256": "3e1ec10a7ddc69b19167206a84cf9fb564d2e9c9fb9a60d23c7743d4cc96ef4e",
+   "local_sha256": "3e1ec10a7ddc69b19167206a84cf9fb564d2e9c9fb9a60d23c7743d4cc96ef4e",
+   "modified": false
+  },
+  {
+   "path": "cute_dsl/__init__.py",
+   "upstream": "flashinfer/cute_dsl/__init__.py",
+   "upstream_sha256": "159c96b4d24dfd24bbc1ae867b4b90355ea3aa2631d3229719e494ad4f39ac81",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "cute_dsl/attention/__init__.py",
+   "upstream": "flashinfer/cute_dsl/attention/__init__.py",
+   "upstream_sha256": "b37ac7421244b0f4c3e6452194c2a48c29de5c18721ff52c1bc4a56712be0434",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "cute_dsl/attention/fmha/__init__.py",
+   "upstream": "flashinfer/cute_dsl/attention/fmha/__init__.py",
+   "upstream_sha256": "c4dc0cf54a15db963e684ed996a7ceb38a3737390327929f05930ac903f33514",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "cute_dsl/attention/fmha/helpers/__init__.py",
+   "upstream": "flashinfer/cute_dsl/attention/fmha/helpers/__init__.py",
+   "upstream_sha256": "c4dc0cf54a15db963e684ed996a7ceb38a3737390327929f05930ac903f33514",
+   "local_sha256": "c4dc0cf54a15db963e684ed996a7ceb38a3737390327929f05930ac903f33514",
+   "modified": false
+  },
+  {
+   "path": "cute_dsl/attention/fmha/helpers/static_persistent_tile_scheduler.py",
+   "upstream": "flashinfer/cute_dsl/attention/fmha/helpers/static_persistent_tile_scheduler.py",
+   "upstream_sha256": "f6547bc732d517c7fb57a3211e95a4da976b15b89ed29dbf41e5f77ceb9cb024",
+   "local_sha256": "f6547bc732d517c7fb57a3211e95a4da976b15b89ed29dbf41e5f77ceb9cb024",
+   "modified": false
+  },
+  {
+   "path": "cute_dsl/availability.py",
+   "upstream": "flashinfer/cute_dsl/availability.py",
+   "upstream_sha256": "3de9ab0267f99e2a3d56159c47c44f6b935b8bbff6a010d2217a733cbb3a0a15",
+   "local_sha256": "3de9ab0267f99e2a3d56159c47c44f6b935b8bbff6a010d2217a733cbb3a0a15",
+   "modified": false
+  },
+  {
+   "path": "fused_moe/__init__.py",
+   "upstream": "flashinfer/fused_moe/__init__.py",
+   "upstream_sha256": "6bb95fdbc90a62d4b2922fe1fab7fb678427ce9328d2c0a95f33dc6744425d66",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/__init__.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/__init__.py",
+   "upstream_sha256": "d2191afbde2ce1c327c974dfcf198bc00dafdb06701a3d176285c49c90b5fa8b",
+   "local_sha256": "d2191afbde2ce1c327c974dfcf198bc00dafdb06701a3d176285c49c90b5fa8b",
+   "modified": false
+  },
+  {
+   "path": "fused_moe/batch_invariant/api.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/api.py",
+   "upstream_sha256": "2251d106d8c2f4927121b538eaaa0df7abe8671d5c582b985e781740f1db813e",
+   "local_sha256": "bec8f0405f7fe153294cf8b0da969ac977840b2831e5c4bb4f89e9836def0757",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/__init__.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/__init__.py",
+   "upstream_sha256": "d1ba1fb24f8e948a86080879aae02dc335af05ee01bd6a4e6c0816cccdb47491",
+   "local_sha256": "d1ba1fb24f8e948a86080879aae02dc335af05ee01bd6a4e6c0816cccdb47491",
+   "modified": false
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/compile.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/compile.py",
+   "upstream_sha256": "411be81b00e441cffd1df92c7d49e7d314c8d1b6a7137e9995918e61aafe3e4a",
+   "local_sha256": "ae24e2ffaa533cc8c7709947791f03b004c94582e774502e51ce0a5e16b05938",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/epilogue.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/epilogue.py",
+   "upstream_sha256": "a630ebb5d22c8a66afa0e0726cc24694da7dfdad56b455564d93b6db4c0e2e70",
+   "local_sha256": "f5e866938e1c71cf83462d56aaed260d365911819e2d0cac79aceb1786317d54",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/kernel.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/kernel.py",
+   "upstream_sha256": "4a0f9f93cddadb2a9ca7df7204ba89ef5f23361cfbfa3a89c28b30986fdd7a64",
+   "local_sha256": "75c46a7ed51bc46945050ea0f03294c525b751b8d852582bcea28c6bf6b53fa4",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/scheduler.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/scheduler.py",
+   "upstream_sha256": "78b1041bd034763cc80a7d3e29c33e4ed0d6135cc8a5c4fac606ed5cb3b8551a",
+   "local_sha256": "78b1041bd034763cc80a7d3e29c33e4ed0d6135cc8a5c4fac606ed5cb3b8551a",
+   "modified": false
+  },
+  {
+   "path": "fused_moe/batch_invariant/blocks/swap_bf16.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/blocks/swap_bf16.py",
+   "upstream_sha256": "87acf63420cdbfa8553a65a8ad9264beb8760151c8006569a46623fb4565d9d9",
+   "local_sha256": "9ce60c7f637611e7b711a2435f5f4a52f6de83e115404182a5e776d0b44771f4",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/combine.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/combine.py",
+   "upstream_sha256": "d9bc4c79948c2462922f7d173cbea72c0b3b9e1e9bc279d4099397b7296b605d",
+   "local_sha256": "7aeef489a141ba7808c20c71ad38505c0874f4eefaee9fead254a01caf71d7e9",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/mterm.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/mterm.py",
+   "upstream_sha256": "ee8810228a2112ec30d976aa487790e79f68d0bc7654284a034d8698b872f60f",
+   "local_sha256": "dd3ff1a03846906ad2e54bde0a6b65e351cc235d7660ecc0d989794e877f8cc4",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/pdl.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/pdl.py",
+   "upstream_sha256": "7cf737ccebd69b7bedbe85bd6b075e3a8fd2f7a7c4372c9e18f60bdffa5ee1a1",
+   "local_sha256": "7cf737ccebd69b7bedbe85bd6b075e3a8fd2f7a7c4372c9e18f60bdffa5ee1a1",
+   "modified": false
+  },
+  {
+   "path": "fused_moe/batch_invariant/permute.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/permute.py",
+   "upstream_sha256": "41a7ad9529365acd64ec7edb2b16757486bed657ee2fa950f9d08f471c8652f8",
+   "local_sha256": "5b8f56d3cfcf49c033b1ef6da4dcac8affc830eeb614659210bc9ba3b8894a26",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/route.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/route.py",
+   "upstream_sha256": "bb7da6158467e61416d0b55f08889c4cd2de8f487e73b279efca9f5da507f39e",
+   "local_sha256": "682b590358f1e18929517453be8fc7cc6e0d549e23cb3a2e89b08c190d6ceb9e",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/route_plan.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/route_plan.py",
+   "upstream_sha256": "c08b7a99b00d5737d786d5671a4cb961817c2fbf31e327e553ea2d84fd9362b1",
+   "local_sha256": "e9ffd18c236fddaa9b6d991f949a01538d9819d428e05e0eab8cd7f360b6fc23",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/schedule.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/schedule.py",
+   "upstream_sha256": "1982841acee7ef080068d15c6a5272b185c078ca77922bd8733207e29dbfe294",
+   "local_sha256": "abc57ffe0e253dac9f7e100bf0e93edd4c3f69188e64a46ec4527516ba15b63b",
+   "modified": true
+  },
+  {
+   "path": "fused_moe/batch_invariant/spec.py",
+   "upstream": "flashinfer/fused_moe/batch_invariant/spec.py",
+   "upstream_sha256": "ca6244529cc498108eb03f4f7119fe9d471cc57c1c74eb02bfe49c9fd71d2aa4",
+   "local_sha256": "5bb244d9ff0e21cff0997d5c03df3e17725ca8a3bd3dd089120a868cbb90b17a",
+   "modified": true
+  },
+  {
+   "path": "gemm/__init__.py",
+   "upstream": "flashinfer/gemm/__init__.py",
+   "upstream_sha256": "dcf7a8c06bb6f3fe4be012151cccb47047bc72c5f3a18740719330d31634d331",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/__init__.py",
+   "upstream": "flashinfer/gemm/batch_invariant/__init__.py",
+   "upstream_sha256": "ba6b965e2a9a073ac68bcd2c13294e5f7d868caccc3dea711e866fcf0252c537",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/api.py",
+   "upstream": "flashinfer/gemm/batch_invariant/api.py",
+   "upstream_sha256": "985eafe194809f5a831b7f58a7be1e5bdb8825317c2f2414028c42ed57c99b5b",
+   "local_sha256": "071e042be7db49d52f69c8c07506709bc0814e7a2c64b12c55c1c89a90b34aa8",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/blocks/__init__.py",
+   "upstream": "flashinfer/gemm/batch_invariant/blocks/__init__.py",
+   "upstream_sha256": "9a8a5789545e3e7b7026486133ecf227ab7eb4bf91bff56eb97521f06e6571d2",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/blocks/mainloop.py",
+   "upstream": "flashinfer/gemm/batch_invariant/blocks/mainloop.py",
+   "upstream_sha256": "4fcd558bbb0012a5ac839c51b2ef4aeb0ef9d03407e8832e1564752d01d84c85",
+   "local_sha256": "4fcd558bbb0012a5ac839c51b2ef4aeb0ef9d03407e8832e1564752d01d84c85",
+   "modified": false
+  },
+  {
+   "path": "gemm/batch_invariant/blocks/operands.py",
+   "upstream": "flashinfer/gemm/batch_invariant/blocks/operands.py",
+   "upstream_sha256": "7b0382d795cc436f4201b3947c12c7e3056b70a9cb9a8723669f084165b13dbc",
+   "local_sha256": "2b9c941ef94cc595613379e87e62026fbb556496e862567b27a69bf11facffdc",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/generator.py",
+   "upstream": "flashinfer/gemm/batch_invariant/generator.py",
+   "upstream_sha256": "64782ecb956dd9b6ae6c5edad191fdc6693362ea831ba9639c0da3967c9eae30",
+   "local_sha256": "8de59849f26f7a924f9199b231620951b7ee169a8f74f21e9db5a246d29ae4a2",
+   "modified": true
+  },
+  {
+   "path": "gemm/batch_invariant/heuristic.py",
+   "upstream": "flashinfer/gemm/batch_invariant/heuristic.py",
+   "upstream_sha256": "8185fb0726bd8d7965d4a76aa57e74919fe831c641b51f9565f245c30d61ab84",
+   "local_sha256": "8185fb0726bd8d7965d4a76aa57e74919fe831c641b51f9565f245c30d61ab84",
+   "modified": false
+  },
+  {
+   "path": "gemm/batch_invariant/spec.py",
+   "upstream": "flashinfer/gemm/batch_invariant/spec.py",
+   "upstream_sha256": "af042d8dc0c3649d48cd13e0723b2d3910204d6322bbe0cfd8c044f8ee1aa67f",
+   "local_sha256": "28870bd6cc0c78e14c94fc74935bc37e90741db9e2777900b9a5d67d622367ee",
+   "modified": true
+  },
+  {
+   "path": "jit/__init__.py",
+   "upstream": "flashinfer/jit/__init__.py",
+   "upstream_sha256": "097781f88b4eab216c4752e07d1f97214dd88139b1a791f8ace849afe63d8449",
+   "local_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "modified": true
+  },
+  {
+   "path": "jit/cute_dsl_core.py",
+   "upstream": "flashinfer/jit/cute_dsl_core.py",
+   "upstream_sha256": "38ff46e48e550642757a802148ec6a48a90df2592988fc23eba4a409cbda2193",
+   "local_sha256": "be3cea7d0870ee111440405a1264c5140cf21fa16446011cd20babc379bef221",
+   "modified": true
+  },
+  {
+   "path": "tllm_enums.py",
+   "upstream": "flashinfer/tllm_enums.py",
+   "upstream_sha256": "6948afb5e07c16eadec5c6f36059b1a2ce2b2d55a92eb94aabc7a2f433215fb7",
+   "local_sha256": "2c9b5f29c85898f4ddbd2020453cf2fc754884c5c76d6c13498678e31e461698",
+   "modified": true
+  },
+  {
+   "path": "utils.py",
+   "upstream": "flashinfer/utils.py",
+   "upstream_sha256": "e36b704f1ab9e6ac59225f0381922701e18e976246a710270f93057d7c2d2365",
+   "local_sha256": "2788bf0318ef98d14b9f0dc5ce888bdd4915bbfb0ac6971f279d4ed3e3800492",
+   "modified": true
+  }
+ ]
+}

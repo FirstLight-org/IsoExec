@@ -1,0 +1,74 @@
+diff --git a/skyrl/backends/skyrl_train/distributed/megatron/optimizer_offload_to_disk.py b/skyrl/backends/skyrl_train/distributed/megatron/optimizer_offload_to_disk.py
+index 637de93..964b22e 100644
+--- a/skyrl/backends/skyrl_train/distributed/megatron/optimizer_offload_to_disk.py
++++ b/skyrl/backends/skyrl_train/distributed/megatron/optimizer_offload_to_disk.py
+@@ -564,7 +564,9 @@ def _unlock_rank_dir(rank_dir: str) -> None:
+         os.close(fd)
+ 
+ 
+-def build_optimizer_offloaded_to_disk(model_chunks, config, settings: MegatronOptimizerOffloadToDiskConfig):
++def build_optimizer_offloaded_to_disk(
++    model_chunks, config, settings: MegatronOptimizerOffloadToDiskConfig, **optimizer_kwargs
++):
+     """``get_megatron_optimizer`` with every ``DistributedOptimizer`` built as an ``OffloadedDistributedOptimizer``.
+ 
+     ``settings.dir`` is this run's state directory; each rank uses ``<dir>/rank<global rank>/``."""
+@@ -586,7 +588,7 @@ def build_optimizer_offloaded_to_disk(model_chunks, config, settings: MegatronOp
+     _build_context = _BuildContext(settings)
+     try:
+         with _construct_distributed_optimizer_as(OffloadedDistributedOptimizer):
+-            optimizer = get_megatron_optimizer(config=config, model_chunks=model_chunks)
++            optimizer = get_megatron_optimizer(config=config, model_chunks=model_chunks, **optimizer_kwargs)
+     finally:
+         _build_context = None
+     if not all(
+diff --git a/skyrl/backends/skyrl_train/workers/megatron/megatron_worker.py b/skyrl/backends/skyrl_train/workers/megatron/megatron_worker.py
+index 51485c9..7981835 100644
+--- a/skyrl/backends/skyrl_train/workers/megatron/megatron_worker.py
++++ b/skyrl/backends/skyrl_train/workers/megatron/megatron_worker.py
+@@ -939,6 +939,9 @@ class MegatronWorker:
+                     ),
+                     # The support scorer validates loss-active targets against captured support.
+                     "loss_mask": micro.get("loss_mask") if self.enable_sample_support_replay else None,
++                    # Which tokens of each row are the response (right-aligned): with attention_mask it gives
++                    # each row's prompt length, which models keyed on the engine request's prompt need.
++                    "response_mask": micro.get("response_mask"),
+                     "sub_seq_lengths": micro.get("sub_seq_lengths"),
+                     **vlm_inputs,
+                 }
+diff --git a/skyrl/backends/skyrl_train/workers/worker.py b/skyrl/backends/skyrl_train/workers/worker.py
+index f04569e..e7907fd 100644
+--- a/skyrl/backends/skyrl_train/workers/worker.py
++++ b/skyrl/backends/skyrl_train/workers/worker.py
+@@ -295,13 +295,11 @@ class DistributedTorchRayActor:
+         def gpu_numa_node():
+             """NUMA node of the GPU this worker owns, or None if it can't be determined.
+ 
+-            Ray masks CUDA_VISIBLE_DEVICES down to this worker's single GPU, so cuda:0 is
+-            that GPU and its PCI affinity is the exact answer -- no rank-to-socket heuristic
+-            needed (and none works: with one visible device, GPU-count-based sharding sends
+-            every rank but 0 to the last node).
++            Ray may expose only the assigned GPU or preserve all visible devices. The worker
++            selects its assigned device before offload, so its PCI address works in both modes.
+             """
+             try:
+-                props = torch.cuda.get_device_properties(0)
++                props = torch.cuda.get_device_properties(torch.cuda.current_device())
+                 bdf = f"{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
+             except Exception:
+                 return None
+diff --git a/skyrl/train/trainer.py b/skyrl/train/trainer.py
+index 0dc3943..3648484 100644
+--- a/skyrl/train/trainer.py
++++ b/skyrl/train/trainer.py
+@@ -1476,6 +1476,10 @@ class RayPPOTrainer:
+             - `["values"]`: Float[torch.Tensor, "batch_size response_len"]
+         """
+         fwd_keys = ["sequences", "attention_mask"]
++        if training_input.get("response_mask") is not None:
++            # Which tokens of each row are the response: with attention_mask it gives each row's prompt length,
++            # which models keyed on the engine request's prompt need in forward-only passes too.
++            fwd_keys.append("response_mask")
+         if training_input.get("rollout_expert_indices") is not None:
+             fwd_keys.append("rollout_expert_indices")
+         if training_input.get("router_padding_mask") is not None:

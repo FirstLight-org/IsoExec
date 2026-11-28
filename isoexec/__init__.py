@@ -11,6 +11,15 @@ __all__ = ["IsoExecConfig", "ModelSource", "ModelSourceError"]
 
 _HOMES = {"IsoExecConfig": ".config", "ModelSource": ".compiler.source", "ModelSourceError": ".compiler.source"}
 
+# A prebuilt cache (ISOEXEC_PREBUILT_DIR) or prebuilt-only mode (ISOEXEC_PREBUILT_ONLY=1) places the DeepGEMM JIT and
+# Triton caches and installs their refusals before any of them can compile (environment only; ops/prebuilt.py).
+import os as _os
+
+if _os.environ.get("ISOEXEC_PREBUILT_DIR") or _os.environ.get("ISOEXEC_PREBUILT_ONLY") == "1":
+    from .ops.prebuilt_env import activate as _activate_prebuilt
+
+    _activate_prebuilt()
+
 
 def __getattr__(name):
     home = _HOMES.get(name)

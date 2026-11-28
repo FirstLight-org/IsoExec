@@ -1,0 +1,2400 @@
+{
+ "schema_version": 1,
+ "sources": {
+  "deep_gemm": {
+   "url": "https://github.com/deepseek-ai/DeepGEMM",
+   "revision": "5081f8513af57e61696de4f4f04b0e707ffb503e",
+   "license": "MIT"
+  },
+  "deep_jit": {
+   "url": "https://github.com/deepseek-ai/DeepJIT",
+   "revision": "2efdab421e1cfb17fe8bc20e11ca72aa6d0e6c43",
+   "license": "MIT"
+  },
+  "cutlass": {
+   "url": "https://github.com/NVIDIA/cutlass",
+   "revision": "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8",
+   "license": "BSD-3-Clause"
+  }
+ },
+ "files": [
+  {
+   "path": "csrc/apis/config.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/config.hpp",
+   "upstream_sha256": "61b70480befeac43bd7a59bc07943867bb0864f21696c7ba5baff5b214deefcf",
+   "sha256": "ab03ea0eb832630436af9b2637e5efd3efe0d3b39d89f71bb7df3e1dbcccca56",
+   "modified": true,
+   "modifications": [
+    "IsoExec isolation: init() takes the mandatory cache-key signature; add isoexec_jit_config() reporting include root, env prefix, signature and cache dirs without constructing the CUDA runtime.",
+    "IsoExec early launch: set_early_launch / get_early_launch bindings.",
+    "IsoExec register partials: set/get_leaf_register_partials bindings."
+   ]
+  },
+  {
+   "path": "csrc/apis/einsum.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/einsum.hpp",
+   "upstream_sha256": "4cf93429a767add7ae1acf3a3660ea309e314aec29350c831ef245f8464d89a2",
+   "sha256": "74a15f7f1e2a3c6fb46d52619a49735c7303dfb62b1152db3de18bd4befe548c",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: keep only the BF16 bhr,hdr->bhd expression on the SM100 BF16 GEMM (the SM90 and cuBLASLt branches are removed; cuBLASLt was reached only outside deterministic mode); remove bmk,bnk->mn, bhd,hdr->bhr, bhd,bhr->hdr, fp8_bmm and fp8_einsum and their includes."
+   ]
+  },
+  {
+   "path": "csrc/apis/epilogue_class.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/epilogue_class.hpp",
+   "upstream_sha256": "f28a7201628d2c3bff94603cbd8b4952731ece2a10f91484025766ffc4ca2ff7",
+   "sha256": "d8f4e3f6aaff291bf8efca28807703fac3b297fa4231008d9661ddf018ac31e2",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: do not register the FP8 output epilogue class FP8CastWithClamp."
+   ]
+  },
+  {
+   "path": "csrc/apis/gemm.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/gemm.hpp",
+   "upstream_sha256": "7cfdbdcf9fcc524bc715bc744f49f74b8fbab4b91e590cf7eeb3c0946d35770d",
+   "sha256": "9ce41195822784c720cda9af2dcc99e04b4a554574e071fd6a1eece13694a82b",
+   "modified": true,
+   "modifications": [
+    "Add bf16_gemm_nt_leaves: SM100 deterministic BF16 GEMM whose K is cut into L equal leaves (each one ascending chain from +0, own FP32 accumulator), folded by the balanced adjacent-pair tree in the epilogue (IsoExec mm_sm100 leaf-tree program).",
+    "Pruned to BF16: keep only bf16_gemm_nt (SM100 dispatch; the SM90 and cuBLASLt branches are removed, the latter was reached only outside deterministic mode) and bf16_gemm_nt_leaves; remove the FP8/FP4 GEMMs and aliases, the other BF16 layouts (nn/tn/tt) and M/K-grouped BF16 GEMMs, the cuBLASLt/NVFP4/batched syrk-symm bindings and their includes; early_return drops the FP8 output (sfd) parameter, unchanged for BF16/FP32 D. The earlier SM100 grouped FP32-output edit is gone with the grouped bindings.",
+    "Re-expose the upstream SM100 BF16 grouped GEMM bindings (m_grouped_bf16_gemm_nt_contiguous, m_grouped_bf16_gemm_nn_contiguous, k_grouped_bf16_gemm_tn_contiguous with check_k_grouped_args; SM90 branches removed) for the MoE trainer's forward, dgrad and wgrad (k-grouped with the psum layout reads the device group ends: no host counts, no per-layer host sync)."
+   ]
+  },
+  {
+   "path": "csrc/apis/locality_domain.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/locality_domain.hpp",
+   "upstream_sha256": "9ba4d8cd931a19094569c52daf67629bf201ee9c6e3b5ea5ef30cce025e7079f",
+   "sha256": "9ba4d8cd931a19094569c52daf67629bf201ee9c6e3b5ea5ef30cce025e7079f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/apis/mega_gate.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/mega_gate.hpp",
+   "upstream_sha256": "1e0cfc3361a1551476d10dbd9a9f11b7121851d956ce6ad7cb3ad0a529fae186",
+   "sha256": "5aa703b6c36c33edba6d60a6e07200cd43f309825a0d616c72a6ac05eb5939ea",
+   "modified": true,
+   "modifications": [
+    "IsoExec router program (bf16_mega_gate_isoexec): the binding takes the router's selection arguments (mode 0 sigmoid grouped / 1 sqrt-softplus, top_k in {1,2,4,6,8,16}, shared-as-routed slots, groups, routed scale, optional FP32 bias and bool mask) and caller-allocated int32 ids / FP32 weights [T, K+S] in isoexec.ops.moe.router_sm100's table format, and checks the router's geometry (check_geometry; upstream's H % 256 == 0 is also the router logits program's 4 whole-K-block segments); upstream's bf16_mega_gate scoring and its image-bias, fixed-routing, random-routing and physical-map options are not part of this copy. Optional forced_num_split_k / forced_num_mma_ctas restrict the launch plan's ownership for tests (never the bits).",
+    "Add get_mega_gate_isoexec_config (the launch plan the heuristic picks for a shape: ownership only) for tests and benchmarks."
+   ]
+  },
+  {
+   "path": "csrc/apis/mega_moe.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/apis/mega_moe.hpp",
+   "upstream_sha256": "b52f852760daf2e3a54c20920b8d5dc2f88320daa05c9b0ca21331108c8625c7",
+   "sha256": "36e45b8dc1c4c987740450ce57385e8a5bc2d8a119192e1a175dadff809325d3",
+   "modified": true,
+   "modifications": [
+    "Add optional canonical BF16 MegaMoE specialization (bf16_mega_moe_isoexec: one shared expert, non-localized master-layout L1 weights, precise activation arithmetic); preserve upstream default binding.",
+    "Pruned to BF16: remove the FP8xFP4 MegaMoE (fp8_fp4_mega_moe and its IsoExec canonical fp8_fp4_mega_moe_isoexec specialization), its bindings and include. Buffer sizing and block-m helpers are unchanged."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/common.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/common.hpp",
+   "upstream_sha256": "c629883eef88c332ae11bc21fc696ccd91999ed0f2b137c1d3249ed7a0b10f14",
+   "sha256": "c629883eef88c332ae11bc21fc696ccd91999ed0f2b137c1d3249ed7a0b10f14",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/config.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/config.hpp",
+   "upstream_sha256": "3e8173e4dd49a3dd3f7d305fa663741b16f32f7ff5c11efa702d09448bf3ca98",
+   "sha256": "9d44ee027984c71f77537fdda166cd63da68379ffdf38aec5b413ea3c4f78c1a",
+   "modified": true,
+   "modifications": [
+    "GemmDesc.num_leaves (default 1) for the IsoExec leaf-tree GEMM."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/mega_gate.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/mega_gate.hpp",
+   "upstream_sha256": "2084d423d8f612da3a8419da5b8ccd03aa95b890c94e5b1bd16071faf44471a9",
+   "sha256": "399d5ca516982d4c6d98dab343a000743e472a7a998aebe72879f0aceeb88445",
+   "modified": true,
+   "modifications": [
+    "IsoExec segments: a split-K slice owns kNumSegments / num_split_k whole logit segments (num_split_k in {1, 2, 4}, never cutting a segment; upstream also tries 8), which is bit-neutral because the epilogue and the gate fold the segment tree in fixed order, so deterministic mode no longer forbids splitting (upstream: deterministic mode keeps num_split_k = 1).",
+    "IsoExec TMEM budget: each candidate's largest token block is layout::mega_gate::get_max_block_tokens (both epilogue stages of all its segment accumulators in 512 columns) instead of kNumMaxBlockTokens; the task-doubling test measures the doubled plan with its own bound. Every other rule (candidate order, waves, gate warpgroups, stages) is upstream's.",
+    "Optional forced_num_split_k / forced_num_mma_ctas restrict the candidates (tests); the config records max_block_tokens."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/mega_moe.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/mega_moe.hpp",
+   "upstream_sha256": "24961c1f738a504b7f965d9513059b7f400d466746ed4251844a0a221a0ca11e",
+   "sha256": "24961c1f738a504b7f965d9513059b7f400d466746ed4251844a0a221a0ca11e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/runtime.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/runtime.hpp",
+   "upstream_sha256": "5c2733f5f720a45492d756ce6292dff867022d2f09bc4a2d8af3b59b53803efa",
+   "sha256": "479b8944e739273af61c60ab03a98029d3ff2107461e95df4d64badc7f90c498",
+   "modified": true,
+   "modifications": [
+    "IsoExec register partials: the leaf_register_partials knob."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/sm100.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/sm100.hpp",
+   "upstream_sha256": "0d658df9eacacbc3648bde7c3ab895ca64eac2618ce8e98791926cee246da6eb",
+   "sha256": "9534e7740bbaab1fececb66064442d5742a54021eb30c788b9c91f14949a66e5",
+   "modified": true,
+   "modifications": [
+    "Leaf-tree GEMMs: non-swapped layouts only, one accumulator per leaf must fit tensor memory.",
+    "IsoExec progressive leaf fold: leaf-tree layouts need (2 + log2(L/2)) x UMMA_N tensor-memory columns instead of L x UMMA_N.",
+    "IsoExec leaf trees: an explicit block-N multiple steps by 16 (wave-filling widths such as 80); default candidates unchanged.",
+    "IsoExec padded swap-AB tile: the 64-row swap candidate on explicit request (block-N multiple 64), 1-CTA; the B stage counted at 128 rows. The CD staging is counted at 128 columns too (the kernel's STORE_BLOCK_N).",
+    "IsoExec register partials: leaf-tree filter with two TMEM slots, UMMA N <= 96, store halves of 16-column multiples; 384-thread launch config on request."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/heuristics/utils.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/heuristics/utils.hpp",
+   "upstream_sha256": "bfdbe43398c3bf72d9a32b60a832a39924eeddf65fe34de3c4989b6303b9a1c7",
+   "sha256": "bfdbe43398c3bf72d9a32b60a832a39924eeddf65fe34de3c4989b6303b9a1c7",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/jit_kernels/impls/epilogue_class.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/epilogue_class.hpp",
+   "upstream_sha256": "72f461a20f81fe877e22803020742c37d99bc1cf51c08ea50df11ee0428f8261",
+   "sha256": "72f461a20f81fe877e22803020742c37d99bc1cf51c08ea50df11ee0428f8261",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/jit_kernels/impls/runtime_utils.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/runtime_utils.hpp",
+   "upstream_sha256": "4bf8ef8948ec8249656331da7de7fcfb917f009e89eee0d45bce2d8155c96a4a",
+   "sha256": "5fce43f8a646f2591ed4e0e716902f502c42bbd872a8f8709fc0241a91d69ba7",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: include heuristics/utils.hpp (the shared heuristics headers) instead of the removed SM90 heuristics/sm90.hpp, whose SM90ArchSpec this file does not use."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/impls/sm100_bf16_gemm.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/sm100_bf16_gemm.hpp",
+   "upstream_sha256": "930b3ab90e1a5b7d7618ab6781d65cc94c6a576587ab70b5001cf8ef4ac440a2",
+   "sha256": "c14415d0e14fd34615910c1197cada73a8b9fdbbf50c57983aba5940ceecdeb3",
+   "modified": true,
+   "modifications": [
+    "Pass num_leaves as the BF16 GEMM kernel's kNumLeaves template argument.",
+    "IsoExec early launch: the kEarlyLaunch template argument (runtime mode, PDL launches of Normal / Batched GEMMs only)."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/impls/sm100_bf16_mega_gate.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/sm100_bf16_mega_gate.hpp",
+   "upstream_sha256": "e3a48a93b609978f8e2ad283449d76d140c3f8076043782905d47c3e2258daff",
+   "sha256": "00cc5712b7c6d1335817517152f34a1b3f8aad51f95bbcff1c855bf66bf135dc",
+   "modified": true,
+   "modifications": [
+    "IsoExec router program: pass the router's selection arguments and int32/FP32 outputs instead of RoutingArgs, key the kernel by selection mode and experts-per-lane instead of upstream's optional-input flags, and compile with the router extension's arithmetic profile (no fast math, --fmad=false --ftz=false --prec-div=true --prec-sqrt=true) so the selection's expf/log1pf/sqrtf/divide round as in router_sm100."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/impls/sm100_bf16_mega_moe.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/sm100_bf16_mega_moe.hpp",
+   "upstream_sha256": "cd4d93e6cc9bb0eaa2d4a7721911c9c48b3dc8eb33d72ea38fb43144b71396c1",
+   "sha256": "91f38c3da5c6fae6126e1377b78b56dca6d263fcbbdf5cf0688be649d7452e52",
+   "modified": true,
+   "modifications": [
+    "Include the canonical BF16 mode in the generated template/JIT key, build the 5D master-layout L1 weight maps for it, and enforce noncontracting precise CUDA arithmetic for that mode."
+   ]
+  },
+  {
+   "path": "csrc/jit_kernels/impls/sm100_locality_domain.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/jit_kernels/impls/sm100_locality_domain.hpp",
+   "upstream_sha256": "70994abac23fce62264d09621022680074351de477ce407d379bd097becc91c0",
+   "sha256": "70994abac23fce62264d09621022680074351de477ce407d379bd097becc91c0",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/python_api.cpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/python_api.cpp",
+   "upstream_sha256": "d38bbae0b8850103b56e3a058c7098708b2e0390b7ba87172e6505d672bbf8ab",
+   "sha256": "bbc4ed259f419dc9f158a5fd0f7352ba66382c2993041fa3c6f30428f5af4260",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: register only the config, locality-domain, epilogue-class, einsum, GEMM, MegaMoE and MegaGate (IsoExec router program) APIs; the attention (MQA logits), hyperconnection, scaling-factor layout and MegaMHC registrations and includes are removed."
+   ]
+  },
+  {
+   "path": "csrc/runtime/jit.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/runtime/jit.hpp",
+   "upstream_sha256": "6669e2d6867429727a139f9eee27e72e760ac735d6ab38cc79921434925d3d14",
+   "sha256": "27412f8b89e9a67706ba7c28d50f74ee3982fc9f12a7819aaef6d030911e8b49",
+   "modified": true,
+   "modifications": [
+    "IsoExec isolation: JIT env prefix ISOEXEC_DG (not DG) and a mandatory cache-key signature (pinned revision + include-tree digest, then cutlass version) so cubins are never shared with an upstream DeepGEMM; record the JIT Config and refuse re-initialization with a different root/signature. Host-only; generated kernel sources and nvcc flags are unchanged."
+   ]
+  },
+  {
+   "path": "csrc/runtime/locality_domain.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/runtime/locality_domain.hpp",
+   "upstream_sha256": "0c9293ac285a9a4750913f73530ef7d8279396e4e022ed7783e0f620f5ee462b",
+   "sha256": "0c9293ac285a9a4750913f73530ef7d8279396e4e022ed7783e0f620f5ee462b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/runtime/mlopart.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/runtime/mlopart.hpp",
+   "upstream_sha256": "43c7760d9097cccee39d850d502844043806eba402ffa9ff44144ce63b939b87",
+   "sha256": "e7d2c3bdc4ce1283a87ae0f8ec30e3f3e5c65b19e2c437c45eab8764439330c7",
+   "modified": true,
+   "modifications": [
+    "Qualify Python callback import with IsoExec vendor namespace."
+   ]
+  },
+  {
+   "path": "csrc/runtime/runtime.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/runtime/runtime.hpp",
+   "upstream_sha256": "ec2bec12ed6e3b0777e9cd9eeb219e2177eae276ed45326d0f298aae43d3396a",
+   "sha256": "76b9fca0dbd3ddbd8e26437f025801b36359de2f3d883ba1fde4e1dd1edaf2ca",
+   "modified": true,
+   "modifications": [
+    "IsoExec early launch: the process-local early_launch mode (0 off, 1 trigger, k >= 2 trigger + k - 1 early B stages).",
+    "IsoExec early launch: bit 64 selects the lean post-wait path on top of a mode >= 1.",
+    "IsoExec early launch: bit 128 selects the lean tail."
+   ]
+  },
+  {
+   "path": "csrc/utils/compatibility.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/utils/compatibility.hpp",
+   "upstream_sha256": "dedda83af6e4c4adc3a821cd85bc5a0113fd09abded917f5f0f940f3b12813a6",
+   "sha256": "dedda83af6e4c4adc3a821cd85bc5a0113fd09abded917f5f0f940f3b12813a6",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/utils/exception.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/utils/exception.hpp",
+   "upstream_sha256": "162f410d0493aad576e54bf65667cef60347161e9318ab6532562bf9007c9b08",
+   "sha256": "162f410d0493aad576e54bf65667cef60347161e9318ab6532562bf9007c9b08",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/utils/layout.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/utils/layout.hpp",
+   "upstream_sha256": "934f4c492fc763222fdd4dd401ab5a8e150b278bddf7d7f1388b990f6cb6b4df",
+   "sha256": "934f4c492fc763222fdd4dd401ab5a8e150b278bddf7d7f1388b990f6cb6b4df",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "csrc/utils/math.hpp",
+   "source": "deep_gemm",
+   "upstream_path": "csrc/utils/math.hpp",
+   "upstream_sha256": "fb3992c2e36d8a0d199011be013e14c2422d78e426933fb041bf42e42af850d1",
+   "sha256": "fb3992c2e36d8a0d199011be013e14c2422d78e426933fb041bf42e42af850d1",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/comm/barrier.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/comm/barrier.cuh",
+   "upstream_sha256": "ef2906925dc5ab5178df4ba6a9a41da74270cebecd892d5a7a01dbdeab5dfd69",
+   "sha256": "ef2906925dc5ab5178df4ba6a9a41da74270cebecd892d5a7a01dbdeab5dfd69",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/compile.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/compile.cuh",
+   "upstream_sha256": "a13373053608b286c1ac39ce771cdd6ab133f44ec4f016bd6fcbc5032132a1a9",
+   "sha256": "a13373053608b286c1ac39ce771cdd6ab133f44ec4f016bd6fcbc5032132a1a9",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/cute_tie.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/cute_tie.cuh",
+   "upstream_sha256": "872af0b873a9b367c01eaf68c321ddcd9d0f3c26ce7b8d3abfc8a66d89b8ad65",
+   "sha256": "872af0b873a9b367c01eaf68c321ddcd9d0f3c26ce7b8d3abfc8a66d89b8ad65",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/exception.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/exception.cuh",
+   "upstream_sha256": "ab6b2bd75c06c054fbbe97d5897efa7909d380ad531620770c031b3debdf2123",
+   "sha256": "ab6b2bd75c06c054fbbe97d5897efa7909d380ad531620770c031b3debdf2123",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/math.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/math.cuh",
+   "upstream_sha256": "65aef0dbff42f066d2715c33b632f452cb4e21503fe168be0dca55aed0af9262",
+   "sha256": "65aef0dbff42f066d2715c33b632f452cb4e21503fe168be0dca55aed0af9262",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/packing.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/packing.cuh",
+   "upstream_sha256": "7b216c4a4f94e6691e2f553b204f697257eac1312b71fd7d24e7b420815c67b8",
+   "sha256": "7b216c4a4f94e6691e2f553b204f697257eac1312b71fd7d24e7b420815c67b8",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/tma_copy.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/tma_copy.cuh",
+   "upstream_sha256": "fc70f7a6548720e9e3f04355f1c54184658685297a20270f3ff559fff9ece5d9",
+   "sha256": "fc70f7a6548720e9e3f04355f1c54184658685297a20270f3ff559fff9ece5d9",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/types.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/types.cuh",
+   "upstream_sha256": "0382bf27efb6deea5dc21a4f8ae21296494e513166c2682c63e498c70cefa6b2",
+   "sha256": "0382bf27efb6deea5dc21a4f8ae21296494e513166c2682c63e498c70cefa6b2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/utils.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/utils.cuh",
+   "upstream_sha256": "9fd0fdb872bb1d037370cab53918535c5e049b2936dd5e8b8af51648dfb843f2",
+   "sha256": "9fd0fdb872bb1d037370cab53918535c5e049b2936dd5e8b8af51648dfb843f2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/epilogue/operators.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/epilogue/operators.cuh",
+   "upstream_sha256": "4e916eab753dcc06eee8fe8664a8f1ba412a4724119cdbb04de52e01c12f7bf3",
+   "sha256": "4e916eab753dcc06eee8fe8664a8f1ba412a4724119cdbb04de52e01c12f7bf3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/epilogue/sm100_mega_gate.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/epilogue/sm100_mega_gate.cuh",
+   "upstream_sha256": "e6122684592ce0abd15dbd6f85eb4cb12d81ca07a3e249832aa9c367e009e222",
+   "sha256": "d2b43b179ef1e2abf1e8e814fac053f4b3414988fdf4fcc03dbee1910845363e",
+   "modified": true,
+   "modifications": [
+    "IsoExec gate: replace upstream's sqrt_softplus, sort4/select_warp_topk, select_warp_expert_value, store_token_outputs, store_topk_token and store_random_topk_token by verbatim copies of isoexec/ops/moe/router_sm100/csrc/select.cuh (namespace rt100) and router.cu's segment_tree (byte-compared by router_sm100/tests/test_route_mega_cpu.py), plus sm100_store_tmem_partials_to_global (upstream's TMEM-to-scratch drain over SL segment accumulators folded by the segment tree) and select_token (the router's select_tree body over the split partials)."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/epilogue/sm100_store_cd.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/epilogue/sm100_store_cd.cuh",
+   "upstream_sha256": "f90b1baca0b88bad39cd84a3634447e2a4f24c249ab067bfa6afb7eed5979aea",
+   "sha256": "1bc0b082f2a06f4370b0611809d5ddd81d949ab859eb2c378947349f28bd9dfd",
+   "modified": true,
+   "modifications": [
+    "Optional kNumLeaves/kLeafTmemCols: load the leaf accumulators and fold them by the balanced adjacent-pair tree (__fadd_rn) before the store; default 1 = upstream behaviour.",
+    "IsoExec progressive leaf fold: sm100_fold_leaf_pair (pair node + binary counter of partials in tensor memory) and the last pair + pending partials folded in the store, lower leaves on the left.",
+    "IsoExec progressive leaf fold: a three-slot leaf ring when it fits tensor memory (leaf l in slot l % 3), so the next leaf chain runs during a pair fold.",
+    "IsoExec progressive leaf fold: every tensor-memory load of a fold step (both leaves, the partials the counter reads; in the store, the last pair's odd leaf and partials) issued before one wait, 16-column steps when the width allows; same adds in the same order.",
+    "IsoExec lean tail: optional tail_arrive argument (default false) arrives on the final cluster barrier after the last TMEM read.",
+    "IsoExec register partials: sm100_fold_leaf_pair_regs and sm100_store_cd_leaf_regs (counter partials in registers, column halves per warpgroup)."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/epilogue/sm100_store_cd_swap_ab.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/epilogue/sm100_store_cd_swap_ab.cuh",
+   "upstream_sha256": "23cf25fed0aa5bcc26465a88cb3b11144d236f9697458d072dbb9171ad1edd8d",
+   "sha256": "a4737ab4f93393bf1869858262cf4caf55c18fcc58ad06b0dbc60c9a7d518dc4",
+   "modified": true,
+   "modifications": [
+    "IsoExec padded swap-AB tile: kNumValidStoreN limits the TMA stores to the tile's valid columns.",
+    "IsoExec lean tail: optional tail_arrive argument (default false) arrives on the final cluster barrier after the last TMEM read."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/impls/sm100_bf16_gemm.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_gemm.cuh",
+   "upstream_sha256": "bbf1498d6dd31518885203dfe5c853d5e4e64df618b32f75ee9c5707171b7712",
+   "sha256": "3068c0af2a305dbbcfa6c7e39922bd79372c269f099d5dbc33a2bd6292c93b0b",
+   "modified": true,
+   "modifications": [
+    "Optional kNumLeaves (default 1 = upstream): per-leaf TMEM accumulators with the chain restarting at each leaf, stage merging only within leaves, one accumulator set when two do not fit.",
+    "IsoExec progressive leaf fold: 2 + log2(L/2) accumulator slots per stage (leaf l in slot l % 2), tmem full/empty events once per leaf pair, the MMA warp waits for pair l/2-1 before an even leaf l >= 2, the epilogue folds every pair but the last with sm100_fold_leaf_pair.",
+    "IsoExec progressive leaf fold: a three-slot leaf ring when it fits tensor memory (leaf l in slot l % 3), so the next leaf chain runs during a pair fold.",
+    "IsoExec early launch (kEarlyLaunch, Normal/Batched): mode 1 cudaTriggerProgrammaticLaunchCompletion after cudaGridDependencySynchronize; mode k >= 2 also up to k - 1 of the first tile's B stages before the wait; tensor-memory addresses relative to the allocated base (the tmem_ptr == 0 assumption replaced).",
+    "IsoExec padded swap-AB tile (kPadB): 64 weight rows per CTA with the MMA at UMMA M 128, the B stage allocated for 128 rows and loaded with 64, the store limited to the valid columns.",
+    "IsoExec lean post-wait path (early-launch bit 64, opt-in): TMEM base, scheduler and epilogue operator formed before the dependency wait; the TMA producer triggers after its first stage.",
+    "IsoExec lean tail (early-launch bit 128, opt-in): split-phase final cluster barrier, epilogue arrives after its last TMEM read, TMEM freed before the last store completes.",
+    "IsoExec register partials (two epilogue warpgroups, kNumEpilogueThreads 256, leaf trees): tensor memory holds the leaf ring only; fold and store through the register-partial epilogue."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/impls/sm100_bf16_mega_gate.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_mega_gate.cuh",
+   "upstream_sha256": "0fbf34534703aef9c1567be4b9b057ebf30c4ebc305ab36c4c60b2d23d7a0400",
+   "sha256": "98440d638ad54c88660daa676ef34bd74a6400aafcef555ce3430c74f3e55ba3",
+   "modified": true,
+   "modifications": [
+    "IsoExec logits program: the K loop of a slice runs its kNumSegmentsPerCta segments in order, each ONE ascending tcgen05 chain from zero (accumulate flag off on the segment's first UMMA) into its own TMEM accumulator ((stage * SL + segment) * kAccumCols, kAccumCols = 256 / SL); never split, never re-associated. A device assert bounds the token block by the TMEM budget.",
+    "IsoExec gate: the epilogue stores the slice's FP32 partial logits (its segments folded by the segment tree, no scoring) and, after upstream's score barrier, each gate warp evaluates one token with router_sm100's select_tree program (segment tree over the split partials, then rt100::select_warp). Upstream's sqrt-softplus-on-store, bias/image-bias/logical-count shared-memory cache, top-k network, fixed/random routing, physical map and finite-score trap are removed (route() emits a table for non-finite logits)."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/impls/sm100_bf16_mega_moe.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_bf16_mega_moe.cuh",
+   "upstream_sha256": "0387bd9bea62644b6580fd88d9e29f62d13e6ae4d319046ef1b8590224d1b8c5",
+   "sha256": "50c30e20c3ae544d9ad86b714c464389f7980577bb666be144838ed4930c5fb2",
+   "modified": true,
+   "modifications": [
+    "IsoExec canonical BF16 specialization (deepseek_v41_bf16_actor_v1): L1 weights read in the master [gate | up] layout through a 5D TMA map (no interleaved copy), canonical FP32 weighted clamped SwiGLU with one BF16 RNE, combine in ascending global expert ID with the shared contribution last and the first contribution assigned, per-launch combine-readiness tag from MegaMoESignals::isoexec_launch_epoch. Upstream default path preserved."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/impls/sm100_locality_domain.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_locality_domain.cuh",
+   "upstream_sha256": "a94bd377d69954fa5f0f0046a9c90fc204ef68a8ac188e73b7ef37370c56ffef",
+   "sha256": "a94bd377d69954fa5f0f0046a9c90fc204ef68a8ac188e73b7ef37370c56ffef",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/layout/gemm.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/layout/gemm.cuh",
+   "upstream_sha256": "b692f024495a4160dc65a8094bb13eae65be4c902d10436fce6446e6919d2b57",
+   "sha256": "b692f024495a4160dc65a8094bb13eae65be4c902d10436fce6446e6919d2b57",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/layout/mega_gate.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/layout/mega_gate.cuh",
+   "upstream_sha256": "543ca6ee1f5c2e2bb04144232fbbab26026afcd0e12d3a547891d1a306ba25e7",
+   "sha256": "1d9cb386deb29bcc94c367b89a77a3e62c070066843218292ddf33cc55477685",
+   "modified": true,
+   "modifications": [
+    "IsoExec logits program: add kNumSegments = 4 and the TMEM budget helpers get_num_accum_cols / get_max_block_tokens (a 128-expert group on a CTA pair holds N / 2 columns per CTA).",
+    "Remove RoutingArgs, caches_logical_count, kNumExpertsPerWave and the 4 KiB metadata cache of SharedStorage (the gate is router_sm100's selection, which reads the bias itself)."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/layout/mega_moe.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/layout/mega_moe.cuh",
+   "upstream_sha256": "53008d96b7eeaeec35af54e1400a9a3149625bc39b385611fe544b08c5084b50",
+   "sha256": "bbaa29c716c795c6e5e2450670ba0b29a4f4a47b39e2e90f4169c5fc13fe6468",
+   "modified": true,
+   "modifications": [
+    "IsoExec canonical specialization: per-launch combine-readiness tag from a workspace epoch (MegaMoESignals::isoexec_launch_epoch) instead of %gridid, which repeats across CUDA-graph replays; upstream path unchanged"
+   ]
+  },
+  {
+   "path": "include/deep_gemm/layout/sym_buffer.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/layout/sym_buffer.cuh",
+   "upstream_sha256": "b157512fd62a20bf09a8fab489d4dc209751d0560c1343829e78374dbf6578cb",
+   "sha256": "b157512fd62a20bf09a8fab489d4dc209751d0560c1343829e78374dbf6578cb",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/mma/sm100.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/mma/sm100.cuh",
+   "upstream_sha256": "439c57d8aa4914c01dcb55a874ace4fdaecec4682ea1099ba36e3cb8b23f41ab",
+   "sha256": "439c57d8aa4914c01dcb55a874ace4fdaecec4682ea1099ba36e3cb8b23f41ab",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/ptx/ld_st.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/ptx/ld_st.cuh",
+   "upstream_sha256": "21ba6d6284af47edb713ee9e925665fc732704b763613c1ce0cb7300a70fd755",
+   "sha256": "21ba6d6284af47edb713ee9e925665fc732704b763613c1ce0cb7300a70fd755",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/ptx/tcgen05.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/ptx/tcgen05.cuh",
+   "upstream_sha256": "7760eef80c6a38ee424974f6f48f8923a56465326c159c8a795e6e8f4fa76b42",
+   "sha256": "7760eef80c6a38ee424974f6f48f8923a56465326c159c8a795e6e8f4fa76b42",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/ptx/tma.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/ptx/tma.cuh",
+   "upstream_sha256": "519bf2f4c26ef7368e6cd239027061ee2725fbb3efc89b7574233037de228d4a",
+   "sha256": "519bf2f4c26ef7368e6cd239027061ee2725fbb3efc89b7574233037de228d4a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/ptx/utils.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/ptx/utils.cuh",
+   "upstream_sha256": "8a9d5e03afdeb20f53b1027e9f6f3a2ef45bb33152dba2b61d778684e1716412",
+   "sha256": "8a9d5e03afdeb20f53b1027e9f6f3a2ef45bb33152dba2b61d778684e1716412",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/scheduler/gemm.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/scheduler/gemm.cuh",
+   "upstream_sha256": "f48dfef610affd81d1cae7798bdf602d0e2c3b9aa7cc2c0df0376370eea97ed6",
+   "sha256": "f48dfef610affd81d1cae7798bdf602d0e2c3b9aa7cc2c0df0376370eea97ed6",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/scheduler/mega_gate.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/scheduler/mega_gate.cuh",
+   "upstream_sha256": "4aef186a0bd654172b0573f24fe163666d5e882749d97aa7528d4163b7b50a4a",
+   "sha256": "4aef186a0bd654172b0573f24fe163666d5e882749d97aa7528d4163b7b50a4a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/scheduler/mega_moe.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/scheduler/mega_moe.cuh",
+   "upstream_sha256": "1bf76529e321bd546216ba700ac5e8ca2f321b40486d134ef8465e223b117573",
+   "sha256": "1bf76529e321bd546216ba700ac5e8ca2f321b40486d134ef8465e223b117573",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/backend/cuda/backend.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/backend/cuda/backend.hpp",
+   "upstream_sha256": "4d595b86c4d4c861c59684844232014150632b4c3028682f86ba301cf519275b",
+   "sha256": "4d595b86c4d4c861c59684844232014150632b4c3028682f86ba301cf519275b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/backend/cuda/device.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/backend/cuda/device.hpp",
+   "upstream_sha256": "401ceb5217fa275de99a949406221cd44f007e32dc4a3ce0550e0c6ac8435b94",
+   "sha256": "401ceb5217fa275de99a949406221cd44f007e32dc4a3ce0550e0c6ac8435b94",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/backend/cuda/driver.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/backend/cuda/driver.hpp",
+   "upstream_sha256": "aee07474dd6b6dfe404f912597beb118989871523447a1ffad21ce2dd01350e0",
+   "sha256": "aee07474dd6b6dfe404f912597beb118989871523447a1ffad21ce2dd01350e0",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/backend/cuda/kernel.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/backend/cuda/kernel.hpp",
+   "upstream_sha256": "26bc9622969f1dc79201ec8876371cefb6dffb4648495365947dc7b192c229e4",
+   "sha256": "26bc9622969f1dc79201ec8876371cefb6dffb4648495365947dc7b192c229e4",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/backend/cuda/options.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/backend/cuda/options.hpp",
+   "upstream_sha256": "98dd2d36be2238367c712ea005449ca8271bbb13757a5b9ca8c54f9327408d83",
+   "sha256": "98dd2d36be2238367c712ea005449ca8271bbb13757a5b9ca8c54f9327408d83",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/cache/disk.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/cache/disk.hpp",
+   "upstream_sha256": "b2dcc7d8124a60e1b6199f3a2c5e34067921685f2fdd5684901ccb1940ade887",
+   "sha256": "b2dcc7d8124a60e1b6199f3a2c5e34067921685f2fdd5684901ccb1940ade887",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/cache/memory.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/cache/memory.hpp",
+   "upstream_sha256": "54060462e785ddaba391e38f70f1b3544e23c3c43b8a08a4b01bd49a525ba169",
+   "sha256": "54060462e785ddaba391e38f70f1b3544e23c3c43b8a08a4b01bd49a525ba169",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/python_api.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/python_api.hpp",
+   "upstream_sha256": "09c08482bf85677149335d857fedd610b3d0f790f4169ce3efdc12542e32c498",
+   "sha256": "09c08482bf85677149335d857fedd610b3d0f790f4169ce3efdc12542e32c498",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/runtime/config.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/runtime/config.hpp",
+   "upstream_sha256": "f0a334e00f9def1c85a8f194a7e0a522c0d76c9604a93e00ddc711d1a7ee6b9b",
+   "sha256": "f0a334e00f9def1c85a8f194a7e0a522c0d76c9604a93e00ddc711d1a7ee6b9b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/runtime/runtime.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/runtime/runtime.hpp",
+   "upstream_sha256": "4d811ebb64b2b394a84d206e65df7fd5d74055cd327d8d8e4d2aeb2cd97e2706",
+   "sha256": "4d811ebb64b2b394a84d206e65df7fd5d74055cd327d8d8e4d2aeb2cd97e2706",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/command.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/command.hpp",
+   "upstream_sha256": "7fde3af103340960c8b22aaf73c35f7d971618bace929705db7e9dedd3fa80a0",
+   "sha256": "7fde3af103340960c8b22aaf73c35f7d971618bace929705db7e9dedd3fa80a0",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/env.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/env.hpp",
+   "upstream_sha256": "4d079c7f958e4f179d0ed8107a4d0e70eae6131c1079442b567eb3ed4fea7503",
+   "sha256": "4d079c7f958e4f179d0ed8107a4d0e70eae6131c1079442b567eb3ed4fea7503",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/exception.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/exception.hpp",
+   "upstream_sha256": "d30116ff5dd526e542d8649dc79a42fde2c4e5ad47ed6aa3e5d3dec29f759a4f",
+   "sha256": "1211f5ae080f272629f4cbb0aa3e530e4294d41e0dc2826cc592d02135a26d99",
+   "modified": true,
+   "modifications": [
+    "Make elfutils diagnostics optional via header detection; retain backtrace/dladdr fallback without libdwfl development headers."
+   ]
+  },
+  {
+   "path": "include/deep_jit/utils/filesystem.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/filesystem.hpp",
+   "upstream_sha256": "e55bc574d3ae1016f7ad83c850ec3f9a067e2bdc673dcdb57ac5388da2c4fe2d",
+   "sha256": "e55bc574d3ae1016f7ad83c850ec3f9a067e2bdc673dcdb57ac5388da2c4fe2d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/gil.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/gil.hpp",
+   "upstream_sha256": "1429d4b4a789d3ab781a58b6693afc316f7f8809a579268a06f8daa358ab9ab2",
+   "sha256": "1429d4b4a789d3ab781a58b6693afc316f7f8809a579268a06f8daa358ab9ab2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/hash.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/hash.hpp",
+   "upstream_sha256": "fa8f29c875ccce3c4308ffb1cc8617e17e41bf2b09d9a3d8f73a142e538caf4d",
+   "sha256": "fa8f29c875ccce3c4308ffb1cc8617e17e41bf2b09d9a3d8f73a142e538caf4d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/json.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/json.hpp",
+   "upstream_sha256": "93ab8203302324388f02a91e77dea0d33a8483572f8fe13482a7298871dba328",
+   "sha256": "93ab8203302324388f02a91e77dea0d33a8483572f8fe13482a7298871dba328",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/lazy.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/lazy.hpp",
+   "upstream_sha256": "030f64121fdcc9d58c12de0bcd1320dbc8810b1c9bffaccb681e4a67567b0aa5",
+   "sha256": "030f64121fdcc9d58c12de0bcd1320dbc8810b1c9bffaccb681e4a67567b0aa5",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/no_ref_ptr.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/no_ref_ptr.hpp",
+   "upstream_sha256": "49e43c9708565e0b16dad38afe7531cb148ca7ad3b5e72656107e7a13a405c55",
+   "sha256": "49e43c9708565e0b16dad38afe7531cb148ca7ad3b5e72656107e7a13a405c55",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/parser.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/parser.hpp",
+   "upstream_sha256": "a8a17886da5fb93931872e262f5ccb0c7b0ac8fd173e772067d482d1cf8947ec",
+   "sha256": "a8a17886da5fb93931872e262f5ccb0c7b0ac8fd173e772067d482d1cf8947ec",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/str.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/str.hpp",
+   "upstream_sha256": "4d87fa25d6ccd3efa125279d42afbc857fc2a4083c0dbc0bd4f7b1b74f455436",
+   "sha256": "4d87fa25d6ccd3efa125279d42afbc857fc2a4083c0dbc0bd4f7b1b74f455436",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_jit/utils/uuid.hpp",
+   "source": "deep_jit",
+   "upstream_path": "include/deep_jit/utils/uuid.hpp",
+   "upstream_sha256": "5fff8c1a7f77be5ec12ebb38fc8e14877fe6793804379ca2121a3216111898be",
+   "sha256": "5fff8c1a7f77be5ec12ebb38fc8e14877fe6793804379ca2121a3216111898be",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/axpby.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/axpby.hpp",
+   "upstream_sha256": "2b11f2d6dc6d00c3374b68b0cfbd69c6e3529611a6e56b86e38d025f42c69a0b",
+   "sha256": "2b11f2d6dc6d00c3374b68b0cfbd69c6e3529611a6e56b86e38d025f42c69a0b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/clear.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/clear.hpp",
+   "upstream_sha256": "28f97f81b281fea7ccde08a6e1f082f63384e741943b64d304df2e00bc2e5965",
+   "sha256": "28f97f81b281fea7ccde08a6e1f082f63384e741943b64d304df2e00bc2e5965",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/cooperative_copy.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/cooperative_copy.hpp",
+   "upstream_sha256": "e03e105882db8a5df784bfb08a817b8d90789b297fd0ad6e113314486c34965a",
+   "sha256": "e03e105882db8a5df784bfb08a817b8d90789b297fd0ad6e113314486c34965a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/cooperative_gemm.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/cooperative_gemm.hpp",
+   "upstream_sha256": "d0de07433f3be215a196acc0cfc969db16ca6b162193634ee0eb502378aee029",
+   "sha256": "d0de07433f3be215a196acc0cfc969db16ca6b162193634ee0eb502378aee029",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/copy.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/copy.hpp",
+   "upstream_sha256": "3b47a251bbfef136850e52000fe955d8341fe54b770e4814e32094ba72713417",
+   "sha256": "3b47a251bbfef136850e52000fe955d8341fe54b770e4814e32094ba72713417",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/fill.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/fill.hpp",
+   "upstream_sha256": "e06904e6b029b9a96f4806abd9d7a2006052bff8249fe54d010dc3f682580bce",
+   "sha256": "e06904e6b029b9a96f4806abd9d7a2006052bff8249fe54d010dc3f682580bce",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/functional.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/functional.hpp",
+   "upstream_sha256": "db90b96cc1e9b76f1dbbbda3f455367fe2e90cb60a95d91940dccffdb162680b",
+   "sha256": "db90b96cc1e9b76f1dbbbda3f455367fe2e90cb60a95d91940dccffdb162680b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/gemm.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/gemm.hpp",
+   "upstream_sha256": "25272aefdc06ac7b90ac8b638b651730d9ffd0b9e89b6bc56440deef21e2e0ea",
+   "sha256": "25272aefdc06ac7b90ac8b638b651730d9ffd0b9e89b6bc56440deef21e2e0ea",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/prefer.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/prefer.hpp",
+   "upstream_sha256": "4faa5471b2712b90de71825644025212246a5cdd499fae27f4da6c1ec71e38d7",
+   "sha256": "4faa5471b2712b90de71825644025212246a5cdd499fae27f4da6c1ec71e38d7",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/prefetch.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/prefetch.hpp",
+   "upstream_sha256": "d708f5dad04c2da8138d2e88e120c75ccab34b3da7702821b9db29b7f977ed55",
+   "sha256": "d708f5dad04c2da8138d2e88e120c75ccab34b3da7702821b9db29b7f977ed55",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/tensor_algorithms.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/tensor_algorithms.hpp",
+   "upstream_sha256": "36d7105ddd3e1adf8fa2248b111efd93bda03855024c08bd3e1ec06869d97d28",
+   "sha256": "36d7105ddd3e1adf8fa2248b111efd93bda03855024c08bd3e1ec06869d97d28",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/algorithm/tuple_algorithms.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/algorithm/tuple_algorithms.hpp",
+   "upstream_sha256": "4e1e2fceff0dee3cb073aae9bb3b0073b357d30b2a5ec77f2b67fb65b86ce395",
+   "sha256": "4e1e2fceff0dee3cb073aae9bb3b0073b357d30b2a5ec77f2b67fb65b86ce395",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/cluster_sm90.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/cluster_sm90.hpp",
+   "upstream_sha256": "d70030bec8a3ebb36949408c3ee0951124aa1d1d0b610ac5682c1bc3bda2d5d6",
+   "sha256": "d70030bec8a3ebb36949408c3ee0951124aa1d1d0b610ac5682c1bc3bda2d5d6",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/config.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/config.hpp",
+   "upstream_sha256": "80fe05a1d3911a14ecf888cd444d629c99be03d0d164f7db7f9d3385f1ea221a",
+   "sha256": "80fe05a1d3911a14ecf888cd444d629c99be03d0d164f7db7f9d3385f1ea221a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy.hpp",
+   "upstream_sha256": "ec31401d27eb23ace72211c1345178934c6a242a36adc8e2f7196bef08920eea",
+   "sha256": "ec31401d27eb23ace72211c1345178934c6a242a36adc8e2f7196bef08920eea",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm100.hpp",
+   "upstream_sha256": "43f813e1e4541bc682112e7791a9e38d44cabbbd90875858d249b9c79df4c50e",
+   "sha256": "43f813e1e4541bc682112e7791a9e38d44cabbbd90875858d249b9c79df4c50e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm100_tma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm100_tma.hpp",
+   "upstream_sha256": "e205145d40d887c1aea5682de7f10c325fc752dee3cf1ca10a4aea1a58076f24",
+   "sha256": "e205145d40d887c1aea5682de7f10c325fc752dee3cf1ca10a4aea1a58076f24",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm50.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm50.hpp",
+   "upstream_sha256": "523dc2ea1257bb0efff64f626c3aadcfc623e02cbdef249ab8ab57d6475796a5",
+   "sha256": "523dc2ea1257bb0efff64f626c3aadcfc623e02cbdef249ab8ab57d6475796a5",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm75.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm75.hpp",
+   "upstream_sha256": "6a46942a2e85cbb2c542ccbcaffad76f85c4afde033437b290b9be32867b1155",
+   "sha256": "6a46942a2e85cbb2c542ccbcaffad76f85c4afde033437b290b9be32867b1155",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm80.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm80.hpp",
+   "upstream_sha256": "f98ebf662eb95419bf2dfcbcbe9b9e54ba0fd965b8d65f5a850f56c71b158b94",
+   "sha256": "f98ebf662eb95419bf2dfcbcbe9b9e54ba0fd965b8d65f5a850f56c71b158b94",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm90.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm90.hpp",
+   "upstream_sha256": "7668c6f9304866f65655555c39f5e10fa6ffb02df964a8e7918ac877d41cc0db",
+   "sha256": "7668c6f9304866f65655555c39f5e10fa6ffb02df964a8e7918ac877d41cc0db",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm90_desc.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm90_desc.hpp",
+   "upstream_sha256": "c45306bfa5b32d32d658d8f73b7dce1519a916b0253975965769c0d95c436474",
+   "sha256": "c45306bfa5b32d32d658d8f73b7dce1519a916b0253975965769c0d95c436474",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/copy_sm90_tma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/copy_sm90_tma.hpp",
+   "upstream_sha256": "d31756a7105dc875751fdef875be1b9f2bc008111d0c45734fed39465c12c636",
+   "sha256": "d31756a7105dc875751fdef875be1b9f2bc008111d0c45734fed39465c12c636",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma.hpp",
+   "upstream_sha256": "8f65943f681e16ed11df4bc7bcf6c97ebd808b6b2d950f6cc5ef29805a154029",
+   "sha256": "8f65943f681e16ed11df4bc7bcf6c97ebd808b6b2d950f6cc5ef29805a154029",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm100.hpp",
+   "upstream_sha256": "68306540dfc897b8247e456a271479c66e15c74de9d204997d67daf48470f5a3",
+   "sha256": "68306540dfc897b8247e456a271479c66e15c74de9d204997d67daf48470f5a3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm100_desc.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm100_desc.hpp",
+   "upstream_sha256": "762d488e441c4949fb2273d510ad629efaeaefbf0064025b4cb7a51cff27194a",
+   "sha256": "762d488e441c4949fb2273d510ad629efaeaefbf0064025b4cb7a51cff27194a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm100_umma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm100_umma.hpp",
+   "upstream_sha256": "7ba0cef9f7fe47148851c8c259df4943f6b1ffa1ba5ef268878596a375a54b1e",
+   "sha256": "7ba0cef9f7fe47148851c8c259df4943f6b1ffa1ba5ef268878596a375a54b1e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm120.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm120.hpp",
+   "upstream_sha256": "4de2816faaf3176326eb9fea837f5ea06dbb21d2b49dacd8f9a8f33d89c98133",
+   "sha256": "4de2816faaf3176326eb9fea837f5ea06dbb21d2b49dacd8f9a8f33d89c98133",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm120_sparse.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm120_sparse.hpp",
+   "upstream_sha256": "9926f677ef823178f653c9e6c6d810ccec16a6f34ab781901a57797c2388a724",
+   "sha256": "9926f677ef823178f653c9e6c6d810ccec16a6f34ab781901a57797c2388a724",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm61.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm61.hpp",
+   "upstream_sha256": "33e3511cf8884660145c946cb75c05763bfafdcb2932b4763ceedf9b59bbcffa",
+   "sha256": "33e3511cf8884660145c946cb75c05763bfafdcb2932b4763ceedf9b59bbcffa",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm70.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm70.hpp",
+   "upstream_sha256": "c7ecaf1ab57557ed6c4baab62032b27d372b6f71138c5b2adf6da9f53402b302",
+   "sha256": "c7ecaf1ab57557ed6c4baab62032b27d372b6f71138c5b2adf6da9f53402b302",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm75.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm75.hpp",
+   "upstream_sha256": "68f7a26da6c89c3b219afc5f65a2e44da83c8f7bff8f9491799c27257dcafdd5",
+   "sha256": "68f7a26da6c89c3b219afc5f65a2e44da83c8f7bff8f9491799c27257dcafdd5",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm80.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm80.hpp",
+   "upstream_sha256": "4d1315c12cccc6652a1dced6d6cb2d13a0390da5829978b5e01895571b677a60",
+   "sha256": "4d1315c12cccc6652a1dced6d6cb2d13a0390da5829978b5e01895571b677a60",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm89.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm89.hpp",
+   "upstream_sha256": "fd7e5afd5b45bfbb33558d6b2e3718b8e4ffe370228460e91bf4a7ca7167b2ee",
+   "sha256": "fd7e5afd5b45bfbb33558d6b2e3718b8e4ffe370228460e91bf4a7ca7167b2ee",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm90.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm90.hpp",
+   "upstream_sha256": "eede4c08af6c2d79a6a956072c91a902026dec8112fa8f43392fd11a2dab9de5",
+   "sha256": "eede4c08af6c2d79a6a956072c91a902026dec8112fa8f43392fd11a2dab9de5",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm90_desc.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm90_desc.hpp",
+   "upstream_sha256": "4ae842109e111094fe5fd5276e46bb99f5446f97e806b50ecd55ac47dc9fa658",
+   "sha256": "4ae842109e111094fe5fd5276e46bb99f5446f97e806b50ecd55ac47dc9fa658",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm90_gmma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm90_gmma.hpp",
+   "upstream_sha256": "bbe378e69891013e93ae348850a80d39ea299249d0211758c5d849cd46b4c17a",
+   "sha256": "bbe378e69891013e93ae348850a80d39ea299249d0211758c5d849cd46b4c17a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/mma_sm90_gmma_sparse.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/mma_sm90_gmma_sparse.hpp",
+   "upstream_sha256": "b933601f83fc8fa796f127f099fc0e23ff11051b6a2d8f9b2a5d8d87bd5329ed",
+   "sha256": "b933601f83fc8fa796f127f099fc0e23ff11051b6a2d8f9b2a5d8d87bd5329ed",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/simd_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/simd_sm100.hpp",
+   "upstream_sha256": "b566b7e35f5237c9caacf7e8d8a99231c31cadb2f167eff1a1ab6fdee72d31cf",
+   "sha256": "b566b7e35f5237c9caacf7e8d8a99231c31cadb2f167eff1a1ab6fdee72d31cf",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/tmem_allocator_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/tmem_allocator_sm100.hpp",
+   "upstream_sha256": "2452d93263bfbdf2fe0523d57267fc2bb111148072b6752307894049737a52e4",
+   "sha256": "2452d93263bfbdf2fe0523d57267fc2bb111148072b6752307894049737a52e4",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/arch/util.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/arch/util.hpp",
+   "upstream_sha256": "6c4f78507adbfc43094eb1770d60c96ce3e02cc53c5d1b49edb0a8444c6ad7f2",
+   "sha256": "6c4f78507adbfc43094eb1770d60c96ce3e02cc53c5d1b49edb0a8444c6ad7f2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_atom.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_atom.hpp",
+   "upstream_sha256": "bfd81acd706b18e28d7bd7bf33dbd3d6d5d8589af902712ffadd2406661c32b7",
+   "sha256": "bfd81acd706b18e28d7bd7bf33dbd3d6d5d8589af902712ffadd2406661c32b7",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits.hpp",
+   "upstream_sha256": "f1434137f94707650fba379eb53b8c307273917d33329e2688f556e5e5d162ca",
+   "sha256": "f1434137f94707650fba379eb53b8c307273917d33329e2688f556e5e5d162ca",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm100.hpp",
+   "upstream_sha256": "cd8afe8362df160458da38c2f4075773feb465bc69039bfff4deb6fbbb7bfc24",
+   "sha256": "cd8afe8362df160458da38c2f4075773feb465bc69039bfff4deb6fbbb7bfc24",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm100_tma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm100_tma.hpp",
+   "upstream_sha256": "dc0febbca9f9c62be2e30ba1aacf978af6753e6ca7ec4f54842b29705e14dfa2",
+   "sha256": "dc0febbca9f9c62be2e30ba1aacf978af6753e6ca7ec4f54842b29705e14dfa2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm50.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm50.hpp",
+   "upstream_sha256": "312058966e3779166e8eb164cd9b5845b3a716f91fd5590c347b04b8c6a103b7",
+   "sha256": "312058966e3779166e8eb164cd9b5845b3a716f91fd5590c347b04b8c6a103b7",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm75.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm75.hpp",
+   "upstream_sha256": "58fee5b1eaaf0d19e4aa7b44600e8749ac54d34ffb2cfd82a46d547744f06eed",
+   "sha256": "58fee5b1eaaf0d19e4aa7b44600e8749ac54d34ffb2cfd82a46d547744f06eed",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm80.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm80.hpp",
+   "upstream_sha256": "9d768405d7ddcb1612572cb7439fb522fb96f3121337bfc0bc188e4d5ebd1e78",
+   "sha256": "9d768405d7ddcb1612572cb7439fb522fb96f3121337bfc0bc188e4d5ebd1e78",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm90.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm90.hpp",
+   "upstream_sha256": "843805a1b64a5c9c2d21871cb96e5b49f2c2a202bea17c3dd18812264fb22c9b",
+   "sha256": "843805a1b64a5c9c2d21871cb96e5b49f2c2a202bea17c3dd18812264fb22c9b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm90_tma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm90_tma.hpp",
+   "upstream_sha256": "7be4c9e1e9d7d1468010940c9677b0c649b1413af8380e6ba6c2aeac9683c4b2",
+   "sha256": "7be4c9e1e9d7d1468010940c9677b0c649b1413af8380e6ba6c2aeac9683c4b2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/copy_traits_sm90_tma_swizzle.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/copy_traits_sm90_tma_swizzle.hpp",
+   "upstream_sha256": "f3c78286745e7e3151a5194852a9efd2742e4fa7cb0047b8b221451491b23474",
+   "sha256": "f3c78286745e7e3151a5194852a9efd2742e4fa7cb0047b8b221451491b23474",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_atom.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_atom.hpp",
+   "upstream_sha256": "115be67d45771698fc1d7f833a1afa44897f45132537496620d5f2622d22fd7e",
+   "sha256": "115be67d45771698fc1d7f833a1afa44897f45132537496620d5f2622d22fd7e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits.hpp",
+   "upstream_sha256": "624700113bb75fbd887cfd9c6d69c06073e8f4dd6d265564a00accd24ffc35e3",
+   "sha256": "624700113bb75fbd887cfd9c6d69c06073e8f4dd6d265564a00accd24ffc35e3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm100.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm100.hpp",
+   "upstream_sha256": "06f6ac58f8e3672b9b41bcb47e2e47c78bb8ddb2a26c68d5fb584dfc64f12631",
+   "sha256": "06f6ac58f8e3672b9b41bcb47e2e47c78bb8ddb2a26c68d5fb584dfc64f12631",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm120.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm120.hpp",
+   "upstream_sha256": "084d939b07fd21651841edfeca3edfa679c2fd59279e769d65256d9a865c2bcb",
+   "sha256": "084d939b07fd21651841edfeca3edfa679c2fd59279e769d65256d9a865c2bcb",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm120_sparse.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm120_sparse.hpp",
+   "upstream_sha256": "be6f0182446037c966eb98404580457b5434021e07e8044b4236b3034129e456",
+   "sha256": "be6f0182446037c966eb98404580457b5434021e07e8044b4236b3034129e456",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm61.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm61.hpp",
+   "upstream_sha256": "9a9d01cbfea0a69525d073bc7b973740d5ba2e0929f76067d54858357d8ef057",
+   "sha256": "9a9d01cbfea0a69525d073bc7b973740d5ba2e0929f76067d54858357d8ef057",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm70.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm70.hpp",
+   "upstream_sha256": "23c72c128f8d58cac840089bcf07b120a2f4f6cb1b1b95c3b055dae2c34df8eb",
+   "sha256": "23c72c128f8d58cac840089bcf07b120a2f4f6cb1b1b95c3b055dae2c34df8eb",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm75.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm75.hpp",
+   "upstream_sha256": "6cc3179ea53ef83d2f12373c2c421fd94dad84afab477876f43f77d24c281b0f",
+   "sha256": "6cc3179ea53ef83d2f12373c2c421fd94dad84afab477876f43f77d24c281b0f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm80.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm80.hpp",
+   "upstream_sha256": "58b972a2ec119bb15db0605a2613cd39ca52e09f630095e35677f5a17770d084",
+   "sha256": "58b972a2ec119bb15db0605a2613cd39ca52e09f630095e35677f5a17770d084",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm89.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm89.hpp",
+   "upstream_sha256": "170bd190b81fda2cd6d3a055e84933e7718c36f958f2e7d25f278e0414f815bc",
+   "sha256": "170bd190b81fda2cd6d3a055e84933e7718c36f958f2e7d25f278e0414f815bc",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm90.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm90.hpp",
+   "upstream_sha256": "10965f179974148f8febbe9cd771a5f5c742c4d2444d72cad22bc23b5693ec25",
+   "sha256": "10965f179974148f8febbe9cd771a5f5c742c4d2444d72cad22bc23b5693ec25",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm90_gmma.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm90_gmma.hpp",
+   "upstream_sha256": "956d254e25fbc5a0f400424bdfecb5a5857d258a0da3839bfa971f0fc56f19d3",
+   "sha256": "956d254e25fbc5a0f400424bdfecb5a5857d258a0da3839bfa971f0fc56f19d3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/mma_traits_sm90_gmma_sparse.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/mma_traits_sm90_gmma_sparse.hpp",
+   "upstream_sha256": "3e4fde935f2c1134dfb99de542358f0d5aa3b23f53473b97b8b102424fdb7205",
+   "sha256": "3e4fde935f2c1134dfb99de542358f0d5aa3b23f53473b97b8b102424fdb7205",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/atom/partitioner.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/atom/partitioner.hpp",
+   "upstream_sha256": "e96b8b24c50ec888e805e95205f402a2216ec984a24bc2ddcb21bd8ed083fc02",
+   "sha256": "e96b8b24c50ec888e805e95205f402a2216ec984a24bc2ddcb21bd8ed083fc02",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/config.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/config.hpp",
+   "upstream_sha256": "0abde1dda75c7f8e75f1661ba30815449590da23c7bf86f615d35de5ef86fc3d",
+   "sha256": "0abde1dda75c7f8e75f1661ba30815449590da23c7bf86f615d35de5ef86fc3d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/alignment.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/alignment.hpp",
+   "upstream_sha256": "7b7944102b31e03d868548d44c2555baa7b167a9a42200361269860af0f06260",
+   "sha256": "7b7944102b31e03d868548d44c2555baa7b167a9a42200361269860af0f06260",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/array.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/array.hpp",
+   "upstream_sha256": "20a453d936b6f849670d67ea9ce267052d96752a98f0aff70be4377fbc556efa",
+   "sha256": "20a453d936b6f849670d67ea9ce267052d96752a98f0aff70be4377fbc556efa",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/array_aligned.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/array_aligned.hpp",
+   "upstream_sha256": "def0627cc4c07ea19b41f2582c30832ba44daa1cab68ba26418c52c176a0f765",
+   "sha256": "def0627cc4c07ea19b41f2582c30832ba44daa1cab68ba26418c52c176a0f765",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/array_subbyte.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/array_subbyte.hpp",
+   "upstream_sha256": "e7d8534728dc4039691a37b631d35c40d7422dd1e747090eff96290d1f9cf195",
+   "sha256": "e7d8534728dc4039691a37b631d35c40d7422dd1e747090eff96290d1f9cf195",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/bit_field.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/bit_field.hpp",
+   "upstream_sha256": "44c497437463c5b0e44289b4c0c7d9c69043c3095ab93132ce855ada7158ff8a",
+   "sha256": "44c497437463c5b0e44289b4c0c7d9c69043c3095ab93132ce855ada7158ff8a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/cuda_types.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/cuda_types.hpp",
+   "upstream_sha256": "2726a840e42e21c4840127fcb9c492ba99b5de2ee368034e837e0d4da2088443",
+   "sha256": "2726a840e42e21c4840127fcb9c492ba99b5de2ee368034e837e0d4da2088443",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/tuple.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/tuple.hpp",
+   "upstream_sha256": "3fe2de09d1da2dd70a1fcfbbb74a49b844b40d4336f5131ef86b987c7231569c",
+   "sha256": "3fe2de09d1da2dd70a1fcfbbb74a49b844b40d4336f5131ef86b987c7231569c",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/container/type_list.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/container/type_list.hpp",
+   "upstream_sha256": "11ed2094e6a9bc28dc8a148ba943decb577d50dbe824be7bf761eba060251ee2",
+   "sha256": "11ed2094e6a9bc28dc8a148ba943decb577d50dbe824be7bf761eba060251ee2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/int_tuple.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/int_tuple.hpp",
+   "upstream_sha256": "c24e9f65815221a0c81ddd59dece334ad5169ebd3e82527181cc6859931df9b3",
+   "sha256": "c24e9f65815221a0c81ddd59dece334ad5169ebd3e82527181cc6859931df9b3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/layout.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/layout.hpp",
+   "upstream_sha256": "b2e9a96efed8cf78193435e1b72697ab8e2f908b396f5c2327a65fdd82bf2b98",
+   "sha256": "b2e9a96efed8cf78193435e1b72697ab8e2f908b396f5c2327a65fdd82bf2b98",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/layout_composed.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/layout_composed.hpp",
+   "upstream_sha256": "54f1fbd500c43c68755c018f8eb1706b43e463e5a35527714e7e9e7eef2d34f1",
+   "sha256": "54f1fbd500c43c68755c018f8eb1706b43e463e5a35527714e7e9e7eef2d34f1",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/arithmetic_tuple.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/arithmetic_tuple.hpp",
+   "upstream_sha256": "4813066e24022cd27a2c30bc42c76ce10a8f947c23acdb7c65912407564813b4",
+   "sha256": "4813066e24022cd27a2c30bc42c76ce10a8f947c23acdb7c65912407564813b4",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/complex.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/complex.hpp",
+   "upstream_sha256": "2852d6ca5131305f3e6c9c40082a616afd1085b8c1420d31a7a22c5d91803223",
+   "sha256": "2852d6ca5131305f3e6c9c40082a616afd1085b8c1420d31a7a22c5d91803223",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/int.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/int.hpp",
+   "upstream_sha256": "26853bc58995932ef47745c58bc8500101a16a1e49140a56b9cff99573e8566f",
+   "sha256": "26853bc58995932ef47745c58bc8500101a16a1e49140a56b9cff99573e8566f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/integer_sequence.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/integer_sequence.hpp",
+   "upstream_sha256": "34dcf102cedc0bf4e30891fec07cffee5d2e7ad7f0998ca64dd981cc45fe69d3",
+   "sha256": "34dcf102cedc0bf4e30891fec07cffee5d2e7ad7f0998ca64dd981cc45fe69d3",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/integral_constant.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/integral_constant.hpp",
+   "upstream_sha256": "e7f31b04fc2d76e3f239c4df691bd4d394b3df2aab471c4276130a2ef94254c0",
+   "sha256": "e7f31b04fc2d76e3f239c4df691bd4d394b3df2aab471c4276130a2ef94254c0",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/integral_ratio.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/integral_ratio.hpp",
+   "upstream_sha256": "0181b139d610bbb5503d6c7a21b6b55392c3912505cca39c9e86ef2422458581",
+   "sha256": "0181b139d610bbb5503d6c7a21b6b55392c3912505cca39c9e86ef2422458581",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/math.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/math.hpp",
+   "upstream_sha256": "bed15cfe8363236e8c7ac06cf94efeb086ed30309c61fa30716afc770b8c10ff",
+   "sha256": "bed15cfe8363236e8c7ac06cf94efeb086ed30309c61fa30716afc770b8c10ff",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/numeric_types.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/numeric_types.hpp",
+   "upstream_sha256": "6e69e574f97e0bd3480cc6547dfc642a5e7c5f5dabe6ae7f7a1e06c30b3161ff",
+   "sha256": "6e69e574f97e0bd3480cc6547dfc642a5e7c5f5dabe6ae7f7a1e06c30b3161ff",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/numeric/real.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/numeric/real.hpp",
+   "upstream_sha256": "04d22a2a9a9f7d7a02b744de255a55df30ba12b2105ce0585b2f7f8a10724fa1",
+   "sha256": "04d22a2a9a9f7d7a02b744de255a55df30ba12b2105ce0585b2f7f8a10724fa1",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/pointer.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/pointer.hpp",
+   "upstream_sha256": "5200e0be69bd7dd2fb4a214bd54100e66ae986aacaf69acb9f22ff788e1bc6d2",
+   "sha256": "5200e0be69bd7dd2fb4a214bd54100e66ae986aacaf69acb9f22ff788e1bc6d2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/pointer_base.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/pointer_base.hpp",
+   "upstream_sha256": "b5abdc6ed02e90ea2098a7094b13ce06f98abf562b53b5f1acc9992131ff651f",
+   "sha256": "b5abdc6ed02e90ea2098a7094b13ce06f98abf562b53b5f1acc9992131ff651f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/pointer_flagged.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/pointer_flagged.hpp",
+   "upstream_sha256": "2320c0cecbbae3381e59c99cbb9f926c59bf7bbc9289dd725c9b88feeeb22efa",
+   "sha256": "2320c0cecbbae3381e59c99cbb9f926c59bf7bbc9289dd725c9b88feeeb22efa",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/pointer_sparse.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/pointer_sparse.hpp",
+   "upstream_sha256": "21a60a84ded6bcb2243292ca5ec7a5e495928921071848935e99ebef8659cbca",
+   "sha256": "21a60a84ded6bcb2243292ca5ec7a5e495928921071848935e99ebef8659cbca",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/pointer_swizzle.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/pointer_swizzle.hpp",
+   "upstream_sha256": "5452d2cd15476b2d0e62fcb739b918f5b2dc1cc7fff1f9c3aaee068f30d51fa2",
+   "sha256": "5452d2cd15476b2d0e62fcb739b918f5b2dc1cc7fff1f9c3aaee068f30d51fa2",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/stride.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/stride.hpp",
+   "upstream_sha256": "e77d5febafa814d8bc6150261e099f3b54dcbb74d653415fd6f4c8c4c68fbeb8",
+   "sha256": "e77d5febafa814d8bc6150261e099f3b54dcbb74d653415fd6f4c8c4c68fbeb8",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/swizzle.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/swizzle.hpp",
+   "upstream_sha256": "308f641a775688413cc2c0e2ba5a5b52670589b731e468acb8929dd6ff6c0a34",
+   "sha256": "308f641a775688413cc2c0e2ba5a5b52670589b731e468acb8929dd6ff6c0a34",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/swizzle_layout.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/swizzle_layout.hpp",
+   "upstream_sha256": "ca1b8460d0f57d451459e9ae827aa24090b0b7bab0399c018543b0e19a692c1c",
+   "sha256": "ca1b8460d0f57d451459e9ae827aa24090b0b7bab0399c018543b0e19a692c1c",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/tensor.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/tensor.hpp",
+   "upstream_sha256": "165ce9484ddf256881662136a0d25004299d87e36986c1de33b27030a0955b5c",
+   "sha256": "165ce9484ddf256881662136a0d25004299d87e36986c1de33b27030a0955b5c",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/tensor_impl.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/tensor_impl.hpp",
+   "upstream_sha256": "1a364eb5aa03b3a46d6cfcb0932414f7ed53d459cce4ffc6f4a0770342208489",
+   "sha256": "1a364eb5aa03b3a46d6cfcb0932414f7ed53d459cce4ffc6f4a0770342208489",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/tensor_zip.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/tensor_zip.hpp",
+   "upstream_sha256": "aec4c5c59b3c603af1d4b91f2251f4ea2b253d9c4894a2112ed5fdd47c31d41f",
+   "sha256": "aec4c5c59b3c603af1d4b91f2251f4ea2b253d9c4894a2112ed5fdd47c31d41f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/underscore.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/underscore.hpp",
+   "upstream_sha256": "65edce496beb4b954cc64602ccb9b81a11635187b0626c9a95e327a68604f5f5",
+   "sha256": "65edce496beb4b954cc64602ccb9b81a11635187b0626c9a95e327a68604f5f5",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/util/debug.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/util/debug.hpp",
+   "upstream_sha256": "11960fcac4506a9ef06f25cc0cddc3a01c5a9f3a09b06e86fe837d6195093043",
+   "sha256": "11960fcac4506a9ef06f25cc0cddc3a01c5a9f3a09b06e86fe837d6195093043",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/util/print.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/util/print.hpp",
+   "upstream_sha256": "de44a6e9bce60ba5e3ddc601bbb815d2248d65e6ce87fa94f134374dc0cb175f",
+   "sha256": "de44a6e9bce60ba5e3ddc601bbb815d2248d65e6ce87fa94f134374dc0cb175f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/util/print_latex.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/util/print_latex.hpp",
+   "upstream_sha256": "7e5ed4dc823eae7df6d9b5009dadf550696491fca4580e6570d1fce8a6c1dbd9",
+   "sha256": "7e5ed4dc823eae7df6d9b5009dadf550696491fca4580e6570d1fce8a6c1dbd9",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/util/print_tensor.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/util/print_tensor.hpp",
+   "upstream_sha256": "1d07ad75a942234b8d440719b9a67aeb239934fd0c68ecdd560c175b59fb6c6b",
+   "sha256": "1d07ad75a942234b8d440719b9a67aeb239934fd0c68ecdd560c175b59fb6c6b",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cute/util/type_traits.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cute/util/type_traits.hpp",
+   "upstream_sha256": "f45583785a90f150c0cf753f7f44c746e52124baaa2746774575a83ab8135212",
+   "sha256": "f45583785a90f150c0cf753f7f44c746e52124baaa2746774575a83ab8135212",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/arch/barrier.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/arch/barrier.h",
+   "upstream_sha256": "90716cfd8e3300cac27e6d0bfeca63fd013406f47da0985835982c17c20da2cf",
+   "sha256": "90716cfd8e3300cac27e6d0bfeca63fd013406f47da0985835982c17c20da2cf",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/arch/config.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/arch/config.h",
+   "upstream_sha256": "fa43ab70628f699518e446dd528a0b4a4606432def639342b744ab22eafe07ab",
+   "sha256": "fa43ab70628f699518e446dd528a0b4a4606432def639342b744ab22eafe07ab",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/arch/memory_sm75.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/arch/memory_sm75.h",
+   "upstream_sha256": "205be5c3e8b2f9599eb9104ca7904d309d7c57c97abc60fffa8236ecbc53a647",
+   "sha256": "205be5c3e8b2f9599eb9104ca7904d309d7c57c97abc60fffa8236ecbc53a647",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/arch/reg_reconfig.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/arch/reg_reconfig.h",
+   "upstream_sha256": "02d929c9a49456c2648c98a22b01e81f01e39e4ff436c4f55eb53f94f67a97f9",
+   "sha256": "02d929c9a49456c2648c98a22b01e81f01e39e4ff436c4f55eb53f94f67a97f9",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/arch/synclog.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/arch/synclog.hpp",
+   "upstream_sha256": "1232c652366854f2bd7f8d8835ac5254ddb7a48680ee13855de9f1007c459a61",
+   "sha256": "1232c652366854f2bd7f8d8835ac5254ddb7a48680ee13855de9f1007c459a61",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/array.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/array.h",
+   "upstream_sha256": "038bdd0e14c8aca1ef163957175a02f7cdca5db37b330f9f494001d19b52527d",
+   "sha256": "038bdd0e14c8aca1ef163957175a02f7cdca5db37b330f9f494001d19b52527d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/array_subbyte.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/array_subbyte.h",
+   "upstream_sha256": "19496f601472bde0d7fb9f4a36b8c49ac357781be2b9180630ab03fb697c6287",
+   "sha256": "19496f601472bde0d7fb9f4a36b8c49ac357781be2b9180630ab03fb697c6287",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/bfloat16.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/bfloat16.h",
+   "upstream_sha256": "355024524c529f73ac8a8d7e406cad60e9cb1f4aac9ae5fa203216bf7a1dc86d",
+   "sha256": "355024524c529f73ac8a8d7e406cad60e9cb1f4aac9ae5fa203216bf7a1dc86d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/complex.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/complex.h",
+   "upstream_sha256": "ee6b42d0da5e22ef5c3d4ad8cf396943608da0c9d935936246c181360457135f",
+   "sha256": "ee6b42d0da5e22ef5c3d4ad8cf396943608da0c9d935936246c181360457135f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/coord.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/coord.h",
+   "upstream_sha256": "221601f0f502d7ace04c66c58cafeaf0b8b10e15c283e4ddfb284dbc8c61544d",
+   "sha256": "221601f0f502d7ace04c66c58cafeaf0b8b10e15c283e4ddfb284dbc8c61544d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/cuda_host_adapter.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/cuda_host_adapter.hpp",
+   "upstream_sha256": "3dd7abd0bd4da92fc435ef6b0a8c04520aef903c1538da0a86b1bf56a138a685",
+   "sha256": "3dd7abd0bd4da92fc435ef6b0a8c04520aef903c1538da0a86b1bf56a138a685",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/cutlass.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/cutlass.h",
+   "upstream_sha256": "b0983633d014d2d7955d6e4963fe3338e8f444ad3ae4ff7096041f4d87fcf82e",
+   "sha256": "b0983633d014d2d7955d6e4963fe3338e8f444ad3ae4ff7096041f4d87fcf82e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/detail/dependent_false.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/detail/dependent_false.hpp",
+   "upstream_sha256": "4bf38c035f080d1a0cd49722cd81990f0ae34368ada7efa304f76f7367231513",
+   "sha256": "4bf38c035f080d1a0cd49722cd81990f0ae34368ada7efa304f76f7367231513",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/detail/helper_macros.hpp",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/detail/helper_macros.hpp",
+   "upstream_sha256": "f59a5e9fc0f822ce6411d1f6d0979ded68efdb1bf6755d322b93163f31e3b01a",
+   "sha256": "f59a5e9fc0f822ce6411d1f6d0979ded68efdb1bf6755d322b93163f31e3b01a",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/exmy_base.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/exmy_base.h",
+   "upstream_sha256": "49bdc92fd4e2f2264ab777358b7a2810d697ef7069b484a5eaa9715def8db859",
+   "sha256": "49bdc92fd4e2f2264ab777358b7a2810d697ef7069b484a5eaa9715def8db859",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/fast_math.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/fast_math.h",
+   "upstream_sha256": "f51dcb1972da008666c2a3bb24ddc20a192c3bb3bc3bc553b29d04fc621a1258",
+   "sha256": "f51dcb1972da008666c2a3bb24ddc20a192c3bb3bc3bc553b29d04fc621a1258",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/float8.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/float8.h",
+   "upstream_sha256": "6963b577695eecfb9c0ad1d56fed071b268c16cc247c08a356a7292f3d5ef268",
+   "sha256": "6963b577695eecfb9c0ad1d56fed071b268c16cc247c08a356a7292f3d5ef268",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/float_subbyte.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/float_subbyte.h",
+   "upstream_sha256": "a55205c2c17e85651a049fc9825a08b92908ee52e82a5107b97a05b181f287e6",
+   "sha256": "a55205c2c17e85651a049fc9825a08b92908ee52e82a5107b97a05b181f287e6",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/functional.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/functional.h",
+   "upstream_sha256": "440f47886e4677973e3552ca0af605f53476f8f3d722bbf8f47e9203f721bf7f",
+   "sha256": "440f47886e4677973e3552ca0af605f53476f8f3d722bbf8f47e9203f721bf7f",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/half.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/half.h",
+   "upstream_sha256": "1da1a1eba18a9fa62e7d3eabd5977af312cb589213f2188a48234d61bb15ed4d",
+   "sha256": "1da1a1eba18a9fa62e7d3eabd5977af312cb589213f2188a48234d61bb15ed4d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/integer_subbyte.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/integer_subbyte.h",
+   "upstream_sha256": "0100c6f35ffda1419fc5f06c2b8db129f4e31f0229d57c14eac65ef7e9b2a467",
+   "sha256": "0100c6f35ffda1419fc5f06c2b8db129f4e31f0229d57c14eac65ef7e9b2a467",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/layout/matrix.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/layout/matrix.h",
+   "upstream_sha256": "f7ff90051e0b2c7ea6f1295e62a2550e89aec5f8385a26c38ad38890a670341d",
+   "sha256": "f7ff90051e0b2c7ea6f1295e62a2550e89aec5f8385a26c38ad38890a670341d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/matrix_coord.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/matrix_coord.h",
+   "upstream_sha256": "22b96274790f0f1dfd44aa476c1575c3ba44ac905353efc3325404530e39fe7e",
+   "sha256": "22b96274790f0f1dfd44aa476c1575c3ba44ac905353efc3325404530e39fe7e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/numeric_size.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/numeric_size.h",
+   "upstream_sha256": "8b6948eb7e6e2675e95b57f3c32e90fbfcd53a1c05043305b34ccbec1642bf26",
+   "sha256": "8b6948eb7e6e2675e95b57f3c32e90fbfcd53a1c05043305b34ccbec1642bf26",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/numeric_types.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/numeric_types.h",
+   "upstream_sha256": "d0caaa13b790351b7052aef6f0811fd11a06814b56389680c4d32955dd77aaeb",
+   "sha256": "d0caaa13b790351b7052aef6f0811fd11a06814b56389680c4d32955dd77aaeb",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/pitch_linear_coord.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/pitch_linear_coord.h",
+   "upstream_sha256": "5ae2681cc9098e616dafebe3386bdd5d56c7dce33754beb6f6485716d127c952",
+   "sha256": "5ae2681cc9098e616dafebe3386bdd5d56c7dce33754beb6f6485716d127c952",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/platform/platform.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/platform/platform.h",
+   "upstream_sha256": "bbd3f04c800d32ab68c95a146ebec55b2c2773271d89a200df12a22e2270380e",
+   "sha256": "bbd3f04c800d32ab68c95a146ebec55b2c2773271d89a200df12a22e2270380e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/real.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/real.h",
+   "upstream_sha256": "6fd96474fd128d6ee44bfdc9274a9cabf805bd726ff7a1563b70fd3b41fbbf44",
+   "sha256": "6fd96474fd128d6ee44bfdc9274a9cabf805bd726ff7a1563b70fd3b41fbbf44",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/tfloat32.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/tfloat32.h",
+   "upstream_sha256": "16a926b8caf6eef11d511f998fa51b922f6065a1fc4a5bde788dceaf241b2228",
+   "sha256": "16a926b8caf6eef11d511f998fa51b922f6065a1fc4a5bde788dceaf241b2228",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/trace.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/trace.h",
+   "upstream_sha256": "b124b4c1cb13a7877188f142a39fb88f652ac3ff0bf7a1d8af9faed29b805f96",
+   "sha256": "b124b4c1cb13a7877188f142a39fb88f652ac3ff0bf7a1d8af9faed29b805f96",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/uint128.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/uint128.h",
+   "upstream_sha256": "f7ad2b619b69be1ea9caa2280d856a5c4ad07f57334b5f737dd5332805fe3c00",
+   "sha256": "f7ad2b619b69be1ea9caa2280d856a5c4ad07f57334b5f737dd5332805fe3c00",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/uint256.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/uint256.h",
+   "upstream_sha256": "c3ab76ecc5fff8cc57bef0d7c4406521e1aae480e65a22f70c7c8138cf075578",
+   "sha256": "c3ab76ecc5fff8cc57bef0d7c4406521e1aae480e65a22f70c7c8138cf075578",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/cutlass/version.h",
+   "source": "cutlass",
+   "upstream_path": "include/cutlass/version.h",
+   "upstream_sha256": "471048c340f3a7d8b2bc1618919fd4368c05f357755e2445c34fda652182783d",
+   "sha256": "471048c340f3a7d8b2bc1618919fd4368c05f357755e2445c34fda652182783d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "mega/__init__.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/mega/__init__.py",
+   "upstream_sha256": "76ca530af15eaace8f868e091cd8562c93a0266e8d6ae9febed1ef778c95b1ce",
+   "sha256": "adcd04ac84fec598d14ecc347da2690eaf9c3ebfe2e2166a5b9aded25ef14553",
+   "modified": true,
+   "modifications": [
+    "bf16_mega_moe: optional isoexec_canonical flag selecting the canonical BF16 binding; upstream default unchanged.",
+    "Pruned to BF16: remove fp8_fp4_mega_moe (with its isoexec_canonical keyword), get_symm_buffer_for_mega_moe, transform_weights_for_mega_moe and its FP8/FP4 SF helpers; SymmBuffer defaults to mma_type 'bf16xbf16'.",
+    "SymmBuffer: the symmetric-memory rendezvous (group size > 1) goes through isoexec.ops.moe.symm_rendezvous.rendezvous instead of torch.distributed._symmetric_memory.rendezvous: torch numbers handle exchanges per process, so a rank that set up a buffer its peers did not would hang the next shared rendezvous; the entry point gathers the group's setup counts first and raises RendezvousSkewError on every rank instead. Same buffer, same handle otherwise."
+   ]
+  },
+  {
+   "path": "utils/__init__.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/utils/__init__.py",
+   "upstream_sha256": "bf31f6e9fc30482ef83a73d63fdb6ed4d46deec847b35c0f9d39816d9b923bb4",
+   "sha256": "6616cf1007442cf58ee54dc6452340f30ed011b740791ffd329ad70c0b135d3e",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: export only utils.math; the scaling-factor layout and dist helper modules are removed."
+   ]
+  },
+  {
+   "path": "utils/math.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/utils/math.py",
+   "upstream_sha256": "9cdecd0c0a0a8b3c64af87107464c91510876110eb80bdb485ff1f74eda8ea0e",
+   "sha256": "1c76940fa992cecf1ce517c4c72d283403e2d8f6849aa0ad4015e102a43c4f60",
+   "modified": true,
+   "modifications": [
+    "Pruned to BF16: keep ceil_div and align; remove the FP8/FP4 cast, UE8M0 pack/unpack and dequantize helpers and the now unused imports."
+   ]
+  },
+  {
+   "path": "utils/mlopart.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/utils/mlopart.py",
+   "upstream_sha256": "243d74abb3b60ff9712632212ea0d2d4a05f064311a3191e297d90d0b27cedc7",
+   "sha256": "243d74abb3b60ff9712632212ea0d2d4a05f064311a3191e297d90d0b27cedc7",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "locality_domain.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/locality_domain.py",
+   "upstream_sha256": "05c903897e3d30f9a200ad714925d0ff4ad79e56911109c335c960a4cffcbecb",
+   "sha256": "05c903897e3d30f9a200ad714925d0ff4ad79e56911109c335c960a4cffcbecb",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "_api.py",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/__init__.py",
+   "upstream_sha256": "2b57dde0bc7707eb1f98a9d499618f9e47605fb715a85d91d4fe6716aa9b941e",
+   "sha256": "9e8ce720708f72b18c673e68f0e9112d392036771076e3c40b8415c1cd860c2f",
+   "modified": true,
+   "modifications": [
+    "Omit upstream testing/legacy imports; public runtime API and initialization retained.",
+    "IsoExec isolation: initialize with the include-digest cache signature, default the private JIT cache to <XDG_CACHE_HOME>/isoexec/deep_gemm_jit (ISOEXEC_DG_JIT_CACHE_DIR), and fail closed unless the JIT identity is this package's.",
+    "Export the IsoExec leaf-tree BF16 GEMM binding bf16_gemm_nt_leaves.",
+    "Pruned to BF16: import only the BF16 entry points IsoExec calls (bf16_gemm_nt, bf16_gemm_nt_leaves, einsum, get_block_m_for_mega_moe, SymmBuffer, bf16_mega_moe, bf16_mega_gate_isoexec, get_mega_gate_isoexec_config) besides config, epilogue and locality-domain helpers; drop the FP8/FP4, cuBLASLt, attention, hyperconnection, upstream MegaGate, MegaMHC, layout and other BF16 GEMM imports.",
+    "Export the three SM100 BF16 grouped GEMM bindings.",
+    "IsoExec early launch: export set_early_launch / get_early_launch.",
+    "IsoExec register partials: set/get_leaf_register_partials exported.",
+    "Export the IsoExec router program on the BF16 MegaGate (bf16_mega_gate_isoexec, get_mega_gate_isoexec_config)."
+   ]
+  },
+  {
+   "path": "licenses/deep_gemm.txt",
+   "source": "deep_gemm",
+   "upstream_path": "LICENSE",
+   "upstream_sha256": "6c73a30c14a2938abaa6afe98ebb19e6d81dac5bd4ace0cb05c61c20afa37b85",
+   "sha256": "6c73a30c14a2938abaa6afe98ebb19e6d81dac5bd4ace0cb05c61c20afa37b85",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "licenses/deep_jit.txt",
+   "source": "deep_jit",
+   "upstream_path": "LICENSE",
+   "upstream_sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+   "sha256": "ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "licenses/cutlass.txt",
+   "source": "cutlass",
+   "upstream_path": "LICENSE.txt",
+   "upstream_sha256": "80a7a18b73d41f64dd9ca881af35938f8de88b18c728703251f4c94d1299884d",
+   "sha256": "80a7a18b73d41f64dd9ca881af35938f8de88b18c728703251f4c94d1299884d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/common/ring_pipeline.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/common/ring_pipeline.cuh",
+   "upstream_sha256": "d231e0ceb5e41d3128a82b3e326b6cfc5c46b58013edf0bfd48bf1704859711e",
+   "sha256": "d231e0ceb5e41d3128a82b3e326b6cfc5c46b58013edf0bfd48bf1704859711e",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/impls/sm100_mqa_logits.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/impls/sm100_mqa_logits.cuh",
+   "upstream_sha256": "3221a1809e2aeb3627b97cc9d56a1d3d8bee33422340cb76dd23b9b9b7d75b3d",
+   "sha256": "3221a1809e2aeb3627b97cc9d56a1d3d8bee33422340cb76dd23b9b9b7d75b3d",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/layout/mqa_logits.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/layout/mqa_logits.cuh",
+   "upstream_sha256": "013b7c2fdb2d4f1592a9683091d3bc234e6d12481f7072b0ce27dd0024472e56",
+   "sha256": "013b7c2fdb2d4f1592a9683091d3bc234e6d12481f7072b0ce27dd0024472e56",
+   "modified": false,
+   "modifications": []
+  },
+  {
+   "path": "include/deep_gemm/scheduler/sm100_mqa_logits.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/scheduler/sm100_mqa_logits.cuh",
+   "upstream_sha256": "c284fac85297bda2f119d7df0e64be12d077b84ec5009623f59ab9924b49ab41",
+   "sha256": "6099e9936b467207a7b2d72704bfc745223a510c17fdf841f3f80861b2778412",
+   "modified": true,
+   "modifications": [
+    "IsoExec AOT build (dsa_sm100 sub-extension mqa): <cutlass/arch/grid_dependency_control.h> is not in the vendored CUTLASS closure; its one use, cutlass::arch::launch_dependent_grids(), is replaced by the CUDA runtime's cudaTriggerProgrammaticLaunchCompletion() (the same griddepcontrol.launch_dependents). Launch structure only.",
+    "cu_seq_len_k_start may be null (every row starts at key 0): mqa_logits_k_start() at the three reads, so IsoExec's callers (all rows from key 0) pass no zero tensor per call. Addressing only."
+   ]
+  },
+  {
+   "path": "include/deep_gemm/scheduler/sm100_paged_mqa_logits.cuh",
+   "source": "deep_gemm",
+   "upstream_path": "deep_gemm/include/deep_gemm/scheduler/sm100_paged_mqa_logits.cuh",
+   "upstream_sha256": "60d5b64c2d8fb11ded1672b87840f712d48aa4575a58ead20199934b36fbe06c",
+   "sha256": "5da9356798c51b337ed32d712384e1dcbe230974f6cb99b1d1f9836c9849cd27",
+   "modified": true,
+   "modifications": [
+    "cutlass::arch::launch_dependent_grids() -> cudaTriggerProgrammaticLaunchCompletion() (as in sm100_mqa_logits.cuh).",
+    "A request run's context is the MAX of its tokens' context lengths (RequestInfo::from_q_token and the metadata kernel's cost pass), not the last token's: IsoExec's runs (rows with one sequence index) may end with padded rows of context 0 (CUDA-graph padding), which would otherwise leave the run's other rows unscored. The per-SM boundary pass reads only the run's token count. Schedule only: every key is still scored by the same per-key program.",
+    "The block-table row of a run is indices[q_token_start] (IsoExec's row -> sequence map) instead of q_token_start: IsoExec's block table has one row per sequence, vLLM's one per token. Addressing only."
+   ]
+  }
+ ],
+ "pruned_to_bf16": {
+  "rule": "IsoExec carries no FP8/FP4 material except the FP8 index-score kernel of the V4.1 cache program (port/CACHE-SPEC.md: FP8 index keys and queries): only what the BF16 model calls is vendored (bf16_gemm_nt, bf16_gemm_nt_leaves, einsum bhr,hdr->bhd, the BF16 MegaMoE with its canonical specialization and SymmBuffer, the BF16 MegaGate as IsoExec's router program (bf16_mega_gate_isoexec), the locality-domain probe, the config setters) plus the SM100 FP8 MQA logits kernel headers, which attention/dsa_sm100 compiles ahead of time (no JIT host code). Removed upstream files are listed here with their pinned upstream identity.",
+  "removed": [
+   {
+    "path": "csrc/apis/attention.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/apis/attention.hpp",
+    "upstream_sha256": "00f9293d641baa33199e62a25112540a7c105ec955ba7996d403eeea7f3b84bd",
+    "reason": "FP8/FP4: FP8/FP4 MQA / paged / sparse MQA logits (indexer) bindings; the SM100 FP8 MQA logits kernels are bound ahead of time by attention/dsa_sm100 (csrc/mqa)"
+   },
+   {
+    "path": "csrc/apis/hyperconnection.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/apis/hyperconnection.hpp",
+    "upstream_sha256": "0c73a4ad3f96d7ce59b8801aee423b715629b856e3845f87602e631fd3248dae",
+    "reason": "not called by the BF16 model: TF32 hyperconnection pre-norm GEMM (SM90/SM100) bindings"
+   },
+   {
+    "path": "csrc/apis/layout.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/apis/layout.hpp",
+    "upstream_sha256": "63ec154c971aae1d014e5c9ebfda93af983a0e695d6dc8c5897382642d240c2c",
+    "reason": "FP8/FP4: scaling-factor layout transforms (FP32 SF transpose, UE8M0 packing) for the FP8/FP4 GEMMs"
+   },
+   {
+    "path": "csrc/apis/mega_mhc.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/apis/mega_mhc.hpp",
+    "upstream_sha256": "8a46910b0fe34595ebc441e091ebcb654ddb0292e121a3109a96752e80c897b1",
+    "reason": "not called by the BF16 model: MegaMHC bindings (with FP8 output scaling factors)"
+   },
+   {
+    "path": "csrc/jit_kernels/heuristics/sm90.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/heuristics/sm90.hpp",
+    "upstream_sha256": "f2a9f9e9e6d224fccc976a33e7ccb6c6e4af65eeb5482ed811997c29e6598f75",
+    "reason": "not called by the BF16 model: SM90 GEMM heuristics (SM90 families)"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_bmk_bnk_mn.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_bmk_bnk_mn.hpp",
+    "upstream_sha256": "02e180967718a6264b3d0ef7f0d6de5b70105ccbf438df47fe3d933ab86cf96e",
+    "reason": "not called by the BF16 model: einsum bmk,bnk->mn (SM100)"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_fp8_fp4_gemm_1d1d.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_fp8_fp4_gemm_1d1d.hpp",
+    "upstream_sha256": "cc9d1099e6ccca0e1adc5df0e931c60d53bd163ae57953dc0b8f8cfb8bdf8481",
+    "reason": "FP8/FP4: SM100 FP8xFP4 GEMM family"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_fp8_fp4_mega_moe.hpp",
+    "upstream_sha256": "d54e0149ea3e6eee497c118f6466e7bb57ae11ceccfc674ddda86212eae38f4b",
+    "reason": "FP8/FP4: SM100 FP8xFP4 MegaMoE (incl. its IsoExec canonical specialization)"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_mega_mhc.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_mega_mhc.hpp",
+    "upstream_sha256": "9d8505958ae590f4b05c8c85b138351a4518dd53d77a84825dec1a350cc4b2d3",
+    "reason": "not called by the BF16 model: MegaMHC JIT host code"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_mqa_logits.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_mqa_logits.hpp",
+    "upstream_sha256": "1ce448d9ac3a3f3440b347e7ed2ab020df5325e09460813687849ce903173373",
+    "reason": "SM100 MQA logits JIT host code: replaced by the ahead-of-time instantiations, tensor maps and launches of attention/dsa_sm100 (csrc/mqa/mqa.cu); the kernel headers are vendored"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_sparse_mqa_logits.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_sparse_mqa_logits.hpp",
+    "upstream_sha256": "07874e7f7e393923354a84bd0e53ad05812c529f20731d765db0a5b0d650c6b4",
+    "reason": "FP8/FP4: SM100 FP8/FP4 sparse MQA logits"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm100_tf32_hc_prenorm_gemm.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm100_tf32_hc_prenorm_gemm.hpp",
+    "upstream_sha256": "bb44f58ef1a08217c0c72cb6f065b11d5a2ddcbadb7cd963cd8fc905edae9bf2",
+    "reason": "not called by the BF16 model: SM100 TF32 hyperconnection pre-norm GEMM"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_bf16_gemm.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_bf16_gemm.hpp",
+    "upstream_sha256": "ef81cdc07bbb2a34e25e061352f8e8db9e82b1e272dc706db891c587c15eb2ca",
+    "reason": "not called by the BF16 model: SM90 BF16 GEMM family"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_bmk_bnk_mn.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_bmk_bnk_mn.hpp",
+    "upstream_sha256": "a800c3a2b6e50022fc250b92b609e91d6b28947ba16dd406291d6fb409f1076d",
+    "reason": "not called by the BF16 model: SM90 einsum bmk,bnk->mn"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp",
+    "upstream_sha256": "61b012b0c1ef009f565be8af4767124c7ae42b623014293c58cdc78c7a1110e2",
+    "reason": "FP8/FP4: SM90 FP8 GEMM (1D1D)"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp",
+    "upstream_sha256": "9034410635d599c5c1d9fb95a33bec499d063580981ac25a5634899454c2a6aa",
+    "reason": "FP8/FP4: SM90 FP8 GEMM (1D2D)"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_fp8_mqa_logits.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_fp8_mqa_logits.hpp",
+    "upstream_sha256": "605cb64235179e3a5e466dc32b2cd7de05c2c65061aae91caf516c2ead9fc339",
+    "reason": "FP8/FP4: SM90 FP8 MQA logits"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp",
+    "upstream_sha256": "9570a7ce9465568b887c4b5ae16d581b83cd5b557781a40b2ff94cb89907b1cc",
+    "reason": "not called by the BF16 model: SM90 TF32 hyperconnection pre-norm GEMM"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/smxx_cublaslt.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/smxx_cublaslt.hpp",
+    "upstream_sha256": "299127c1cc67a0ea6bd6c0959b52bb7d407cefc0f4539074e6e2bf899ee3721c",
+    "reason": "FP8/FP4 and not called by the BF16 model: cuBLASLt GEMMs incl. NVFP4; reached only outside deterministic mode, which IsoExec always enables"
+   },
+   {
+    "path": "csrc/jit_kernels/impls/smxx_layout.hpp",
+    "source": "deep_gemm",
+    "upstream_path": "csrc/jit_kernels/impls/smxx_layout.hpp",
+    "upstream_sha256": "0f50d561d474090452785d628acef09e59b849dc964477c1140cf494d0fbec4a",
+    "reason": "FP8/FP4: scaling-factor layout kernels (FP32 SF transpose, UE8M0 packing) host code"
+   },
+   {
+    "path": "include/deep_gemm/impls/smxx_layout.cuh",
+    "source": "deep_gemm",
+    "upstream_path": "deep_gemm/include/deep_gemm/impls/smxx_layout.cuh",
+    "upstream_sha256": "cb72206057f00bd25cdc2d502997535948aaf18d2c678f97447548e317ca1ea3",
+    "reason": "FP8/FP4: scaling-factor layout kernels (FP32 SF transpose, UE8M0 packing)"
+   },
+   {
+    "path": "include/deep_gemm/layout/mega_mhc.cuh",
+    "source": "deep_gemm",
+    "upstream_path": "deep_gemm/include/deep_gemm/layout/mega_mhc.cuh",
+    "upstream_sha256": "c1d42729953b12b8407e479db5f97aa32aa9a1f2a0d1e6da4ad19c29c13d60dc",
+    "reason": "not called by the BF16 model: MegaMHC layout (host include of the removed MegaMHC host code)"
+   },
+   {
+    "path": "include/deep_gemm/layout/sparse_mqa_logits.cuh",
+    "source": "deep_gemm",
+    "upstream_path": "deep_gemm/include/deep_gemm/layout/sparse_mqa_logits.cuh",
+    "upstream_sha256": "87b304a2aac049be9d7babbefa551d984905744495c10048efa896647b9635d5",
+    "reason": "FP8/FP4: sparse MQA logits layout (host include of the removed indexer host code)"
+   },
+   {
+    "path": "utils/dist.py",
+    "source": "deep_gemm",
+    "upstream_path": "deep_gemm/utils/dist.py",
+    "upstream_sha256": "acf0fc25aa44ca5a54f2f757a39d462f43cf4ea1585d49f3feb59deecffefee3",
+    "reason": "not called by the BF16 model: upstream distributed test helpers (init_dist, uneven_all_gather)"
+   },
+   {
+    "path": "utils/layout.py",
+    "source": "deep_gemm",
+    "upstream_path": "deep_gemm/utils/layout.py",
+    "upstream_sha256": "eb8ad89745ebfa72bf1a6ded9129ee57f15515857787f0308bb92c61dcbc5b5a",
+    "reason": "FP8/FP4: Python re-exports of the removed scaling-factor layout bindings"
+   }
+  ]
+ },
+ "authored_files": [
+  "__init__.py",
+  "_extension.py",
+  "PROVENANCE.md"
+ ],
+ "isolation": {
+  "reason": "Other DeepGEMM builds in the process (vLLM's bundled upstream, a pip deep_gemm) use the same C++ namespaces; GCC STB_GNU_UNIQUE inline globals (deep_gemm::jit/runtime/heuristics_runtime) were unified across RTLD_LOCAL extensions, so the last _C.init chose the JIT include root and cache for both copies.",
+  "host_cflags": [
+   "-fvisibility=hidden",
+   "-fvisibility-inlines-hidden",
+   "-fno-gnu-unique"
+  ],
+  "load_check": "_extension.isolation_violations: refuse the built object if any dynamic symbol is GNU_UNIQUE or an exported deep_gemm/deep_jit definition",
+  "jit_env_prefix": "ISOEXEC_DG",
+  "jit_cache_env": "ISOEXEC_DG_JIT_CACHE_DIR",
+  "jit_cache_default": "${XDG_CACHE_HOME:-~/.cache}/isoexec/deep_gemm_jit",
+  "jit_cache_signature": "isoexec-deep_gemm-<revision[:12]>-include-<sha256(include/)[:16]>+cutlass-<CUTLASS_VERSION>",
+  "runtime_check": "_api.check_jit_identity at load: include_dirs == [<package>/include], env prefix and signature are this package's",
+  "device_code": "unchanged: generated kernel sources, include tree and nvcc flags are identical; only the cache directory and key namespace differ"
+ }
+}

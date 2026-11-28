@@ -1,6 +1,9 @@
 """Convert native inference inputs to the graph's sequence context."""
 
+import contextlib
+import contextvars
 from collections.abc import Mapping
+from types import MappingProxyType
 
 import torch
 
@@ -71,3 +74,22 @@ def engine_sequence_context(
             max_kv = max_model_len
         cu = cu.to(device=pos.device, dtype=torch.int32)
     return make_sequence_context(pos, cu, max_q=int(max_q), max_kv=int(max_kv), input_ids=ids)
+
+
+_ENGINE_INPUTS: contextvars.ContextVar = contextvars.ContextVar("isoexec_engine_inputs", default=None)
+
+
+@contextlib.contextmanager
+def engine_inputs(values: Mapping):
+    """Publish one forward's extra model inputs (the per-model host state's tensors, e.g. a token history
+    window) to the components of that forward; ``current_engine_inputs`` reads them."""
+    token = _ENGINE_INPUTS.set(MappingProxyType(dict(values)))
+    try:
+        yield
+    finally:
+        _ENGINE_INPUTS.reset(token)
+
+
+def current_engine_inputs() -> Mapping | None:
+    """The extra model inputs of the engine forward being executed, or None outside one."""
+    return _ENGINE_INPUTS.get()

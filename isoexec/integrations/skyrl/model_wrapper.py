@@ -22,8 +22,10 @@ from megatron.core.utils import get_model_config
 from skyrl.backends.skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 
 from isoexec.ops.logprobs.temperature import temperature_divide
+from isoexec.runtimes.megatron.forward_count import require_equal_forward_count
 
-from .scoring import lm_head_log_probs, target_logprobs, verify_full_distribution
+from .rollout import microbatch_requests
+from .scoring import _find_isoexec_stage, lm_head_log_probs, target_logprobs, verify_full_distribution
 
 
 class IsoExecModelWrapper(MegatronModelWrapper):
@@ -36,6 +38,32 @@ class IsoExecModelWrapper(MegatronModelWrapper):
         self._isoexec_finalize_model_grads = model_config.finalize_model_grads_func
         super().__init__(config=config, actor_module=actor_module, **kwargs)
         self._isoexec_log_probs = lm_head_log_probs(self)
+
+    def _stage(self):
+        modules = self.actor_module if isinstance(self.actor_module, (list, tuple)) else [self.actor_module]
+        return modules, _find_isoexec_stage(modules)
+
+    def _rollout_requests(self, micro_batches):
+        modules, stage = self._stage()
+        return microbatch_requests(stage, micro_batches, chunks=len(modules))
+
+    def _agree_forward_count(self, micro_batches, site):
+        # A rank with a different number of forwards would issue a different EP collective sequence: refuse by
+        # name, agreed over the EP group, before the schedule's first collective.
+        placement = getattr(self._stage()[1], "placement", None)
+        if placement is not None and placement.ep.size > 1:
+            require_equal_forward_count(len(micro_batches), placement.ep.group, site=site)
+
+    def forward(self, micro_batches, *args, **kwargs):
+        self._agree_forward_count(micro_batches, "forward")
+        # Stages that read the engine requests behind each sequence (V4.1's decoder segments) get them per forward.
+        with self._rollout_requests(micro_batches):
+            return super().forward(micro_batches, *args, **kwargs)
+
+    def forward_backward_mini_batch(self, micro_batches, *args, **kwargs):
+        self._agree_forward_count(micro_batches, "forward_backward_mini_batch")
+        with self._rollout_requests(micro_batches):
+            return super().forward_backward_mini_batch(micro_batches, *args, **kwargs)
 
     def run_pending_grad_sync(self) -> None:
         if self._isoexec_finalize_model_grads is None:

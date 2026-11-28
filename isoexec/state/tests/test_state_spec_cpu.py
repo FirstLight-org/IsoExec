@@ -191,3 +191,12 @@ def test_contract_tuple_order_is_not_a_reference_key():
 
 def test_empty_model_contract_is_valid():
     validate_model_contract(ModelContract((), ()), op_ids=REGISTERED_OP_IDS)
+
+
+def test_segment_scope_is_a_per_token_sliding_window():
+    window = replace(TOKEN, retention="sliding_window", window_tokens=8, scope="segment")
+    validate_state_spec(window)
+    assert TOKEN.scope == REQUEST.scope == "request"                 # the default: every existing declaration
+    for bad in (replace(TOKEN, scope="segment"), replace(REQUEST, scope="segment"), replace(TOKEN, scope="turn")):
+        with pytest.raises(ContractError):
+            validate_state_spec(bad)

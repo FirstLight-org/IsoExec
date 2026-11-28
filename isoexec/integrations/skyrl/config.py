@@ -21,6 +21,7 @@ class SkyRLConfig(IsoExecConfig):
     """Worker options carried by SkyRL's existing TrainerConfig serialization."""
 
     model_descriptor: dict[str, Any] | None = None
+    generator_turns: dict[str, Any] | None = None
 
 
 def _cudagraph_mode(engine) -> str:
@@ -59,6 +60,8 @@ def _worker_environment(cfg, options) -> dict[str, str]:
     from .weight_transfer import PLUGINS
 
     env = {key: value for key, value in os.environ.items() if key.startswith("ISOEXEC")}
+    if "NVTE_TENSOR_HANDLE_POOL_SIZE_MB" in os.environ:
+        env["NVTE_TENSOR_HANDLE_POOL_SIZE_MB"] = os.environ["NVTE_TENSOR_HANDLE_POOL_SIZE_MB"]
     env.update(cfg.trainer.extra_runtime_env_vars)
     env.update(ISOEXEC_VLLM_ENV)
     env.update(resolved_environment(cfg.trainer.policy.model.path))
@@ -185,6 +188,12 @@ def resolve(cfg):
     # Opt-in through the engine kwargs only: SkyRL's own enable_chunked_prefill defaults on and is not
     # plumbed to the engine, so it is not read as a request.
     options.enable_chunked_prefill = bool(engine.engine_init_kwargs.get("enable_chunked_prefill", False))
+    generator = cfg.generator
+    options.generator_turns = {
+        "batched": bool(getattr(generator, "batched", False)),
+        "max_turns": getattr(generator, "max_turns", 1),
+        "step_wise_trajectories": bool(getattr(generator, "step_wise_trajectories", False)),
+    }
     trainer._isoexec_config = options
     trainer.extra_runtime_env_vars = _worker_environment(cfg, options)
     return options

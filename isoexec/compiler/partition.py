@@ -338,6 +338,14 @@ def _stage_parameter_names(source: fx.GraphModule, stage: fx.GraphModule) -> tup
             aliases[name] = owners[parameter]
         else:
             remote.add(name)
+    # Checkpoint buffers (e.g. DeepSeek V4.1's frozen Engram tables) that only other stages register are remote
+    # too, so their checkpoint names are skipped on this stage like remote Parameters. A buffer this stage
+    # registers (under any name) is neither remote nor aliased: unchanged.
+    local_buffers = dict(stage.named_buffers(remove_duplicate=False))
+    held = {id(buffer) for buffer in local_buffers.values()}
+    for name, buffer in source.named_buffers(remove_duplicate=False):
+        if name not in local_buffers and id(buffer) not in held:
+            remote.add(name)
     return frozenset(remote), aliases
 
 

@@ -111,3 +111,29 @@ def test_finalizer_error_propagates_after_clearing_pending_state(framework):  # 
     with pytest.raises(RuntimeError, match="collective failed"):
         wrapper.run_pending_grad_sync()
     assert wrapper._pending_grad_sync is None
+
+
+@pytest.mark.parametrize("method", ["forward", "forward_backward_mini_batch"])
+def test_wrapper_carries_rollout_requests_into_each_forward(framework, monkeypatch, method):  # noqa: F811
+    native, _ = framework
+    integration = importlib.import_module("isoexec.integrations.skyrl.model_wrapper")
+    from isoexec.integrations.skyrl.tests.test_rollout_requests_cpu import packed_cu, skyrl_batch
+    from isoexec.schema import rollout
+
+    stage = NS(reads_rollout_requests=True, forward_context=None)
+    monkeypatch.setattr(integration, "_find_isoexec_stage", lambda modules: stage)
+    batches = [skyrl_batch([[1] * p], [[2] * g]) for p, g in ((5, 2), (3, 4))]
+    seen = []
+
+    def schedule(self, micro_batches, *args, **kwargs):
+        for batch in micro_batches:
+            psp = NS(cu_seqlens_q_padded=torch.tensor(packed_cu(batch["attention_mask"]), dtype=torch.int32))
+            with stage.forward_context(psp):
+                seen.append(rollout.current().requests)
+        return "done"
+
+    monkeypatch.setattr(native.MegatronModelWrapper, method, schedule)
+    wrapper = integration.IsoExecModelWrapper.__new__(integration.IsoExecModelWrapper)
+    wrapper.actor_module = [torch.nn.Linear(1, 1)]
+    assert getattr(wrapper, method)(batches, 8, 1) == "done"
+    assert seen == [(((5, 2),),), (((3, 4),),)] and stage.forward_context is None

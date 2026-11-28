@@ -9,7 +9,7 @@ import torch
 from torch import fx
 
 from isoexec.ops.collectives.cp_transport import cp_region
-from isoexec.schema import SequenceContext
+from isoexec.schema import SequenceContext, rollout
 
 
 def checkpoint_layers(graph_module: fx.GraphModule, *, span: int = 1) -> tuple:
@@ -141,6 +141,9 @@ def _layer_forward(program: fx.GraphModule, mutated: tuple[bool, ...] | None = N
         anchor = torch.empty((), device=tensors[0].device, dtype=torch.float32, requires_grad=True)
         metadata = [None if isinstance(value, torch.Tensor) else value for value in values]
 
+        # Backward replays this microbatch after its SkyRL forward context has exited.
+        requests = rollout.current()
+
         def invoke(*saved):
             arguments = list(metadata)
             for index, tensor in zip(indices, saved[:-1], strict=True):
@@ -148,7 +151,7 @@ def _layer_forward(program: fx.GraphModule, mutated: tuple[bool, ...] | None = N
             # The first pass runs without grad and records what context-parallel peers hand this rank;
             # the recompute (inside the backward, with grad) replays it instead of re-running the
             # forward hand-offs, which would serialize the CP ranks (ops/collectives/cp_transport.py).
-            with cp_region("replay" if torch.is_grad_enabled() else "record"):
+            with rollout.carry(requests), cp_region("replay" if torch.is_grad_enabled() else "record"):
                 return invoke_values(arguments)
 
         from megatron.core import tensor_parallel

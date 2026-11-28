@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import TYPE_CHECKING
 
 import torch
@@ -20,18 +21,20 @@ from megatron.core.utils import make_viewless_tensor
 from isoexec.compiler.realization.graph import clone_graph_module, drop_auxiliary_outputs
 from isoexec.compiler.realization.pp import prepare_pipeline_graph, uses_mrope
 from isoexec.compiler.realization.sp import prepare_sequence_parallel_graph
-from isoexec.compiler.realization.storage import allocate_tensors
+from isoexec.compiler.realization.storage import allocate_tensors, take_host_resident_buffers
 from isoexec.compiler.realization.tp import set_head_output_shape, set_local_dims, shard_parameter_shapes
 from isoexec.compiler.realization.weights import load_weights
 from isoexec.compiler.outputs import model_outputs
 from isoexec.compiler.partition import StageDefinition
 from isoexec.nn import LMHead, MoE
+from isoexec.nn.component import Component
 from isoexec.ops.collectives.tp_bytes import bind_seq_scatter
 
 from ._binding import (
     bind_trainer_ops,
     placement_from_groups,
     set_expert_parallel_attributes,
+    set_partial_gradient_sums,
     set_sequence_parallel_attributes,
     set_tensor_parallel_attributes,
 )
@@ -44,6 +47,33 @@ if TYPE_CHECKING:
     from transformers import PretrainedConfig
 
     from isoexec.compiler.source import ModelSource
+
+
+def node_shared_host_buffers(graph_module, taken, *, checkpoint: str | None, pg_collection):
+    """Place the taken host-resident buffers (``HOST_RESIDENT_BUFFERS``) in ONE shared host copy per node for the
+    ranks of this pipeline stage (``runtimes/vllm/host_tables.NodeSharedHostBuffers``, collective over the stage's
+    TP x DP x CP group): the host's lowest rank creates and fills a shared memory segment named by the
+    checkpoint identity and layout, the others map it read-only; it is unlinked once every co-located rank has
+    mapped it and registered with CUDA in pieces after the load (``finish``). Returns the buffers and the
+    logical names of the taken buffers, or ``(None, {})`` without host-resident buffers (the path every other
+    model takes, unchanged)."""
+    if not taken:
+        return None, {}
+    from isoexec.runtimes.vllm.host_tables import NodeSharedHostBuffers, read_only_registration_supported
+
+    group = getattr(pg_collection, "tp_dp_cp", None)
+    if group is None:
+        from megatron.core import parallel_state
+        group = parallel_state.get_tensor_and_data_parallel_group(with_context_parallel=True)
+    if group is not None and group.size() == 1:
+        group = None
+    owners = {id(module): name for name, module in graph_module.named_modules()}
+    names = {(id(child), name): f"{owners[id(child)]}.{name}".lstrip(".") for child, name, _ in taken}
+    device = torch.device("cuda", torch.cuda.current_device())
+    pp = pg_collection.pp
+    buffers = NodeSharedHostBuffers(taken, checkpoint=checkpoint, stage=f"trainer-pp{pp.rank()}/{pp.size()}",
+                                    group=group, read_only_register=read_only_registration_supported(device))
+    return buffers, names
 
 
 class MegatronModel(MegatronModule):
@@ -104,6 +134,7 @@ class MegatronModel(MegatronModule):
         config: TransformerConfig,
         pg_collection: ProcessGroupCollection,
         cp_layout: str | None = None,
+        checkpoint_path: str | None = None,
     ) -> None:
         cp_group = getattr(pg_collection, "cp", None)
         if (1 if cp_group is None else cp_group.size()) != config.context_parallel_size:
@@ -131,6 +162,9 @@ class MegatronModel(MegatronModule):
         if any(not parameter.is_meta for parameter in definition.module.parameters()):
             raise ValueError("MegatronModel construction requires meta parameters")
 
+        from isoexec.core import load_timers
+
+        lap = load_timers.Lap()
         super().__init__(config)
         self.source = source
         self.hf_config = hf_config
@@ -152,11 +186,18 @@ class MegatronModel(MegatronModule):
         self.aux_loss_injector = None
         self.score_temperature = 1.0
         self.last_aux: dict[str, torch.Tensor] = {}
+        # Rollout metadata (``isoexec.schema.rollout``): read by components that declare it; the integration
+        # sets ``forward_context`` (packed_seq_params -> context manager) around a microbatch schedule.
+        self.reads_rollout_requests = any(isinstance(module, Component) and module.READS_ROLLOUT_REQUESTS
+                                          for module in self.graph_module.modules())
+        self.forward_context = None
         tp_size = pg_collection.tp.size()
         sp = config.sequence_parallel
         has_moe = any(isinstance(module, MoE) for module in self.graph_module.modules())
         cp = config.context_parallel_size
-        placement = placement_from_groups(pg_collection, sp=sp, has_moe=has_moe) if has_moe or cp > 1 else None
+        bound = any(isinstance(module, Component) and module.PLACEMENT_BOUND for module in self.graph_module.modules())
+        placement = (placement_from_groups(pg_collection, sp=sp, has_moe=has_moe)
+                     if has_moe or cp > 1 or bound else None)
         self.placement = placement
         # Expert tensors split over ETP, which is TP at EP=1 and one at EP>1.
         self._etp_size = tp_size if placement is None else placement.etp.size
@@ -197,9 +238,20 @@ class MegatronModel(MegatronModule):
         self._parameter_aliases = dict(definition.parameter_aliases)
         # TODO(jiangjiawei1103): DDP/optimizer setup must collect registered Parameters after all
         # construction-time parameter changes.
+        # Tables a component keeps in host memory (read through a device mapping) are not device tensors.
+        host_resident = take_host_resident_buffers(self.graph_module)
+        lap("model_init.bind")
         allocate_tensors(self.graph_module, device=torch.device("cuda", torch.cuda.current_device()))
+        lap("model_init.allocate")
+        # One host copy per node shared by the stage's ranks (the engine's form), not a private copy per rank.
+        self._host_buffers, self._host_buffer_names = node_shared_host_buffers(
+            self.graph_module, host_resident, checkpoint=checkpoint_path, pg_collection=pg_collection)
+        lap("model_init.host_segment")
         if tp_size > 1:
             set_tensor_parallel_attributes(self.graph_module)
+            self.partial_gradient_sums = tuple(set_partial_gradient_sums(self.graph_module, pg_collection.tp))
+        else:
+            self.partial_gradient_sums = ()
         if sp:
             set_sequence_parallel_attributes(self.graph_module)
         if placement is not None and placement.ep.size > 1:
@@ -240,6 +292,7 @@ class MegatronModel(MegatronModule):
             weight.is_embedding_or_output_parameter = True
             if self.post_process:
                 weight.shared = True
+        lap("model_init.bind")
 
     def set_activation_checkpointing(self, enabled: bool) -> None:
         """Toggle constructed layer regions without changing parameter/state ownership."""
@@ -346,6 +399,23 @@ class MegatronModel(MegatronModule):
         if self.config.sequence_parallel and tokens % tp:
             raise ValueError(f"SP requires the packed token count to divide TP={tp}, got T={tokens}; "
                              "SkyRL pads each packed sequence to a multiple of TP")
+        context = self.forward_context(packed_seq_params) if self.forward_context is not None else nullcontext()
+        with context:
+            if self.__dict__.get("_first_forward_timed"):
+                return self._forward_graph(input_ids, seq, packed_seq_params, incoming, tokens, tp)
+            # The process's first forward (lazy kernel loads and JIT included) is a cold-start component; one
+            # device synchronisation closes it.
+            self.__dict__["_first_forward_timed"] = True
+            from isoexec.core import load_timers
+
+            with load_timers.phase("trainer.first_forward"):
+                out = self._forward_graph(input_ids, seq, packed_seq_params, incoming, tokens, tp)
+                if torch.cuda.is_initialized():
+                    torch.cuda.synchronize()
+            load_timers.mark("first_forward")
+            return out
+
+    def _forward_graph(self, input_ids, seq, packed_seq_params, incoming, tokens, tp):
         if self.pg_collection.pp.size() == 1:
             logits, aux = model_outputs(self.graph_module(input_ids=seq.input_ids, seq=seq))
             if self.aux_loss_injector is not None and torch.is_grad_enabled():
@@ -413,8 +483,19 @@ class MegatronModel(MegatronModule):
             Loaded logical names qualified by ``graph_module``.
         """
         tp = self.pg_collection.tp
+        # Node-shared host buffers: only the host's leader writes them; the others skip their names.
+        host = self._host_buffers
+        shared = set() if host is None else host.skip_names(lambda module, name: self._host_buffer_names[id(module), name])
         logical_names = load_weights(self.graph_module, weights, source=self.source, hf_config=self.hf_config,
                                      tp_size=tp.size(), tp_rank=tp.rank(), side="trainer",
-                                     remote=self._remote_parameters, aliases=self._parameter_aliases,
+                                     remote=self._remote_parameters | shared, aliases=self._parameter_aliases,
                                      etp_size=self._etp_size)
+        # Collective: the leader publishes the copy, every rank verifies, registers it in pieces and maps it.
+        if host is not None and not host.ready:
+            from isoexec.core import load_timers
+
+            with load_timers.phase("weights.host_finish"):
+                host.finish(torch.device("cuda", torch.cuda.current_device()))
+            # the names the leader loaded count as loaded on every rank (same bytes)
+            logical_names = set(logical_names) | shared
         return {f"graph_module.{name}" for name in logical_names}

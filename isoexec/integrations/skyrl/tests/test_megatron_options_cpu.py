@@ -10,11 +10,11 @@ from skyrl.train.config import SkyRLTrainConfig
 from isoexec.integrations.skyrl.megatron import validate_model_options
 
 
-def test_disk_optimizer_offload_is_refused_instead_of_ignored():
+def test_disk_optimizer_offload_allowed_with_fp32_grad_buffers():
     cfg = SkyRLTrainConfig()
     cfg.trainer.policy.megatron_config.optimizer_offload_to_disk.dir = "/tmp/unused-optimizer-state"
-    with pytest.raises(ValueError, match="optimizer_offload_to_disk.dir"):
-        validate_model_options(cfg.trainer.policy.megatron_config)
+    cfg.trainer.policy.megatron_config.ddp_config.grad_reduce_in_fp32 = True
+    validate_model_options(cfg.trainer.policy.megatron_config)
 
 
 def test_production_precision_aware_cpu_adam_allowed_for_training():

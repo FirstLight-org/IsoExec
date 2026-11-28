@@ -250,3 +250,38 @@ def test_native_registration_piecewise_selects_breakable_graphs(native_registry,
     monkeypatch.setenv("VLLM_USE_BREAKABLE_CUDAGRAPH", "0")
     with pytest.raises(ValueError, match="requires VLLM_USE_BREAKABLE_CUDAGRAPH=1"):
         registration.register_native(model_source, raw, checkpoint="checkpoint", cudagraph_mode="FULL_AND_PIECEWISE")
+
+
+def test_native_registration_applies_engine_settings_the_model_declares(native_registry, qwen_config, model_source,
+                                                                         monkeypatch):
+    raw = json.loads(qwen_config.to_json_string())
+    pinned = registration.register_native(model_source, raw, checkpoint="checkpoint",
+                                          engine_kwargs={"block_size": 64})
+    assert pinned["attention_backend"] == "CUSTOM" and pinned["enable_chunked_prefill"] is False
+    assert pinned["block_size"] == 64 and "kv_cache_dtype" not in pinned
+
+    meta = model_source.build_meta(raw)
+    declared = {"enable_chunked_prefill": True, "attention_backend": None, "kv_cache_dtype": "fp8_ds_mla",
+                "block_size": 128}
+    monkeypatch.setattr(type(meta), "engine_settings", lambda self: declared, raising=False)
+    monkeypatch.setattr(ModelSource, "build_meta", lambda self, config: meta)
+    kwargs = registration.register_native(model_source, raw, checkpoint="checkpoint",
+                                          engine_kwargs={"attention_backend": "FLASH_ATTN", "block_size": 64})
+    assert kwargs["enable_chunked_prefill"] is True and kwargs["kv_cache_dtype"] == "fp8_ds_mla"
+    assert kwargs["block_size"] == 128 and "attention_backend" not in kwargs
+    # The engine contract itself is not model-selectable.
+    monkeypatch.setattr(type(meta), "engine_settings", lambda self: {"enable_prefix_caching": True})
+    with pytest.raises(ValueError, match="not model-selectable"):
+        registration.register_native(model_source, raw, checkpoint="checkpoint")
+
+
+def test_native_registration_keeps_vllm_from_quantizing_a_self_decoding_checkpoint(native_registry, qwen_config,
+                                                                                    model_source):
+    raw = json.loads(qwen_config.to_json_string())
+    assert "quantization_config" not in registration.register_native(
+        model_source, raw, checkpoint="checkpoint")["hf_overrides"]
+    encoded = {**raw, "quantization_config": {"quant_method": "fp8", "weight_block_size": [32, 32]}}
+    kwargs = registration.register_native(model_source, encoded, checkpoint="checkpoint")
+    assert kwargs["hf_overrides"]["quantization_config"] is None
+    # the package still reads the stored encoding declaration
+    assert kwargs["additional_config"]["isoexec"]["raw_model_config"]["quantization_config"]["quant_method"] == "fp8"

@@ -1,6 +1,9 @@
 """SkyRL Megatron lifecycle around IsoExec's host-owned model and optimizer."""
 
 import math
+import os
+from dataclasses import replace
+from functools import partial
 from typing import Any, List, cast
 import torch
 import torch.nn as nn
@@ -47,8 +50,6 @@ def validate_mesh(worker, mc, lora_config):
 def validate_model_options(mc):
     from skyrl.train.config.config import DEFAULT_TRANSFORMER_CONFIG_KWARGS
 
-    if getattr(getattr(mc, "optimizer_offload_to_disk", None), "dir", None):
-        raise ValueError("IsoExec does not support megatron_config.optimizer_offload_to_disk.dir")
     for name in ("fp8", "fp8_recipe", "fp8_param", "fp8_amax_compute_algo"):
         if getattr(mc, name) is not None:
             raise ValueError(f"IsoExec does not support megatron_config.{name}")
@@ -136,8 +137,18 @@ def build_module(self, *, wrap_with_ddp: bool, ddp_config, lora_config, bf16: bo
     if ddp_config is not None:
         ddp_options.update(get_config_as_dict(ddp_config))
     optim_config = init_megatron_optim_config(section.optimizer_config, mc.optimizer_config_kwargs)
+    optimizer_builder = None
+    disk_config = getattr(mc, "optimizer_offload_to_disk", None)
+    if disk_config is not None and disk_config.dir is not None:
+        from skyrl.backends.skyrl_train.distributed.megatron.optimizer_offload_to_disk import (
+            build_optimizer_offloaded_to_disk,
+        )
+
+        settings = replace(disk_config, dir=os.path.join(disk_config.dir, self.cfg.run_name))
+        optimizer_builder = partial(build_optimizer_offloaded_to_disk, settings=settings)
     ddp, optimizer = wrap_ddp_and_optimizer(
         model, ddp_config=DistributedDataParallelConfig(**ddp_options), optimizer_config=optim_config,
+        optimizer_builder=optimizer_builder,
     )
     self._isoexec_optimizer = optimizer
     return [ddp]
@@ -148,7 +159,13 @@ def init_configs(worker, model_path, megatron_config):
     from skyrl.utils.tok import get_tokenizer
 
     config_path = model_folder.configuration_path(model_path)
-    worker.strategy.hf_config = AutoConfig.from_pretrained(config_path, trust_remote_code=True)
+    source, raw = model_folder.source_config(worker.cfg._isoexec_config.model_descriptor, worker.cfg, model_path)
+    if getattr(source._module("model"), "CONFIG_CLASS", None) is not None:
+        # A package that ships its own config class (DeepSeek V4.1: model_type deepseek_v41, which the installed
+        # transformers does not register) is parsed by that class, as the engine and the model build parse it.
+        worker.strategy.hf_config = source.build_config(raw)
+    else:
+        worker.strategy.hf_config = AutoConfig.from_pretrained(config_path, trust_remote_code=True)
     worker.tokenizer = get_tokenizer(config_path, trust_remote_code=True)
     worker.megatron_config = megatron_config
     worker.bridge = None
@@ -163,5 +180,9 @@ def init_configs(worker, model_path, megatron_config):
 
 def finish_optimizer_step(model):
     from isoexec.runtimes.megatron.optimizer import finish_native_optimizer_step
+    from isoexec.runtimes.megatron.replicas import check_after_optimizer_step
 
-    return finish_native_optimizer_step(model.actor_module)
+    result = finish_native_optimizer_step(model.actor_module)
+    # Every rank, after every step and so before any weight sync: replicated copies must still be equal.
+    check_after_optimizer_step(model.actor_module)
+    return result

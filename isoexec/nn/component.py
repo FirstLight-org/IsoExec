@@ -24,6 +24,16 @@ class PlacementError(ValueError):
     """A placement a component refuses, or a component asked to run before it was placed."""
 
 
+#: Placements applied in this process (``apply_placement``): a host that resolved a tree's components once
+#: compares it to see that no component was placed since.
+_PLACEMENTS = [0]
+
+
+def placement_generation() -> int:
+    """The number of component placements applied in this process so far."""
+    return _PLACEMENTS[0]
+
+
 class Component(nn.Module):
     """Base component: operation slots, site identity and placement protocol.
 
@@ -50,6 +60,16 @@ class Component(nn.Module):
 
     # Optional arithmetic-specific reason appended to the CP refusal.
     NO_CONTEXT_PARALLEL: str = ""
+
+    # Runtimes bind a placement-bound kind by ``apply_placement`` with the side's full Placement,
+    # on the engine and on the trainer alike: the component resolves its own operations and
+    # communication, including those of its child components. Built-in kinds keep their
+    # runtime-specific binding.
+    PLACEMENT_BOUND: bool = False
+
+    # A kind whose trainer forward reads the engine requests behind each packed sequence
+    # (``isoexec.schema.rollout``); trainer integrations carry them only into stages that hold one.
+    READS_ROLLOUT_REQUESTS: bool = False
 
     def __init__(self, *, slot_ops: Mapping[str, str] | None = None) -> None:
         super().__init__()
@@ -129,6 +149,7 @@ class Component(nn.Module):
         self._op_table = op_table
         self.site = site
         self.placement = placement
+        _PLACEMENTS[0] += 1
         self.slots.site = site
         self._refuse_unstated_context_parallel(placement)
         self._place(placement)
@@ -158,6 +179,11 @@ class Component(nn.Module):
                 f"differed. Place this model with cp=1, or state the form on the kind (Component.CONTEXT_PARALLEL)."
             )
 
+    def bind_engine_state(self, *, vllm_config: Any, layer_prefix: str) -> None:
+        """Attach engine-owned state after allocation; a placement-bound kind with engine caches
+        registers its native cache layers here under ``layer_prefix``. The default holds none."""
+        del vllm_config, layer_prefix
+
     def _place(self, placement: Placement) -> None:
         """Derive geometry and fill the slots. Subclasses implement; ``apply_placement`` calls."""
         raise NotImplementedError(f"{type(self).__name__}._place()")
@@ -185,4 +211,4 @@ class Component(nn.Module):
         return self.site
 
 
-__all__ = ["Component", "PlacementError"]
+__all__ = ["Component", "PlacementError", "placement_generation"]

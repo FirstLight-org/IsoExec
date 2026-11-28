@@ -47,6 +47,10 @@ def validate_state_spec(spec: StateSpec) -> None:
         raise ContractError("StateSpec.shape must be a tuple of positive concrete dimensions")
     validate_state_shard(spec.shard, ndim=len(spec.shape))
 
+    if spec.scope not in ("request", "segment"):
+        raise ContractError("unknown StateSpec.scope")
+    if spec.scope == "segment" and (spec.granularity != "per_token" or spec.retention != "sliding_window"):
+        raise ContractError("segment scope is a per_token sliding window")
     if spec.granularity == "per_request":
         for field in ("tokens_per_entry", "retention", "window_tokens"):
             if getattr(spec, field) is not None:
