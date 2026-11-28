@@ -166,9 +166,9 @@ prefill, no global attention backend) and its per-step host state (`engine_model
   from vLLM's sliding-window slots, the compressed rail as 64-record pages of a block, index keys as pages
   of `128 / ratio` entries, the compressor state in the request's ring block. Records are the kernels'
   own formats; `tests/test_engine_cache_cpu.py` checks byte-exclusive addressing on vLLM's allocator.
-- In the SkyRL experiment, uniform decode steps use full CUDA graphs. Mixed batches use vLLM's
-  breakable piecewise graphs with `ISOEXEC_V41_PIECEWISE_BREAKS=core`. The model declares these
-  boundaries in `piecewise.py`. A captured decode step scores at most
+- The [six-layer SkyRL run](../../../docs/v41-six-layer-skyrl.md#launch) captured full CUDA graphs
+  for decode and ran mixed batches eagerly. For runtimes using `FULL_AND_PIECEWISE`,
+  `piecewise.py` declares the model's graph boundaries. A captured decode step scores at most
   `decode_graph_score_element_budget / tokens` context positions.
 - After the checkpoint load each row packs its experts, prepares the MegaMoE workspace (EP > 1) and records
   the address of every parameter the kernels read in place (DeepGEMM projections and MegaMoE read the BF16

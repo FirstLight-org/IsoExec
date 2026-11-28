@@ -65,6 +65,8 @@ PY
 
 Set `CUDA_VISIBLE_DEVICES` to four GPUs allocated to this job. `RAY_ADDRESS=local` starts a local Ray instance. The existing recipe supplies the SkyRL model package, optimizer, GRPO loss and vLLM settings. The overrides below select the measured single-node run, including its 2 GiB KV cache, disk-backed FP32 Adam moments and unfrozen routed experts.
 
+Both reference engines enabled chunked prefill with a 256-token scheduler budget and disabled prefix caching. Native vLLM captured 35 piecewise and 19 full CUDA graph sizes. The IsoExec launcher requested `FULL_AND_PIECEWISE`, but its vLLM engine reported that compilation mode 0 required a downgrade to `FULL_DECODE_ONLY` and captured 19 full graph sizes. To reproduce the measured IsoExec graph mode on a runtime that supports both modes, append `generator.inference_engine.engine_init_kwargs.compilation_config.cudagraph_mode=FULL_DECODE_ONLY` to `args` before validation and launch.
+
 ```bash
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export RAY_ADDRESS=local
