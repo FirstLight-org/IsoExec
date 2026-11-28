@@ -57,16 +57,26 @@ def quantize(x):
     return codes, scales
 
 
-def project_codes(a, sa, w, sw, *, leaves=1, dtype=torch.bfloat16):
-    """Execute equal K segments of the declared deployment and merge adjacent FP32 roots."""
+def merge_partials(partials):
+    """Merge FP32 rank or segment roots in increasing K order."""
+    count = partials.shape[0]
+    if partials.dtype != torch.float32 or count < 1 or count & (count - 1):
+        raise ValueError("expected a power of two FP32 partials in K order")
+    while partials.shape[0] > 1:
+        partials = partials[::2] + partials[1::2]
+    return partials[0]
+
+
+def project_codes(a, sa, w, sw, *, schedule, tp_degree=1, dtype=torch.float32):
+    """Execute the compiled segments on this K shard. Partial roots stay FP32."""
     _device(a)
     if a.ndim != 2 or w.ndim != 2 or a.shape[1] != w.shape[1]:
         raise ValueError("expected A[M,K] and W[N,K]")
     m, k = a.shape
     n = w.shape[0]
-    if (type(leaves) is not int or leaves < 1 or leaves & (leaves - 1)
-            or k == 0 or k % (128 * leaves)):
-        raise ValueError("each of the power-of-two K segments must contain whole scale groups")
+    leaves = schedule.local_segments(n, k, tp_degree)
+    if tp_degree > 1 and dtype != torch.float32:
+        raise ValueError("cast after merging the FP32 K shards")
     if (sa.shape != (m, k // 128) or sw.shape != (triton.cdiv(n, 128), k // 128)
             or a.dtype != torch.float8_e4m3fn or w.dtype != a.dtype
             or sa.dtype != torch.float32 or sw.dtype != torch.float32
@@ -80,12 +90,12 @@ def project_codes(a, sa, w, sw, *, leaves=1, dtype=torch.bfloat16):
     _project[(triton.cdiv(m, 64), triton.cdiv(n, 64), leaves)](
         a.contiguous(), sa.contiguous(), w.contiguous(), sw.contiguous(), root, m, n, k, leaves, 64, 64,
         num_stages=1, enable_fp_fusion=False)
-    while root.shape[0] > 1:
-        root = root[::2] + root[1::2]
-    return root[0].to(dtype)
+    if leaves == 1:
+        return root[0]
+    return merge_partials(root).to(dtype)
 
 
-def project(x, w, sw, *, leaves=1, dtype=torch.bfloat16):
+def project(x, w, sw, *, schedule, tp_degree=1, dtype=torch.float32):
     """Project BF16 rows with the checkpoint's E4M3 weight bytes and FP32 scales."""
     a, sa = quantize(x)
-    return project_codes(a, sa, w, sw, leaves=leaves, dtype=dtype)
+    return project_codes(a, sa, w, sw, schedule=schedule, tp_degree=tp_degree, dtype=dtype)

@@ -1,4 +1,5 @@
 """GLM E4M3 checkpoint projections on SM100."""
-from .ops import project, project_codes, quantize
+from .ops import merge_partials, project, project_codes, quantize
+from .schedule import ProjectionSchedule
 
-__all__ = ["project", "project_codes", "quantize"]
+__all__ = ["ProjectionSchedule", "merge_partials", "project", "project_codes", "quantize"]
